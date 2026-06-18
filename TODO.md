@@ -1,7 +1,9 @@
-- [ ] Renforcer gestion ouverture caméra (try/catch robuste + erreurs permission/contexte/périphérique)
-- [ ] Stopper scan (`scanOn = false`) si caméra impossible, garder saisie manuelle active
-- [ ] Afficher message exact en refus caméra
-- [ ] Garder info absence véhicule discrète (non bloquante)
-- [ ] Retirer `—` dans impression pour Véhicule/Chauffeur/Convoyeur (valeurs vides)
+- [ ] Modifier uniquement l’en-tête print dans `src/modules/agence/embarquement/pages/AgenceEmbarquementPage.tsx`
+- [ ] Mettre le nom compagnie en principal (26-30px, gras) et "Liste d’embarquement" en secondaire (15-18px, semi-bold)
+- [ ] Conserver logo à gauche
+- [ ] Forcer `printAgencyName` à utiliser uniquement agencyName/nomAgence/nom/name
+- [ ] Fallback strict agence: "Agence non renseignée"
+- [ ] Garantir aucun identifiant Firestore d’agence visible dans l’impression
+- [ ] Conserver valeurs vides (sans tiret) pour Véhicule/Chauffeur/Convoyeur
 - [ ] Lancer `npm run build`
-- [ ] Reporter résultat exact + checklist de validation demandée
+- [ ] Reporter le résultat exact et la checklist demandée

@@ -162,6 +162,10 @@ function embarkDiag(event: string, data: Record<string, unknown>) {
   if (!EMBARK_DIAG_ENABLED) return;
   console.info(`[EMBARK_DIAG] ${event}`, { ...data, ts: Date.now() });
 }
+function qrDiag(event: "QR_DECODE_RESULT" | "QR_CODE_VALUE" | "RESERVATION_MATCH_FOUND" | "BOARDING_UPDATE_SUCCESS" | "BOARDING_UPDATE_ERROR", data: Record<string, unknown>) {
+  if (!EMBARK_DIAG_ENABLED) return;
+  console.info(`[${event}]`, { ...data, ts: Date.now() });
+}
 
 /** Dépassement d’escale au scan : même logique que BoardingEscale (effectiveDestinationStopOrder + agence escale). */
 async function computeScanOvertravelEmbarquement(
@@ -504,7 +508,13 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [tripStatutMetier, setTripStatutMetier] = useState<TripInstanceStatutMetier | null>(null);
-  const canEditBoardingPassengers = tripStatutMetier === TRIP_INSTANCE_STATUT_METIER.EMBARQUEMENT_EN_COURS;
+  const canEditBoardingPassengers = Boolean(
+    companyId &&
+      uid &&
+      selectedTrip &&
+      selectedDate &&
+      (selectedAgencyId || userAgencyId)
+  );
 
   // Scan caméra
   const [scanOn, setScanOn] = useState(false);
@@ -848,10 +858,10 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
     if (m.includes("missing or insufficient permissions") || m.includes("permission_denied")) {
       return "Acces refuse pour ce billet";
     }
-    if (msg.includes("Déjà embarqué")) return "Déjà embarqué";
+    if (msg.includes("Déjà embarqué")) return "Billet déjà embarqué.";
     if (msg.includes("Capacité véhicule atteinte") || msg.includes("Capacité atteinte")) return "Capacité atteinte";
-    if (msg.includes("non concordants") || msg.includes("autre départ")) return "Billet pour un autre trajet";
-    if (msg.includes("non valide")) return "Billet non valide";
+    if (msg.includes("non concordants") || msg.includes("autre départ")) return "Billet non reconnu pour ce départ.";
+    if (msg.includes("non valide")) return "Billet non reconnu pour ce départ.";
     return msg || "Erreur d'embarquement";
   }, []);
 
@@ -1264,7 +1274,7 @@ useEffect(() => {
     ) => {
       if (!companyId || !uid) return;
       if (!canEditBoardingPassengers) {
-        throw new Error("Modification passagers refusée: embarquement non modifiable à ce stade.");
+        throw new Error("Embarquement non disponible pour ce départ. Vérifiez le départ sélectionné.");
       }
 
       const agencyIdToUse = agencyOverride ?? selectedAgencyId;
@@ -1295,7 +1305,7 @@ useEffect(() => {
           const preRow = embarkPrecheckSnap.data() as { boardingStatus?: string; statutEmbarquement?: string };
           if (getEffectiveBoardingStatus(preRow) === "boarded") {
             embarkDiag("embarqué:ignoré-déjà-embarqué", { reservationId });
-            return;
+            throw new Error("Déjà embarqué");
           }
         }
       }
@@ -2347,12 +2357,16 @@ useEffect(() => {
       e.preventDefault();
       if (!companyId) return;
       if (!canEditBoardingPassengers) {
-        showFastBoardError("Scan/validation refusé: validation agence requise ou trajet en transit/terminé.");
+        showFastBoardError("Embarquement non disponible pour ce départ. Vérifiez le départ sélectionné.");
         return;
       }
 
       const code = extractCode(scanCode);
-      if (!code) return;
+      qrDiag("QR_CODE_VALUE", { source: "manual", code });
+      if (!code) {
+        showFastBoardError("Billet non reconnu pour ce départ.");
+        return;
+      }
 
       const manualNow = Date.now();
       if (!takeScanSlotForCode(code, manualNow)) return;
@@ -2392,7 +2406,7 @@ useEffect(() => {
           showFastBoardSuccess(true);
           setScanCode("");
         } else {
-          showFastBoardError("Billet introuvable (hors ligne).");
+          showFastBoardError("Billet non reconnu pour ce départ.");
         }
         return;
       }
@@ -2411,6 +2425,7 @@ useEffect(() => {
           } : undefined
         );
         if (found) {
+          qrDiag("RESERVATION_MATCH_FOUND", { source: "manual", reservationId: found.resId, agencyId: found.agencyId });
           if (!takeScanSlotForResId(found.resId, Date.now())) return;
           if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) {
             setScanCode("");
@@ -2434,13 +2449,15 @@ useEffect(() => {
             }
           } catch (_) {}
           await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+          qrDiag("BOARDING_UPDATE_SUCCESS", { source: "manual", reservationId: found.resId, agencyId: found.agencyId });
           showFastBoardSuccess(false, scanDetails);
           setScanCode("");
         } else {
-          showFastBoardError("Réservation introuvable.");
+          showFastBoardError("Billet non reconnu pour ce départ.");
         }
       } catch (err: any) {
         console.error(err);
+        qrDiag("BOARDING_UPDATE_ERROR", { source: "manual", message: err?.message ?? String(err) });
         showFastBoardError(normalizeOverlayMessage(err?.message ?? "Erreur lors de la validation manuelle."));
       }
     },
@@ -2523,9 +2540,17 @@ useEffect(() => {
 
             const raw = getScanText(res);
             const code = extractCode(raw);
+            qrDiag("QR_DECODE_RESULT", { source: "camera_constraints", raw });
+            qrDiag("QR_CODE_VALUE", { source: "camera_constraints", code });
             try {
-              if (!code) return;
-              if (!canEditBoardingPassengers) return;
+              if (!code) {
+                showFastBoardError("Billet non reconnu pour ce départ.");
+                return;
+              }
+              if (!canEditBoardingPassengers) {
+                showFastBoardError("Embarquement non disponible pour ce départ. Vérifiez le départ sélectionné.");
+                return;
+              }
               const scanNow = Date.now();
               if (!takeScanSlotForCode(code, scanNow)) return;
               if (!effectiveBoardingAssignmentRef.current) {
@@ -2557,7 +2582,7 @@ useEffect(() => {
                   });
                   showFastBoardSuccess(true);
                 } else {
-                  showFastBoardError("Billet introuvable (hors ligne).");
+                  showFastBoardError("Billet non reconnu pour ce départ.");
                 }
                 return;
               }
@@ -2576,6 +2601,7 @@ useEffect(() => {
               );
               if (isDecoderStale()) return;
               if (found) {
+                qrDiag("RESERVATION_MATCH_FOUND", { source: "camera_constraints", reservationId: found.resId, agencyId: found.agencyId });
                 if (!takeScanSlotForResId(found.resId, Date.now())) return;
                 if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
                 let scanDetails: { nomClient?: string; depart?: string; arrivee?: string; statutEmbarquement?: string; overtravel?: boolean } | undefined;
@@ -2591,13 +2617,15 @@ useEffect(() => {
                 } catch (_) {}
                 if (isDecoderStale()) return;
                 await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+                qrDiag("BOARDING_UPDATE_SUCCESS", { source: "camera_constraints", reservationId: found.resId, agencyId: found.agencyId });
                 if (isDecoderStale()) return;
                 showFastBoardSuccess(false, scanDetails);
               } else {
-                showFastBoardError("Billet introuvable.");
+                showFastBoardError("Billet non reconnu pour ce départ.");
               }
             } catch (e: any) {
               console.error(e);
+              qrDiag("BOARDING_UPDATE_ERROR", { source: "camera_constraints", message: e?.message ?? String(e) });
               showFastBoardError(normalizeOverlayMessage(e?.message ?? "Erreur lors du scan"));
             }
           }
@@ -2628,8 +2656,17 @@ useEffect(() => {
 
               const raw = getScanText(res);
               const code = extractCode(raw);
+              qrDiag("QR_DECODE_RESULT", { source: "camera_device", raw });
+              qrDiag("QR_CODE_VALUE", { source: "camera_device", code });
               try {
-                if (!code) return;
+                if (!code) {
+                  showFastBoardError("Billet non reconnu pour ce départ.");
+                  return;
+                }
+                if (!canEditBoardingPassengers) {
+                  showFastBoardError("Embarquement non disponible pour ce départ. Vérifiez le départ sélectionné.");
+                  return;
+                }
                 const scanNow = Date.now();
                 if (!takeScanSlotForCode(code, scanNow)) return;
                 if (!effectiveBoardingAssignmentRef.current) {
@@ -2660,7 +2697,7 @@ useEffect(() => {
                     });
                     showFastBoardSuccess(true);
                   } else {
-                    showFastBoardError("Billet introuvable (hors ligne).");
+                    showFastBoardError("Billet non reconnu pour ce départ.");
                   }
                   return;
                 }
@@ -2679,6 +2716,7 @@ useEffect(() => {
                 );
                 if (isDecoderStale()) return;
                 if (found) {
+                  qrDiag("RESERVATION_MATCH_FOUND", { source: "camera_device", reservationId: found.resId, agencyId: found.agencyId });
                   if (!takeScanSlotForResId(found.resId, Date.now())) return;
                   if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
                   let scanDetails: { nomClient?: string; depart?: string; arrivee?: string; statutEmbarquement?: string; overtravel?: boolean } | undefined;
@@ -2694,13 +2732,15 @@ useEffect(() => {
                   } catch (_) {}
                   if (isDecoderStale()) return;
                   await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+                  qrDiag("BOARDING_UPDATE_SUCCESS", { source: "camera_device", reservationId: found.resId, agencyId: found.agencyId });
                   if (isDecoderStale()) return;
                   showFastBoardSuccess(false, scanDetails);
                 } else {
-                  showFastBoardError("Billet introuvable.");
+                  showFastBoardError("Billet non reconnu pour ce départ.");
                 }
               } catch (e: any) {
                 console.error(e);
+                qrDiag("BOARDING_UPDATE_ERROR", { source: "camera_device", message: e?.message ?? String(e) });
                 showFastBoardError(normalizeOverlayMessage(e?.message ?? "Erreur lors du scan"));
               }
             }
@@ -2832,14 +2872,16 @@ useEffect(() => {
     [company]
   );
   const printAgencyName = useMemo(
-    () =>
-      String(
+    () => {
+      const name =
+        agencyInfo?.agencyName ||
+        agencyInfo?.nomAgence ||
         agencyInfo?.nom ||
-          agencyInfo?.name ||
-          agencies.find((a) => a.id === selectedAgencyId)?.nom ||
-          "Agence"
-      ),
-    [agencyInfo, agencies, selectedAgencyId]
+        agencyInfo?.name;
+      const normalized = String(name ?? "").trim();
+      return normalized || "Agence non renseignée";
+    },
+    [agencyInfo]
   );
   const printAgencyPhone = useMemo(
     () =>
@@ -3051,7 +3093,7 @@ useEffect(() => {
             <>
               <CheckCircle className="w-24 h-24 mb-4" strokeWidth={2} />
               <span className="text-2xl font-bold">
-                {fastBoardOverlay.offline ? "Embarqué (hors ligne)" : "Embarqué"}
+                {fastBoardOverlay.offline ? "Passager embarqué avec succès (hors ligne)" : "Passager embarqué avec succès"}
               </span>
               {fastBoardOverlay.scanDetails && (
                 <div className="mt-4 text-center px-4 max-w-md">
@@ -3117,32 +3159,38 @@ useEffect(() => {
         .print-doc__brand{
           display:flex;
           align-items:center;
-          gap:12px;
+          justify-content:center;
+          gap:10px;
           margin-bottom:8px;
         }
         .print-doc__logo{
-          width:64px;
-          height:64px;
-          object-fit:contain;
+          width:52px;
+          height:52px;
+          object-fit:cover;
+          border-radius:50%;
         }
         .print-doc__logo-fallback{
-          width:64px;
-          height:64px;
+          width:52px;
+          height:52px;
           border:1px solid #000;
+          border-radius:50%;
           display:flex;
           align-items:center;
           justify-content:center;
-          font-size:10px;
+          font-size:9px;
           letter-spacing:0.08em;
         }
         .print-doc__title{
-          font-size:16px;
-          font-weight:700;
-          text-transform:uppercase;
+          font-size:34px;
+          font-weight:800;
+          line-height:1.05;
+          text-align:center;
         }
         .print-doc__company{
-          font-size:13px;
-          font-weight:600;
+          font-size:24px;
+          font-weight:700;
+          line-height:1.1;
+          text-align:center;
         }
         .print-doc__meta{
           display:grid;
@@ -3408,7 +3456,7 @@ useEffect(() => {
                 type="submit"
                 className="shrink-0 px-3 py-2 rounded-lg text-white text-sm"
                 style={{ background: primary }}
-                disabled={(!selectedAgencyId && !userAgencyId) || !hasOperationalAssignment || !canEditBoardingPassengers}
+                disabled={(!selectedAgencyId && !userAgencyId) || !canEditBoardingPassengers}
               >
                 Valider
               </button>
@@ -3596,28 +3644,28 @@ useEffect(() => {
                 </div>
               )}
               <div>
-                <div className="print-doc__title">Liste d&apos;embarquement</div>
+                <div className="print-doc__title">LISTE D&apos;EMBARQUEMENT</div>
                 <div className="print-doc__company">{printCompanyName}</div>
               </div>
             </div>
             <div className="print-doc__meta">
-              <span className="print-doc__k">Agence</span>
+              <span className="print-doc__k">Agence :</span>
               <span className="print-doc__v">{printAgencyName}</span>
-              <span className="print-doc__k">Téléphone</span>
+              <span className="print-doc__k">Téléphone :</span>
               <span className="print-doc__v">{printAgencyPhone || "—"}</span>
-              <span className="print-doc__k">Trajet</span>
+              <span className="print-doc__k">Trajet :</span>
               <span className="print-doc__v print-doc__span2">
                 {selectedTrip
                   ? `${selectedTrip.departure} → ${selectedTrip.arrival}${selectedTrip.heure ? ` — départ ${selectedTrip.heure}` : ""}`
                   : "—"}
               </span>
-              <span className="print-doc__k">Date</span>
+              <span className="print-doc__k">Date :</span>
               <span className="print-doc__v">{humanDate}</span>
-              <span className="print-doc__k">Véhicule</span>
+              <span className="print-doc__k">Véhicule :</span>
               <span className="print-doc__v">{assign.immat || ""}</span>
-              <span className="print-doc__k">Chauffeur</span>
+              <span className="print-doc__k">Chauffeur :</span>
               <span className="print-doc__v">{assign.chauffeur || ""}</span>
-              <span className="print-doc__k">Convoyeur</span>
+              <span className="print-doc__k">Convoyeur :</span>
               <span className="print-doc__v">{assign.chef || ""}</span>
             </div>
           </div>
