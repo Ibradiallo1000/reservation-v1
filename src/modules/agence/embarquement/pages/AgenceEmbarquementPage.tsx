@@ -1286,6 +1286,25 @@ useEffect(() => {
         alert("Sélectionne la date et le trajet avant d’embarquer.");
         return;
       }
+      const nextBoardingStatus =
+        statut === "embarqué" ? "boarded" : statut === "absent" ? "no_show" : "pending";
+      const nextStatutEmbarquement =
+        statut === "embarqué" ? "embarqué" : statut === "absent" ? "absent" : "en_attente";
+      const applyLocalBoardingStatus = () => {
+        setReservations((prev) =>
+          prev.map((r) =>
+            r.id === reservationId
+              ? {
+                  ...r,
+                  boardingStatus: nextBoardingStatus,
+                  statutEmbarquement: nextStatutEmbarquement,
+                  checkInTime: statut === "embarqué" ? new Date() : null,
+                  ...(statut === "embarqué" ? { statut: "embarque" } : {}),
+                }
+              : r
+          )
+        );
+      };
       if (statut === "embarqué" && !effectiveBoardingAssignmentRef.current) {
         // Phase 1 (chef d’embarquement) : un départ peut être “à préparer”.
         // Ne pas bloquer : autoriser le scan/validation de la liste passagers même sans assignation.
@@ -1596,7 +1615,8 @@ useEffect(() => {
           }
 
           const patch: Record<string, unknown> = {
-            boardingStatus: statut === "embarqué" ? "boarded" : statut === "absent" ? "no_show" : "pending",
+            boardingStatus: nextBoardingStatus,
+            statutEmbarquement: nextStatutEmbarquement,
             controleurId: uid,
             checkInTime: statut === "embarqué" ? serverTimestamp() : null,
           };
@@ -1628,6 +1648,8 @@ useEffect(() => {
             scannedAt: serverTimestamp(),
           });
         });
+
+        applyLocalBoardingStatus();
 
         if (statut === "embarqué") {
           embarkDiagCountRef.current.txOk += 1;
@@ -1668,7 +1690,8 @@ useEffect(() => {
             const currentStatut = current.exists() ? String((current.data() as Record<string, unknown>).statut ?? "") : "";
             const nextStatut = statut === "embarqué" ? "embarque" : currentStatut;
             await updateDoc(resRef, {
-              statutEmbarquement: statut,
+              boardingStatus: nextBoardingStatus,
+              statutEmbarquement: nextStatutEmbarquement,
               ...(statut === "embarqué" ? { statut: nextStatut } : {}),
               controleurId: uid,
               checkInTime: statut === "embarqué" ? serverTimestamp() : null,
@@ -1686,6 +1709,7 @@ useEffect(() => {
                 note: "réservation mise à jour sans agrégats (locks/stats/live)",
               });
             }
+            applyLocalBoardingStatus();
             if (!options?.suppressAlert) {
               try {
                 new Audio("/beep.mp3").play();
