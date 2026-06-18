@@ -279,6 +279,27 @@ function normDate(v: any): string | null {
   return null;
 }
 
+function formatDisplayName(v?: string): string {
+  const s = String(v ?? "").trim();
+  if (!s) return "—";
+  return s
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function formatDisplayPhone(v?: string): string {
+  const raw = String(v ?? "").trim();
+  if (!raw) return "—";
+  if (/\s/.test(raw)) return raw;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 8) {
+    return `${digits.slice(0, 2)} ${digits.slice(2, 4)} ${digits.slice(4, 6)} ${digits.slice(6, 8)}`;
+  }
+  return raw;
+}
+
 /* ===================== Recherche robuste ===================== */
 async function findReservationByCode(
   companyId: string,
@@ -413,7 +434,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const rolesSet = useMemo(() => new Set(rolesArr), [rolesArr]);
   const isChefAgence = rolesSet.has("chefAgence") || rolesSet.has("chefagence");
   const canLaunchTripAfterAgencyValidation = isChefAgence;
-  const canPrintOfficialDocs = isChefAgence;
+  const canPrintOfficialDocs = true;
 
   const [agencies, setAgencies] = useState<AgencyItem[]>([]);
   const [selectedAgencyId, setSelectedAgencyId] = useState<string | null>(userAgencyId);
@@ -488,6 +509,24 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   // Scan caméra
   const [scanOn, setScanOn] = useState(false);
   const [mobileView, setMobileView] = useState<"scan" | "liste">("scan");
+  // Refactor UI Phase 1 (visible uniquement côté UI): prioriser liste+impression desktop/tablette, scan mobile.
+  // Ne modifie pas la logique métier : uniquement l'affichage (switch UI).
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(max-width: 640px)").matches;
+  });
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 640px)");
+    const onChange = () => setIsMobile(mql.matches);
+    onChange();
+    mql.addEventListener?.("change", onChange);
+    return () => mql.removeEventListener?.("change", onChange);
+  }, []);
+  useEffect(() => {
+    // Mobile: scan prioritaire.
+    // Desktop: liste prioritaire.
+    setMobileView(isMobile ? "scan" : "liste");
+  }, [isMobile]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const lastAlertRef = useRef<number>(0);
@@ -1160,6 +1199,16 @@ useEffect(() => {
     const unsubs: Array<() => void> = [];
     const bag = new Map<string, Reservation>();
 
+    // Diagnostic ciblé (dev) : pourquoi la liste peut être vide (mismatch date/heure/trajetId ou statuts filtrés).
+    embarkDiag("reservations-query-start", {
+      selectedDate,
+      selectedHour: selectedTrip.heure,
+      selectedDep: selectedTrip.departure,
+      selectedArr: selectedTrip.arrival,
+      selectedTripId: selectedTrip.id ?? null,
+    });
+
+
     const commit = () => {
       const dedup = new Map<string, Reservation>();
       for (const r of bag.values()) dedup.set(r.id, r);
@@ -1228,9 +1277,11 @@ useEffect(() => {
         return;
       }
       if (statut === "embarqué" && !effectiveBoardingAssignmentRef.current) {
-        alert("Ce trajet n’a pas encore de véhicule assigné.");
-        return;
+        // Phase 1 (chef d’embarquement) : un départ peut être “à préparer”.
+        // Ne pas bloquer : autoriser le scan/validation de la liste passagers même sans assignation.
+        // Les opérations avancées dépendant du véhicule seront simplement ignorées par manque de contexte.
       }
+
 
       const resRef = doc(
         db,
@@ -2307,9 +2358,12 @@ useEffect(() => {
       if (!takeScanSlotForCode(code, manualNow)) return;
 
       if (!effectiveBoardingAssignmentRef.current) {
-        showFastBoardError("Ce trajet n’a pas encore de véhicule assigné.");
-        return;
+        showFastBoardError(
+          "Départ à préparer — liste passagers disponible, affectation véhicule optionnelle."
+        );
+        // Phase 1: absence d’affectation ne doit pas bloquer le scan.
       }
+
 
       if (!isOnline) {
         const found = findFromCache(code);
@@ -2426,6 +2480,37 @@ useEffect(() => {
     const decoderGen = ++scanDecoderGenerationRef.current;
     const isDecoderStale = () => scanDecoderGenerationRef.current !== decoderGen;
 
+    const cameraDeniedMsg =
+      "Accès caméra refusé. Autorisez la caméra ou utilisez la saisie manuelle du code billet.";
+    const cameraContextMsg =
+      "Caméra indisponible sur un contexte non sécurisé. Utilisez HTTPS ou localhost, ou la saisie manuelle du code billet.";
+    const noCameraMsg =
+      "Aucune caméra détectée. Utilisez la saisie manuelle du code billet.";
+
+    const classifyCameraError = (err: unknown): "denied" | "insecure" | "no_device" | "other" => {
+      const name = String((err as { name?: string })?.name ?? "").toLowerCase();
+      const msg = String((err as { message?: string })?.message ?? err ?? "").toLowerCase();
+      if (name.includes("notallowed") || msg.includes("permission denied") || msg.includes("permission denied")) {
+        return "denied";
+      }
+      if (name.includes("notfound") || msg.includes("requested device not found") || msg.includes("no camera")) {
+        return "no_device";
+      }
+      if (
+        msg.includes("only secure origins are allowed") ||
+        msg.includes("secure context") ||
+        msg.includes("insecure")
+      ) {
+        return "insecure";
+      }
+      return "other";
+    };
+
+    const stopScanWithMessage = (message: string) => {
+      showFastBoardError(message);
+      setScanOn(false);
+    };
+
     (async () => {
       try {
         // @ts-ignore
@@ -2444,98 +2529,11 @@ useEffect(() => {
               const scanNow = Date.now();
               if (!takeScanSlotForCode(code, scanNow)) return;
               if (!effectiveBoardingAssignmentRef.current) {
-                showFastBoardError("Ce trajet n’a pas encore de véhicule assigné.");
-                return;
+                showFastBoardError(
+                  "Départ à préparer — liste passagers disponible, affectation véhicule optionnelle."
+                );
               }
-              if (!isOnline) {
-                const found = findFromCache(code);
-                if (found) {
-                  if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
-                  if (offlineScannedIds.current.has(found.resId)) {
-                    showFastBoardError("Billet déjà scanné (hors ligne).");
-                    return;
-                  }
-                  offlineScannedIds.current.add(found.resId);
-                  const eff = effectiveBoardingAssignmentRef.current;
-                  await addToBoardingQueue({
-                    reservationId: found.resId,
-                    agencyId: found.agencyId,
-                    companyId: companyId!,
-                    tripId: selectedTrip?.id ?? null,
-                    date: selectedDate ?? "",
-                    heure: selectedTrip?.heure ?? null,
-                    assignmentId: eff?.id,
-                    vehicleId: eff?.vehicleId,
-                    assignmentStatus: eff?.status,
-                  });
-                  showFastBoardSuccess(true);
-                } else {
-                  showFastBoardError("Billet introuvable (hors ligne).");
-                }
-                return;
-              }
-              if (isDecoderStale()) return;
-              const found = await findReservationByCode(
-                companyId!,
-                selectedAgencyId,
-                code,
-                selectedTrip ? {
-                  dep: selectedTrip.departure,
-                  arr: selectedTrip.arrival,
-                  date: selectedDate,
-                  heure: selectedTrip.heure,
-                  weeklyTripId: selectedTrip.id || null,
-                } : undefined
-              );
-              if (isDecoderStale()) return;
-              if (found) {
-                if (!takeScanSlotForResId(found.resId, Date.now())) return;
-                if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
-                let scanDetails: { nomClient?: string; depart?: string; arrivee?: string; statutEmbarquement?: string; overtravel?: boolean } | undefined;
-                try {
-                  const resRef = doc(db, `companies/${companyId}/agences/${found.agencyId}/reservations/${found.resId}`);
-                  const resSnap = await getDoc(resRef);
-                  if (isDecoderStale()) return;
-                  if (resSnap.exists()) {
-                    const d = resSnap.data() as Record<string, unknown>;
-                    const overtravel = await computeScanOvertravelEmbarquement(companyId!, d, agencyInfo);
-                    scanDetails = { nomClient: (d.nomClient as string) ?? undefined, depart: (d.depart as string) ?? undefined, arrivee: (d.arrivee as string) ?? undefined, statutEmbarquement: (() => { const e = getEffectiveBoardingStatus({ boardingStatus: d.boardingStatus as string, statutEmbarquement: d.statutEmbarquement as string }); return e === "boarded" ? "embarqué" : e === "no_show" ? "absent" : "en_attente"; })(), overtravel };
-                  }
-                } catch (_) {}
-                if (isDecoderStale()) return;
-                await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
-                if (isDecoderStale()) return;
-                showFastBoardSuccess(false, scanDetails);
-              } else {
-                showFastBoardError("Billet introuvable.");
-              }
-            } catch (e: any) {
-              console.error(e);
-              showFastBoardError(normalizeOverlayMessage(e?.message ?? "Erreur lors du scan"));
-            }
-          }
-        );
-      } catch {
-        const devices = (await BrowserMultiFormatReader.listVideoInputDevices()) as unknown as Array<{ deviceId?: string }>;
-        const preferred: string | null = devices?.[0]?.deviceId ?? null;
-        await reader.decodeFromVideoDevice(
-          (preferred as unknown) as string | null,
-          videoRef.current as HTMLVideoElement,
-          async (res: any) => {
-            if (!res) return;
-            if (isDecoderStale()) return;
 
-            const raw = getScanText(res);
-            const code = extractCode(raw);
-            try {
-              if (!code) return;
-              if (!canEditBoardingPassengers) return;
-              const scanNow = Date.now();
-              if (!takeScanSlotForCode(code, scanNow)) return;
-              if (!effectiveBoardingAssignmentRef.current) {
-                showFastBoardError("Ce trajet n’a pas encore de véhicule assigné.");
-                return;
-              }
               if (!isOnline) {
                 const found = findFromCache(code);
                 if (found) {
@@ -2604,8 +2602,129 @@ useEffect(() => {
             }
           }
         );
+      } catch (openErr) {
+        const kind = classifyCameraError(openErr);
+        if (kind === "denied") {
+          stopScanWithMessage(cameraDeniedMsg);
+          return;
+        }
+        if (kind === "insecure") {
+          stopScanWithMessage(cameraContextMsg);
+          return;
+        }
+        try {
+          const devices = (await BrowserMultiFormatReader.listVideoInputDevices()) as unknown as Array<{ deviceId?: string }>;
+          if (!devices || devices.length === 0) {
+            stopScanWithMessage(noCameraMsg);
+            return;
+          }
+          const preferred: string | null = devices?.[0]?.deviceId ?? null;
+          await reader.decodeFromVideoDevice(
+            (preferred as unknown) as string | null,
+            videoRef.current as HTMLVideoElement,
+            async (res: any) => {
+              if (!res) return;
+              if (isDecoderStale()) return;
+
+              const raw = getScanText(res);
+              const code = extractCode(raw);
+              try {
+                if (!code) return;
+                const scanNow = Date.now();
+                if (!takeScanSlotForCode(code, scanNow)) return;
+                if (!effectiveBoardingAssignmentRef.current) {
+                  showFastBoardError(
+                    "Départ à préparer — liste passagers disponible, affectation véhicule optionnelle."
+                  );
+                }
+                if (!isOnline) {
+                  const found = findFromCache(code);
+                  if (found) {
+                    if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
+                    if (offlineScannedIds.current.has(found.resId)) {
+                      showFastBoardError("Billet déjà scanné (hors ligne).");
+                      return;
+                    }
+                    offlineScannedIds.current.add(found.resId);
+                    const eff = effectiveBoardingAssignmentRef.current;
+                    await addToBoardingQueue({
+                      reservationId: found.resId,
+                      agencyId: found.agencyId,
+                      companyId: companyId!,
+                      tripId: selectedTrip?.id ?? null,
+                      date: selectedDate ?? "",
+                      heure: selectedTrip?.heure ?? null,
+                      assignmentId: eff?.id,
+                      vehicleId: eff?.vehicleId,
+                      assignmentStatus: eff?.status,
+                    });
+                    showFastBoardSuccess(true);
+                  } else {
+                    showFastBoardError("Billet introuvable (hors ligne).");
+                  }
+                  return;
+                }
+                if (isDecoderStale()) return;
+                const found = await findReservationByCode(
+                  companyId!,
+                  selectedAgencyId,
+                  code,
+                  selectedTrip ? {
+                    dep: selectedTrip.departure,
+                    arr: selectedTrip.arrival,
+                    date: selectedDate,
+                    heure: selectedTrip.heure,
+                    weeklyTripId: selectedTrip.id || null,
+                  } : undefined
+                );
+                if (isDecoderStale()) return;
+                if (found) {
+                  if (!takeScanSlotForResId(found.resId, Date.now())) return;
+                  if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
+                  let scanDetails: { nomClient?: string; depart?: string; arrivee?: string; statutEmbarquement?: string; overtravel?: boolean } | undefined;
+                  try {
+                    const resRef = doc(db, `companies/${companyId}/agences/${found.agencyId}/reservations/${found.resId}`);
+                    const resSnap = await getDoc(resRef);
+                    if (isDecoderStale()) return;
+                    if (resSnap.exists()) {
+                      const d = resSnap.data() as Record<string, unknown>;
+                      const overtravel = await computeScanOvertravelEmbarquement(companyId!, d, agencyInfo);
+                      scanDetails = { nomClient: (d.nomClient as string) ?? undefined, depart: (d.depart as string) ?? undefined, arrivee: (d.arrivee as string) ?? undefined, statutEmbarquement: (() => { const e = getEffectiveBoardingStatus({ boardingStatus: d.boardingStatus as string, statutEmbarquement: d.statutEmbarquement as string }); return e === "boarded" ? "embarqué" : e === "no_show" ? "absent" : "en_attente"; })(), overtravel };
+                    }
+                  } catch (_) {}
+                  if (isDecoderStale()) return;
+                  await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+                  if (isDecoderStale()) return;
+                  showFastBoardSuccess(false, scanDetails);
+                } else {
+                  showFastBoardError("Billet introuvable.");
+                }
+              } catch (e: any) {
+                console.error(e);
+                showFastBoardError(normalizeOverlayMessage(e?.message ?? "Erreur lors du scan"));
+              }
+            }
+          );
+        } catch (fallbackErr) {
+          const fallbackKind = classifyCameraError(fallbackErr);
+          if (fallbackKind === "denied") {
+            stopScanWithMessage(cameraDeniedMsg);
+          } else if (fallbackKind === "insecure") {
+            stopScanWithMessage(cameraContextMsg);
+          } else if (fallbackKind === "no_device") {
+            stopScanWithMessage(noCameraMsg);
+          } else {
+            stopScanWithMessage("Caméra indisponible. Utilisez la saisie manuelle du code billet.");
+          }
+        }
       }
-    })();
+    })().catch((fatalErr) => {
+      const kind = classifyCameraError(fatalErr);
+      if (kind === "denied") stopScanWithMessage(cameraDeniedMsg);
+      else if (kind === "insecure") stopScanWithMessage(cameraContextMsg);
+      else if (kind === "no_device") stopScanWithMessage(noCameraMsg);
+      else stopScanWithMessage("Caméra indisponible. Utilisez la saisie manuelle du code billet.");
+    });
 
     return () => {
       scanDecoderGenerationRef.current += 1;
@@ -2936,7 +3055,7 @@ useEffect(() => {
               </span>
               {fastBoardOverlay.scanDetails && (
                 <div className="mt-4 text-center px-4 max-w-md">
-                  <div className="text-lg font-medium">{fastBoardOverlay.scanDetails.nomClient || "—"}</div>
+                          <div className="text-lg font-medium">{formatDisplayName(fastBoardOverlay.scanDetails.nomClient)}</div>
                   <div className="text-sm opacity-90">Origine: {fastBoardOverlay.scanDetails.depart || "—"}</div>
                   <div className="text-sm opacity-90">Destination: {fastBoardOverlay.scanDetails.arrivee || "—"}</div>
                   <div className="text-sm opacity-90">Statut: {fastBoardOverlay.scanDetails.statutEmbarquement || "—"}</div>
@@ -3139,8 +3258,18 @@ useEffect(() => {
 
       <div className="w-full px-2 sm:px-3 py-3 space-y-3 pb-28">
         <div className="no-print flex items-center justify-between gap-2">
-          <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-            {selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${selectedTrip.heure}` : "Sélectionner un trajet"}
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => window.location.assign("/agence/boarding")}
+              className="shrink-0 inline-flex items-center justify-center px-3 py-1.5 rounded-lg text-sm font-semibold border border-gray-200 dark:border-slate-600 bg-white/70 dark:bg-slate-800/70 text-gray-900 dark:text-white"
+              title="Retour aux départs du jour"
+            >
+              ← Retours départs
+            </button>
+            <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+              {selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${selectedTrip.heure}` : "Sélectionner un trajet"}
+            </div>
           </div>
           <DatePicker
             selected={selectedDateObj}
@@ -3214,41 +3343,22 @@ useEffect(() => {
               </div>
             )}
             {selectedTrip && !hasOperationalAssignment ? (
-              <div className="mt-2 text-xs text-amber-800 dark:text-amber-200">Aucun véhicule planifié pour ce trajet.</div>
+              <div className="mt-2 text-xs text-gray-500 dark:text-gray-300">Informations véhicule non définies</div>
             ) : null}
           </div>
         )}
 
-        <div className="no-print grid grid-cols-3 gap-2">
-          <div className="rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-1.5 bg-gray-50 dark:bg-slate-800">
-            <div className="text-[10px] text-gray-500 dark:text-gray-400">Véhicule</div>
-            <div className="text-sm font-medium text-gray-900 dark:text-white truncate">
-              {assign.immat || "—"}
-            </div>
-            {assignmentStatusBadge === "validated" && (
-              <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-semibold">
-                Validé
-              </span>
-            )}
+        <div className="no-print rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-1.5 bg-gray-50 dark:bg-slate-800">
+          <div className="text-[11px] text-gray-600 dark:text-gray-300">
+            {assign.immat || assign.chauffeur || assign.chef
+              ? `Véhicule ${assign.immat || "—"} · Chauffeur ${formatDisplayName(assign.chauffeur)} · Convoyeur ${formatDisplayName(assign.chef)}`
+              : "Informations véhicule non définies"}
           </div>
-          <div className="rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-1.5 bg-gray-50 dark:bg-slate-800">
-            <div className="text-[10px] text-gray-500 dark:text-gray-400">Chauffeur</div>
-            <div className="text-sm font-medium text-gray-900 dark:text-white truncate">{assign.chauffeur || "—"}</div>
-            {assign.chauffeurPhone && (
-              <a className="text-[11px] text-blue-700 underline" href={`tel:${assign.chauffeurPhone}`}>
-                {assign.chauffeurPhone}
-              </a>
-            )}
-          </div>
-          <div className="rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-1.5 bg-gray-50 dark:bg-slate-800">
-            <div className="text-[10px] text-gray-500 dark:text-gray-400">Convoyeur</div>
-            <div className="text-sm font-medium text-gray-900 dark:text-white truncate">{assign.chef || "—"}</div>
-            {assign.chefPhone && (
-              <a className="text-[11px] text-blue-700 underline" href={`tel:${assign.chefPhone}`}>
-                {assign.chefPhone}
-              </a>
-            )}
-          </div>
+          {assignmentStatusBadge === "validated" && (
+            <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-semibold">
+              Validé
+            </span>
+          )}
         </div>
 
         <div className="no-print flex flex-nowrap overflow-x-auto gap-1.5 text-[11px] font-medium">
@@ -3339,8 +3449,7 @@ useEffect(() => {
                 type="button"
                 onClick={() => window.print()}
                 className="shrink-0 px-3 py-2 rounded-lg text-sm border border-gray-300 dark:border-slate-600 min-h-[40px] whitespace-nowrap"
-                disabled={!canPrintOfficialDocs}
-                title={canPrintOfficialDocs ? "Imprimer la liste officielle" : "Impression officielle réservée au chef d'agence"}
+                title="Imprimer la liste officielle"
               >
                 Imprimer
               </button>
@@ -3400,8 +3509,8 @@ useEffect(() => {
                           className={`border-t border-gray-200 dark:border-slate-600 ${embarked ? "embarked bg-gray-50 dark:bg-slate-700 text-slate-700 dark:text-white" : `bg-white ${idx % 2 === 0 ? "dark:bg-slate-900" : "dark:bg-slate-800"} text-gray-900 dark:text-white`}`}
                         >
                           <td className={embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}>{idx + 1}</td>
-                          <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.nomClient || "—"}</td>
-                          <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.telephone || "—"}</td>
+                          <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{formatDisplayName(r.nomClient)}</td>
+                          <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{formatDisplayPhone(r.telephone)}</td>
                           <td className={`capitalize truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.canal || "—"}</td>
                           <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.referenceCode || r.id}</td>
                           <td className={`text-center font-semibold ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{seats}</td>
@@ -3454,19 +3563,22 @@ useEffect(() => {
                 : originDepartureDone
                   ? "Trajet lancé"
                   : !canLaunchTripAfterAgencyValidation
-                    ? "Validation chef agence requise"
+                    ? "Info: validation chef agence non requise en phase 1"
                     : tripStatutMetier !== "validation_agence_requise"
                       ? "Terminer embarquement puis valider agence"
                       : "Valider et lancer le trajet"}
             </button>
             <button
               type="button"
-              onClick={() => setScanOn((v) => !v)}
+              onClick={() => {
+                setMobileView("scan");
+                setScanOn((v) => !v);
+              }}
               className={`w-full px-3 py-3.5 rounded-xl text-sm font-semibold min-h-[52px] whitespace-nowrap shadow-md ${
                 scanOn ? "bg-emerald-600 text-white" : "text-white"
               }`}
               style={!scanOn ? { background: primary } : undefined}
-              disabled={!selectedTrip || !selectedAgencyId || !hasOperationalAssignment || !canEditBoardingPassengers}
+              disabled={!selectedTrip || !selectedAgencyId}
             >
               {scanOn ? "🟢 Scan en cours..." : "📷 Scanner les billets"}
             </button>
@@ -3502,11 +3614,11 @@ useEffect(() => {
               <span className="print-doc__k">Date</span>
               <span className="print-doc__v">{humanDate}</span>
               <span className="print-doc__k">Véhicule</span>
-              <span className="print-doc__v">{assign.immat || "—"}</span>
+              <span className="print-doc__v">{assign.immat || ""}</span>
               <span className="print-doc__k">Chauffeur</span>
-              <span className="print-doc__v">{assign.chauffeur || "—"}</span>
+              <span className="print-doc__v">{assign.chauffeur || ""}</span>
               <span className="print-doc__k">Convoyeur</span>
-              <span className="print-doc__v">{assign.chef || "—"}</span>
+              <span className="print-doc__v">{assign.chef || ""}</span>
             </div>
           </div>
 
@@ -3544,8 +3656,8 @@ useEffect(() => {
                   return (
                     <tr key={r.id}>
                       <td>{idx + 1}</td>
-                      <td>{r.nomClient || "—"}</td>
-                      <td>{r.telephone || "—"}</td>
+                      <td>{formatDisplayName(r.nomClient)}</td>
+                      <td>{formatDisplayPhone(r.telephone)}</td>
                       <td>{r.canal || "—"}</td>
                       <td>{String(r.referenceCode ?? "").trim() || "—"}</td>
                       <td className="center">{seats}</td>

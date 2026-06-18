@@ -1,7 +1,7 @@
-# TODO.md
-
-- [ ] Comprendre le bloc `match /companies/{companyId}/paymentConfigs/{configId}` dans `firestore.rules`.
-- [ ] Remplacer uniquement ce bloc par la règle attendue (get/list public via active+isEnabled; create/update/delete via isAuth + userCompanyId == companyId ou isPlatformAdmin; **pas** de isAuth() sur get/list).
-- [ ] Déployer uniquement les règles Firestore : `firebase deploy --only firestore:rules`.
-- [ ] Retester `/payment/{reservationId}` (lecture `companies/{companyId}/paymentConfigs/...`) et vérifier disparition du `permission-denied`.
-
+- [ ] Renforcer gestion ouverture caméra (try/catch robuste + erreurs permission/contexte/périphérique)
+- [ ] Stopper scan (`scanOn = false`) si caméra impossible, garder saisie manuelle active
+- [ ] Afficher message exact en refus caméra
+- [ ] Garder info absence véhicule discrète (non bloquante)
+- [ ] Retirer `—` dans impression pour Véhicule/Chauffeur/Convoyeur (valeurs vides)
+- [ ] Lancer `npm run build`
+- [ ] Reporter résultat exact + checklist de validation demandée

@@ -61,16 +61,19 @@ const BoardingScanPage: React.FC = () => {
     }
     const resolvedAssignmentId =
       assignmentId || (tripId ? tripAssignmentDocId(tripId, date, heure) : null);
+
     if (!resolvedAssignmentId) {
-      setBlocked("Ce trajet n’a pas encore de véhicule assigné (créneau incomplet ou absent du tableau des départs).");
+      // Phase 1 : l’absence de véhicule assigné ne doit pas bloquer l’écran liste + scan.
       setVehicleCapacity(null);
       setResolved(true);
       return;
     }
+
     if (deniedLockAssignments.current.has(resolvedAssignmentId)) {
       setResolved(true);
       return;
     }
+
     if (!uid) {
       setBlocked("Session expirée : reconnectez-vous pour embarquer.");
       setVehicleCapacity(null);
@@ -105,15 +108,11 @@ const BoardingScanPage: React.FC = () => {
           return;
         }
         const vidFromAssignment = String(data.vehicleId ?? "").trim();
-        if (!vidFromAssignment) {
-          if (!cancelled) {
-            setBlocked("Ce trajet n’a pas encore de véhicule assigné.");
-            setResolved(true);
-          }
-          return;
-        }
-        const cap = await getVehicleCapacity(companyId, vidFromAssignment);
+        // En Phase 1 “préparation” on autorise l’écran liste+scan même si pas de véhicule assigné.
+        // On évite uniquement les opérations dépendantes de la capacité/lock quand vehicleId manque.
+        const cap = vidFromAssignment ? await getVehicleCapacity(companyId, vidFromAssignment) : null;
         const clientId = getOrCreateBoardingClientInstanceId();
+
         try {
           await startBoardingSessionLock(companyId, agencyId, resolvedAssignmentId, uid, clientId);
         } catch (lockErr: unknown) {
