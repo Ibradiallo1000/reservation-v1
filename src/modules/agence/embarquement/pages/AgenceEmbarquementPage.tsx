@@ -834,7 +834,11 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
 
   const showFastBoardSuccess = useCallback((offline?: boolean, scanDetails?: ScanDetails) => {
     if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
-    setFastBoardOverlay({ type: "success", offline: !!offline, scanDetails: scanDetails ?? undefined });
+    setFastBoardOverlay({
+      type: "success",
+      offline: !!offline,
+      scanDetails: scanDetails ? { ...scanDetails, statutEmbarquement: "Embarqué" } : undefined,
+    });
     try { navigator.vibrate(120); } catch {}
     try { new Audio("/beep.mp3").play(); } catch {}
     overlayTimeoutRef.current = setTimeout(() => {
