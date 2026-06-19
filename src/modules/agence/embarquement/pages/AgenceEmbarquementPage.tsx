@@ -94,12 +94,15 @@ import {
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
 import "react-datepicker/dist/react-datepicker.css";
 
-const FAST_BOARDING_OVERLAY_DURATION_MS = 1200;
+const FAST_BOARDING_SUCCESS_OVERLAY_DURATION_MS = 3000;
+const FAST_BOARDING_ERROR_OVERLAY_DURATION_MS = 1200;
 const INVALID_RESERVATION_STATUT = "invalide";
 /** Même code-barres / QR : évite double traitement sans ralentir l’enchaînement de billets différents. */
 const SCAN_SAME_CODE_MIN_INTERVAL_MS = 400;
 /** Même réservation (id Firestore du passager) : filet si le décodeur renvoie plusieurs fois la même cible. */
 const SCAN_SAME_RESERVATION_MIN_INTERVAL_MS = 350;
+/** Verrou UX après succès : ignore les callbacks QR répétés pendant le feedback. */
+const SCAN_SUCCESS_COOLDOWN_MS = 1500;
 
 const DatePickerButton = React.forwardRef<HTMLButtonElement, { value?: string; onClick?: () => void }>(
   ({ value, onClick }, ref) => (
@@ -595,6 +598,8 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   reservationsRef.current = reservations;
   const scanSameCodeRef = useRef<{ code: string; at: number } | null>(null);
   const scanSameResIdRef = useRef<Map<string, number>>(new Map());
+  const scanCooldownUntilRef = useRef(0);
+  const scanCooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const offlineScannedIds = useRef<Set<string>>(new Set());
   /** Snapshot créneau (Phase 3.5) — offline : vérité pour scan / file d’attente. */
   const boardingSlotSnapshotRef = useRef<BoardingSlotSnapshotV1 | null>(null);
@@ -867,7 +872,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
     return () => window.removeEventListener("pagehide", onPageHide);
   }, []);
 
-  // Fast boarding overlay (success / error for 1.2s; success can show "Embarqué (hors ligne)" + détail passager + alerte dépassement)
+  // Fast boarding overlay (success / error; success can show "Embarqué (hors ligne)" + détail passager + alerte dépassement)
   type ScanDetails = {
     nomClient?: string;
     depart?: string;
@@ -882,6 +887,8 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
 
   const showFastBoardSuccess = useCallback((offline?: boolean, scanDetails?: ScanDetails) => {
     if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
+    if (scanCooldownTimeoutRef.current) clearTimeout(scanCooldownTimeoutRef.current);
+    scanCooldownUntilRef.current = Date.now() + SCAN_SUCCESS_COOLDOWN_MS;
     setFastBoardOverlay({
       type: "success",
       offline: !!offline,
@@ -889,10 +896,15 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
     });
     try { navigator.vibrate(120); } catch {}
     try { new Audio("/beep.mp3").play(); } catch {}
+    scanCooldownTimeoutRef.current = setTimeout(() => {
+      scanCooldownTimeoutRef.current = null;
+      scanCooldownUntilRef.current = 0;
+      scanSameCodeRef.current = null;
+    }, SCAN_SUCCESS_COOLDOWN_MS);
     overlayTimeoutRef.current = setTimeout(() => {
       overlayTimeoutRef.current = null;
       setFastBoardOverlay(null);
-    }, FAST_BOARDING_OVERLAY_DURATION_MS);
+    }, FAST_BOARDING_SUCCESS_OVERLAY_DURATION_MS);
   }, []);
 
   const showFastBoardError = useCallback((message: string) => {
@@ -902,7 +914,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
     overlayTimeoutRef.current = setTimeout(() => {
       overlayTimeoutRef.current = null;
       setFastBoardOverlay(null);
-    }, FAST_BOARDING_OVERLAY_DURATION_MS);
+    }, FAST_BOARDING_ERROR_OVERLAY_DURATION_MS);
   }, []);
 
   const normalizeOverlayMessage = useCallback((msg: string): string => {
@@ -920,6 +932,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   useEffect(() => {
     return () => {
       if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
+      if (scanCooldownTimeoutRef.current) clearTimeout(scanCooldownTimeoutRef.current);
     };
   }, []);
 
@@ -2477,6 +2490,7 @@ useEffect(() => {
   );
 
   const takeScanSlotForCode = useCallback((code: string, now: number) => {
+    if (now < scanCooldownUntilRef.current) return false;
     const c = code.trim();
     const p = scanSameCodeRef.current;
     if (!p || p.code !== c) {
