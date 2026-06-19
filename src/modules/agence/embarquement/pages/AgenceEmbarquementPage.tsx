@@ -94,8 +94,9 @@ import {
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
 import "react-datepicker/dist/react-datepicker.css";
 
-const FAST_BOARDING_SUCCESS_OVERLAY_DURATION_MS = 3000;
+const FAST_BOARDING_SUCCESS_OVERLAY_DURATION_MS = 5000;
 const FAST_BOARDING_ERROR_OVERLAY_DURATION_MS = 1200;
+const FAST_BOARDING_NOTICE_OVERLAY_DURATION_MS = 2800;
 const INVALID_RESERVATION_STATUT = "invalide";
 /** Même code-barres / QR : évite double traitement sans ralentir l’enchaînement de billets différents. */
 const SCAN_SAME_CODE_MIN_INTERVAL_MS = 400;
@@ -881,7 +882,10 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
     overtravel?: boolean;
   };
   const [fastBoardOverlay, setFastBoardOverlay] = useState<
-    { type: "success"; offline?: boolean; scanDetails?: ScanDetails } | { type: "error"; message: string } | null
+    | { type: "success"; offline?: boolean; scanDetails?: ScanDetails }
+    | { type: "error"; message: string }
+    | { type: "notice"; message: string }
+    | null
   >(null);
   const overlayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -915,6 +919,16 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
       overlayTimeoutRef.current = null;
       setFastBoardOverlay(null);
     }, FAST_BOARDING_ERROR_OVERLAY_DURATION_MS);
+  }, []);
+
+  const showAlreadyBoardedNotice = useCallback((message = "Billet déjà embarqué") => {
+    if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
+    setFastBoardOverlay({ type: "notice", message });
+    try { navigator.vibrate(35); } catch {}
+    overlayTimeoutRef.current = setTimeout(() => {
+      overlayTimeoutRef.current = null;
+      setFastBoardOverlay(null);
+    }, FAST_BOARDING_NOTICE_OVERLAY_DURATION_MS);
   }, []);
 
   const normalizeOverlayMessage = useCallback((msg: string): string => {
@@ -2513,7 +2527,7 @@ useEffect(() => {
   const blockIfAlreadyBoardedLocal = useCallback((resId: string, onBlock: (msg: string) => void) => {
     const row = reservationsRef.current.find((r) => getReservationDocId(r) === resId);
     if (row && getEffectiveBoardingStatus(row) === "boarded") {
-      onBlock("Billet déjà embarqué.");
+      onBlock("Billet déjà embarqué");
       return true;
     }
     return false;
@@ -2540,18 +2554,13 @@ useEffect(() => {
       const manualNow = Date.now();
       if (!takeScanSlotForCode(code, manualNow)) return;
 
-      if (!effectiveBoardingAssignmentRef.current) {
-        showFastBoardError(
-          "Départ à préparer — liste passagers disponible, affectation véhicule optionnelle."
-        );
-        // Phase 1: absence d’affectation ne doit pas bloquer le scan.
-      }
+      // Phase 1: absence d’affectation ne doit pas bloquer le scan ni afficher d’erreur.
 
 
       if (!isOnline) {
         const found = findFromCache(code);
         if (found) {
-          if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) {
+          if (blockIfAlreadyBoardedLocal(found.resId, showAlreadyBoardedNotice)) {
             setScanCode("");
             return;
           }
@@ -2596,7 +2605,7 @@ useEffect(() => {
         if (found) {
           qrDiag("RESERVATION_MATCH_FOUND", { source: "manual", reservationId: found.resId, agencyId: found.agencyId });
           if (!takeScanSlotForResId(found.resId, Date.now())) return;
-          if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) {
+          if (blockIfAlreadyBoardedLocal(found.resId, showAlreadyBoardedNotice)) {
             setScanCode("");
             return;
           }
@@ -2628,6 +2637,10 @@ useEffect(() => {
       } catch (err: any) {
         console.error(err);
         qrDiag("BOARDING_UPDATE_ERROR", { source: "manual", message: err?.message ?? String(err) });
+        if (String(err?.message ?? err).includes("Déjà embarqué")) {
+          showAlreadyBoardedNotice();
+          return;
+        }
         showFastBoardError(normalizeOverlayMessage(err?.message ?? "Erreur lors de la validation manuelle."));
       }
     },
@@ -2643,6 +2656,7 @@ useEffect(() => {
       selectedDate,
       showFastBoardSuccess,
       showFastBoardError,
+      showAlreadyBoardedNotice,
       normalizeOverlayMessage,
       agencyInfo,
       takeScanSlotForCode,
@@ -2724,16 +2738,12 @@ useEffect(() => {
               }
               const scanNow = Date.now();
               if (!takeScanSlotForCode(code, scanNow)) return;
-              if (!effectiveBoardingAssignmentRef.current) {
-                showFastBoardError(
-                  "Départ à préparer — liste passagers disponible, affectation véhicule optionnelle."
-                );
-              }
+              // Phase 1: absence d’affectation ne doit pas bloquer le scan ni afficher d’erreur.
 
               if (!isOnline) {
                 const found = findFromCache(code);
-                if (found) {
-                  if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
+              if (found) {
+                  if (blockIfAlreadyBoardedLocal(found.resId, showAlreadyBoardedNotice)) return;
                   if (offlineScannedIds.current.has(found.resId)) {
                     showFastBoardError("Billet déjà scanné (hors ligne).");
                     return;
@@ -2771,10 +2781,10 @@ useEffect(() => {
                 } : undefined
               );
               if (isDecoderStale()) return;
-              if (found) {
+                if (found) {
                 qrDiag("RESERVATION_MATCH_FOUND", { source: "camera_constraints", reservationId: found.resId, agencyId: found.agencyId });
                 if (!takeScanSlotForResId(found.resId, Date.now())) return;
-                if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
+                if (blockIfAlreadyBoardedLocal(found.resId, showAlreadyBoardedNotice)) return;
                 let scanDetails: { nomClient?: string; depart?: string; arrivee?: string; statutEmbarquement?: string; overtravel?: boolean } | undefined;
                 try {
                   const resRef = doc(db, `companies/${companyId}/agences/${found.agencyId}/reservations/${found.resId}`);
@@ -2798,6 +2808,10 @@ useEffect(() => {
             } catch (e: any) {
               console.error(e);
               qrDiag("BOARDING_UPDATE_ERROR", { source: "camera_constraints", message: e?.message ?? String(e) });
+              if (String(e?.message ?? e).includes("Déjà embarqué")) {
+                showAlreadyBoardedNotice();
+                return;
+              }
               showFastBoardError(normalizeOverlayMessage(e?.message ?? "Erreur lors du scan"));
             }
           }
@@ -2841,15 +2855,11 @@ useEffect(() => {
                 }
                 const scanNow = Date.now();
                 if (!takeScanSlotForCode(code, scanNow)) return;
-                if (!effectiveBoardingAssignmentRef.current) {
-                  showFastBoardError(
-                    "Départ à préparer — liste passagers disponible, affectation véhicule optionnelle."
-                  );
-                }
+                // Phase 1: absence d’affectation ne doit pas bloquer le scan ni afficher d’erreur.
                 if (!isOnline) {
                   const found = findFromCache(code);
                   if (found) {
-                    if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
+                    if (blockIfAlreadyBoardedLocal(found.resId, showAlreadyBoardedNotice)) return;
                     if (offlineScannedIds.current.has(found.resId)) {
                       showFastBoardError("Billet déjà scanné (hors ligne).");
                       return;
@@ -2890,7 +2900,7 @@ useEffect(() => {
                 if (found) {
                   qrDiag("RESERVATION_MATCH_FOUND", { source: "camera_device", reservationId: found.resId, agencyId: found.agencyId });
                   if (!takeScanSlotForResId(found.resId, Date.now())) return;
-                  if (blockIfAlreadyBoardedLocal(found.resId, showFastBoardError)) return;
+                  if (blockIfAlreadyBoardedLocal(found.resId, showAlreadyBoardedNotice)) return;
                   let scanDetails: { nomClient?: string; depart?: string; arrivee?: string; statutEmbarquement?: string; overtravel?: boolean } | undefined;
                   try {
                     const resRef = doc(db, `companies/${companyId}/agences/${found.agencyId}/reservations/${found.resId}`);
@@ -2914,6 +2924,10 @@ useEffect(() => {
               } catch (e: any) {
                 console.error(e);
                 qrDiag("BOARDING_UPDATE_ERROR", { source: "camera_device", message: e?.message ?? String(e) });
+                if (String(e?.message ?? e).includes("Déjà embarqué")) {
+                  showAlreadyBoardedNotice();
+                  return;
+                }
                 showFastBoardError(normalizeOverlayMessage(e?.message ?? "Erreur lors du scan"));
               }
             }
@@ -2961,6 +2975,7 @@ useEffect(() => {
     selectedDate,
     showFastBoardSuccess,
     showFastBoardError,
+    showAlreadyBoardedNotice,
     normalizeOverlayMessage,
     agencyInfo,
     takeScanSlotForCode,
@@ -3256,12 +3271,17 @@ useEffect(() => {
   return (
     <StandardLayoutWrapper>
     <>
-      {/* Fast boarding overlay — full screen 1.2s feedback */}
+      {/* Fast boarding overlay — scan feedback */}
       {fastBoardOverlay && (
         <div
           className="fixed inset-0 z-[9999] flex flex-col items-center justify-center text-white"
           style={{
-            backgroundColor: fastBoardOverlay.type === "success" ? "#16a34a" : "#dc2626",
+            backgroundColor:
+              fastBoardOverlay.type === "success"
+                ? "#16a34a"
+                : fastBoardOverlay.type === "notice"
+                  ? "#334155"
+                  : "#dc2626",
           }}
           aria-live="polite"
         >
@@ -3284,6 +3304,13 @@ useEffect(() => {
                   )}
                 </div>
               )}
+            </>
+          ) : fastBoardOverlay.type === "notice" ? (
+            <>
+              <CheckCircle className="w-20 h-20 mb-4" strokeWidth={2} />
+              <span className="text-xl font-semibold text-center px-4">
+                {fastBoardOverlay.message}
+              </span>
             </>
           ) : (
             <>
