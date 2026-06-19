@@ -37,6 +37,23 @@ export function departureWorkflowRef(companyId: string, agencyId: string, tripIn
   return doc(db, "companies", companyId, "agences", agencyId, "departures", tripInstanceId);
 }
 
+function reservationDocId(row: { id: string; reservationDocId?: string; firestoreId?: string }): string {
+  return String(row.reservationDocId ?? row.firestoreId ?? row.id ?? "").trim();
+}
+
+function effectiveBoardingStatus(row: {
+  boardingStatus?: string;
+  statutEmbarquement?: string;
+}): "boarded" | "no_show" | "pending" {
+  const boardingStatus = String(row.boardingStatus ?? "").toLowerCase();
+  if (boardingStatus === "boarded") return "boarded";
+  if (boardingStatus === "no_show") return "no_show";
+  const statut = String(row.statutEmbarquement ?? "").toLowerCase();
+  if (statut === "embarqué" || statut === "embarque") return "boarded";
+  if (statut === "absent") return "no_show";
+  return "pending";
+}
+
 export async function ensureDepartureDocument(params: {
   companyId: string;
   agencyId: string;
@@ -92,4 +109,70 @@ export async function ensureDepartureDocument(params: {
       updatedAt: ReturnType<typeof serverTimestamp>;
     });
   });
+}
+
+export async function closeDepartureBoarding(params: {
+  companyId: string;
+  agencyId: string;
+  tripInstanceId: string;
+  userId: string;
+  reservations: Array<{
+    id: string;
+    reservationDocId?: string;
+    firestoreId?: string;
+    boardingStatus?: string;
+    statutEmbarquement?: string;
+  }>;
+}): Promise<{
+  boardedCount: number;
+  absentCount: number;
+  pendingConvertedCount: number;
+}> {
+  if (params.reservations.length > 400) {
+    throw new Error("Trop de réservations à clôturer en une seule transaction.");
+  }
+
+  const departureRef = departureWorkflowRef(params.companyId, params.agencyId, params.tripInstanceId);
+  const pendingRows = params.reservations.filter((row) => effectiveBoardingStatus(row) === "pending");
+  const boardedCount = params.reservations.filter((row) => effectiveBoardingStatus(row) === "boarded").length;
+  const existingAbsentCount = params.reservations.filter((row) => effectiveBoardingStatus(row) === "no_show").length;
+  const pendingConvertedCount = pendingRows.length;
+  const absentCount = existingAbsentCount + pendingConvertedCount;
+
+  await runTransaction(db, async (tx) => {
+    const departureSnap = await tx.get(departureRef);
+    if (!departureSnap.exists()) throw new Error("Départ introuvable.");
+    const departure = departureSnap.data() as Partial<DepartureWorkflowDoc>;
+    if (departure.tripStatus !== "OPEN") {
+      throw new Error("Ce départ n'est plus ouvert.");
+    }
+
+    tx.update(departureRef, {
+      tripStatus: "CLOSED",
+      boardingClosedAt: serverTimestamp(),
+      boardingClosedBy: params.userId,
+      boardedPassengersCount: boardedCount,
+      absentPassengersCount: absentCount,
+      pendingPassengersCount: 0,
+      updatedAt: serverTimestamp(),
+    });
+
+    for (const row of pendingRows) {
+      const id = reservationDocId(row);
+      if (!id) continue;
+      const resRef = doc(db, "companies", params.companyId, "agences", params.agencyId, "reservations", id);
+      tx.update(resRef, {
+        boardingStatus: "no_show",
+        statutEmbarquement: "absent",
+        controleurId: params.userId,
+        checkInTime: null,
+      });
+    }
+  });
+
+  return {
+    boardedCount,
+    absentCount,
+    pendingConvertedCount,
+  };
 }

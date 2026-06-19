@@ -86,6 +86,7 @@ import {
 } from "@/modules/agence/embarquement/boardingSlotSnapshot";
 import {
   departureWorkflowRef,
+  closeDepartureBoarding,
   ensureDepartureDocument,
   type DepartureWorkflowDoc,
 } from "@/modules/agence/embarquement/services/departureWorkflowService";
@@ -658,6 +659,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const scanDecoderGenerationRef = useRef(0);
   /** Évite deux syncs parallèles de la file hors-ligne (double effet ou deps qui bougent). */
   const boardingQueueSyncInFlightRef = useRef(false);
+  const departureTripStatusRef = useRef<string>("OPEN");
 
   // Online status for offline boarding queue
   const [isOnline, setIsOnline] = useState(() => typeof navigator !== "undefined" && navigator.onLine);
@@ -1775,6 +1777,11 @@ useEffect(() => {
             `companies/${companyId}/agences/${agencyIdToUse}/boardingLocks/${reservationId}`
           );
           const lockSnap = await tx.get(lockRef);
+          const isLateBoarding =
+            statut === "embarqué" &&
+            departureTripStatusRef.current === "CLOSED" &&
+            getEffectiveBoardingStatus(data as { boardingStatus?: string; statutEmbarquement?: string }) ===
+              "no_show";
 
           // Phase 4.5 — embarqué : ordre verrou / dédup → stats / live (évite double comptage)
           if (statut === "embarqué") {
@@ -1897,6 +1904,10 @@ useEffect(() => {
             date: selectedDate,
             heure: selectedTrip?.heure ?? data.heure,
             result: (statut === "embarqué" ? "EMBARQUE" : statut).toUpperCase(),
+            action:
+              statut === "embarqué" && isLateBoarding
+                ? "late_boarding"
+                : (statut === "embarqué" ? "boarding" : statut),
             controleurId: uid,
             scannedAt: serverTimestamp(),
           });
@@ -2154,8 +2165,13 @@ useEffect(() => {
   const [isClosed, setIsClosed] = useState(false);
   const [tripInstanceIdForSlot, setTripInstanceIdForSlot] = useState<string | null>(null);
   const [departureWorkflow, setDepartureWorkflow] = useState<DepartureWorkflowDoc | null>(null);
+  const [closingDeparture, setClosingDeparture] = useState(false);
+  const [closeDepartureFeedback, setCloseDepartureFeedback] = useState<string | null>(null);
   const [originDepartureDone, setOriginDepartureDone] = useState(false);
   const [sendingOriginDeparture, setSendingOriginDeparture] = useState(false);
+  useEffect(() => {
+    departureTripStatusRef.current = departureWorkflow?.tripStatus ?? "OPEN";
+  }, [departureWorkflow?.tripStatus]);
   const departureTripInstanceId = useMemo(() => {
     // tripInstanceId identifie une instance datée du départ, contrairement à trajetId qui peut être legacy.
     return selectedTrip?.tripInstanceId ?? tripInstanceIdForSlot;
@@ -2293,6 +2309,92 @@ useEffect(() => {
     assign.immat,
     assign.bus,
     assign.chauffeur,
+  ]);
+
+  useEffect(() => {
+    if (!closeDepartureFeedback) return;
+    const timeout = window.setTimeout(() => setCloseDepartureFeedback(null), 2800);
+    return () => window.clearTimeout(timeout);
+  }, [closeDepartureFeedback]);
+
+  const handleCloseDepartureBoarding = useCallback(async () => {
+    if (!companyId || !selectedAgencyId || !departureTripInstanceId || !uid) {
+      alert("Contexte incomplet pour clôturer l'embarquement.");
+      return;
+    }
+    if (departureWorkflow?.tripStatus !== "OPEN") {
+      alert("Ce départ n'est pas ouvert.");
+      return;
+    }
+    if (reservations.length > 400) {
+      alert("Trop de réservations à clôturer en une seule opération.");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Clôturer l'embarquement ? Les passagers non embarqués seront marqués absents. Le scan restera autorisé."
+      )
+    ) {
+      return;
+    }
+
+    setClosingDeparture(true);
+    try {
+      const result = await closeDepartureBoarding({
+        companyId,
+        agencyId: selectedAgencyId,
+        tripInstanceId: departureTripInstanceId,
+        userId: uid,
+        reservations: reservations.map((r) => ({
+          id: getReservationDocId(r),
+          reservationDocId: r.reservationDocId,
+          firestoreId: r.firestoreId,
+          boardingStatus: r.boardingStatus,
+          statutEmbarquement: r.statutEmbarquement,
+        })),
+      });
+
+      setReservations((prev) =>
+        prev.map((r) =>
+          getEffectiveBoardingStatus(r) === "pending"
+            ? {
+                ...r,
+                boardingStatus: "no_show",
+                statutEmbarquement: "absent",
+                controleurId: uid,
+                checkInTime: null,
+              }
+            : r
+        )
+      );
+      setDepartureWorkflow((prev) =>
+        prev
+          ? {
+              ...prev,
+              tripStatus: "CLOSED",
+              boardingClosedAt: new Date(),
+              boardingClosedBy: uid,
+              boardedPassengersCount: result.boardedCount,
+              absentPassengersCount: result.absentCount,
+              pendingPassengersCount: 0,
+              updatedAt: new Date(),
+            }
+          : prev
+      );
+      setCloseDepartureFeedback("Embarquement clôturé");
+    } catch (err) {
+      console.error("[departureWorkflow] close failed", err);
+      alert(err instanceof Error ? err.message : "Erreur lors de la clôture de l'embarquement.");
+    } finally {
+      setClosingDeparture(false);
+    }
+  }, [
+    companyId,
+    selectedAgencyId,
+    departureTripInstanceId,
+    uid,
+    departureWorkflow?.tripStatus,
+    reservations,
   ]);
 
   /* ---------- Auto-départ 30 min après clôture (ne bloque plus le bouton manuel) ---------- */
@@ -3743,6 +3845,25 @@ useEffect(() => {
                 ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${humanDate} • ${selectedTrip.heure}`
                 : `${humanDate} • Sélectionner un trajet`}
             </div>
+            {(departureWorkflow?.tripStatus === "OPEN" || closeDepartureFeedback) && (
+              <div className="mt-2 flex flex-col items-center gap-1 sm:flex-row sm:justify-center">
+                {departureWorkflow?.tripStatus === "OPEN" && (
+                  <button
+                    type="button"
+                    onClick={() => void handleCloseDepartureBoarding()}
+                    disabled={closingDeparture || reservations.length === 0}
+                    className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 disabled:opacity-50 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100"
+                  >
+                    {closingDeparture ? "Clôture..." : "Clôturer l'embarquement"}
+                  </button>
+                )}
+                {closeDepartureFeedback && (
+                  <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100">
+                    {closeDepartureFeedback}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
