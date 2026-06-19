@@ -1769,6 +1769,31 @@ service cloud.firestore {
           allow delete: if false;
         }
 
+        match /departures/{tripInstanceId} {
+          allow get, list: if isAuth()
+            && getUserAgencyId() == agencyId
+            && (
+              userCompanyId() == companyId
+              || userAgencyBelongsToCompany(companyId)
+              || getUserRole() == 'admin_platforme'
+            );
+
+          allow create: if isAuth()
+            && getUserAgencyId() == agencyId
+            && (
+              userCompanyId() == companyId
+              || userAgencyBelongsToCompany(companyId)
+              || getUserRole() == 'admin_platforme'
+            )
+            && request.resource.data.companyId == companyId
+            && request.resource.data.agencyId == agencyId
+            && request.resource.data.tripInstanceId == tripInstanceId
+            && request.resource.data.tripStatus == 'OPEN'
+            && request.resource.data.schemaVersion == 1;
+
+          allow update, delete: if false;
+        }
+
         /* Verrou idempotence vente guichet (créé dans la même transaction que la réservation). */
         match /guichetSaleLocks/{lockId} {
           allow get: if isAuth() && userAgencyBelongsToCompany(companyId) && getUserAgencyId() == agencyId;

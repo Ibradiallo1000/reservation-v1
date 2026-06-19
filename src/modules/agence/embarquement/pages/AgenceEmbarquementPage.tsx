@@ -84,8 +84,13 @@ import {
   snapshotMatchesSelection,
   type BoardingSlotSnapshotV1,
 } from "@/modules/agence/embarquement/boardingSlotSnapshot";
+import {
+  departureWorkflowRef,
+  ensureDepartureDocument,
+  type DepartureWorkflowDoc,
+} from "@/modules/agence/embarquement/services/departureWorkflowService";
 import { StandardLayoutWrapper } from "@/ui";
-import { Camera, List, CheckCircle, AlertTriangle } from "lucide-react";
+import { BarChart3, Camera, List, CheckCircle, AlertTriangle } from "lucide-react";
 import {
   addToBoardingQueue,
   getUnsyncedBoardingQueue,
@@ -240,6 +245,7 @@ interface WeeklyTrip {
 
 type SelectedTrip = {
   id?: string;
+  tripInstanceId?: string;
   departure: string;
   arrival: string;
   heure: string;
@@ -328,6 +334,17 @@ function formatDisplayPhone(v?: string): string {
   }
   return raw;
 }
+
+function formatReservationCanal(v?: string): string {
+  const raw = String(v ?? "").trim();
+  const normalized = raw.toLowerCase();
+  if (!raw) return "—";
+  if (normalized === "guichet" || normalized === "counter") return "Guichet";
+  if (normalized === "online" || normalized === "en_ligne" || normalized === "en ligne") return "En ligne";
+  if (normalized === "report") return "Report";
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
 function formatDisplayPhoneOrEmpty(v?: string): string {
   const raw = String(v ?? "").trim();
   return raw ? formatDisplayPhone(raw) : "";
@@ -341,6 +358,23 @@ function formatPrintPersonName(v?: string): string {
     .map((w) => w.charAt(0).toLocaleUpperCase("fr-FR") + w.slice(1).toLocaleLowerCase("fr-FR"))
     .join(" ");
 }
+function normalizePhoneDigits(value: string): string {
+  return String(value ?? "").replace(/\D/g, "").slice(0, 8);
+}
+function formatMaliPhone(value: string): string {
+  const digits = normalizePhoneDigits(value);
+  return digits.replace(/(\d{2})(?=\d)/g, "$1 ").trim();
+}
+function formatPersonName(value: string): string {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .map((part) =>
+      part ? part.charAt(0).toLocaleUpperCase("fr-FR") + part.slice(1).toLocaleLowerCase("fr-FR") : ""
+    )
+    .join(" ");
+}
 function normalizeVehiclePlateInput(v: string): string {
   return String(v ?? "")
     .toLocaleUpperCase("fr-FR")
@@ -348,13 +382,11 @@ function normalizeVehiclePlateInput(v: string): string {
     .replace(/\s+/g, " ");
 }
 function normalizeCrewNameInput(v: string): string {
-  return String(v ?? "")
-    .replace(/\s+/g, " ")
-    .replace(/[^\s]+/g, (word) => word.charAt(0).toLocaleUpperCase("fr-FR") + word.slice(1).toLocaleLowerCase("fr-FR"));
+  return formatPersonName(v);
 }
 function joinPrintNamePhone(name?: string, phone?: string): string {
   const displayName = formatPrintPersonName(name);
-  const displayPhone = formatDisplayPhoneOrEmpty(phone);
+  const displayPhone = formatMaliPhone(phone ?? "");
   return [displayName, displayPhone].filter(Boolean).join(" — ");
 }
 
@@ -478,6 +510,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
       arrival?: string;
       assignmentId?: string;
       vehicleId?: string;
+      tripInstanceId?: string;
       assignmentStatus?: "planned" | "validated";
     };
   };
@@ -572,7 +605,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
 
   // Scan caméra
   const [scanOn, setScanOn] = useState(false);
-  const [mobileView, setMobileView] = useState<"scan" | "liste">("scan");
+  const [mobileView, setMobileView] = useState<"scan" | "liste" | "rapports">("scan");
   // Refactor UI Phase 1 (visible uniquement côté UI): prioriser liste+impression desktop/tablette, scan mobile.
   // Ne modifie pas la logique métier : uniquement l'affichage (switch UI).
   const [isMobile, setIsMobile] = useState<boolean>(() => {
@@ -728,6 +761,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
       if (prev) return prev;
       return {
         id: snap.tripId || undefined,
+        tripInstanceId: undefined,
         departure: snap.departure ?? "",
         arrival: snap.arrival ?? "",
         heure: snap.heure,
@@ -971,15 +1005,29 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const vehiclePrintContextKey = useMemo(
     () =>
       [
+        companyId ?? "",
+        selectedAgencyId ?? "",
         selectedDate,
         selectedTrip?.id ?? "",
         selectedTrip?.departure ?? "",
         selectedTrip?.arrival ?? "",
         selectedTrip?.heure ?? "",
       ].join("|"),
-    [selectedDate, selectedTrip?.id, selectedTrip?.departure, selectedTrip?.arrival, selectedTrip?.heure]
+    [companyId, selectedAgencyId, selectedDate, selectedTrip?.id, selectedTrip?.departure, selectedTrip?.arrival, selectedTrip?.heure]
+  );
+  const vehiclePrintStorageKey = useMemo(
+    () => `teliya:boarding:vehiclePrint:${vehiclePrintContextKey}`,
+    [vehiclePrintContextKey]
   );
   const lastVehiclePrintContextRef = useRef("");
+
+  const sanitizeVehiclePrintInfo = useCallback((value: Partial<VehiclePrintInfo>): VehiclePrintInfo => ({
+    plate: normalizeVehiclePlateInput(value.plate ?? "").trim(),
+    driver: formatPersonName(value.driver ?? ""),
+    driverPhone: formatMaliPhone(value.driverPhone ?? ""),
+    convoyeur: formatPersonName(value.convoyeur ?? ""),
+    convoyeurPhone: formatMaliPhone(value.convoyeurPhone ?? ""),
+  }), []);
 
   useEffect(() => {
     const contextChanged = lastVehiclePrintContextRef.current !== vehiclePrintContextKey;
@@ -989,17 +1037,27 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
       setVehiclePrintSavedAt(null);
     }
     if (contextChanged || !vehiclePrintDirty) {
-      setVehiclePrintDraft({
+      let stored: Partial<VehiclePrintInfo> | null = null;
+      if (typeof window !== "undefined") {
+        try {
+          stored = JSON.parse(window.localStorage.getItem(vehiclePrintStorageKey) || "null") as Partial<VehiclePrintInfo> | null;
+        } catch {
+          stored = null;
+        }
+      }
+      setVehiclePrintDraft(sanitizeVehiclePrintInfo(stored ?? {
         plate: normalizeVehiclePlateInput(assign.immat ?? "").trim(),
         driver: normalizeCrewNameInput(assign.chauffeur ?? "").trim(),
         driverPhone: String(assign.chauffeurPhone ?? "").trim(),
         convoyeur: normalizeCrewNameInput(assign.chef ?? "").trim(),
         convoyeurPhone: String(assign.chefPhone ?? "").trim(),
-      });
+      }));
     }
   }, [
     vehiclePrintContextKey,
+    vehiclePrintStorageKey,
     vehiclePrintDirty,
+    sanitizeVehiclePrintInfo,
     assign.immat,
     assign.chauffeur,
     assign.chauffeurPhone,
@@ -1010,23 +1068,45 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const updateVehiclePrintDraft = useCallback((field: keyof VehiclePrintInfo, value: string) => {
     let next = value;
     if (field === "plate") next = normalizeVehiclePlateInput(value);
-    if (field === "driver" || field === "convoyeur") next = normalizeCrewNameInput(value);
+    if (field === "driverPhone" || field === "convoyeurPhone") next = formatMaliPhone(value);
     setVehiclePrintDirty(true);
     setVehiclePrintSavedAt(null);
     setVehiclePrintDraft((prev) => ({ ...prev, [field]: next }));
   }, []);
 
+  const normalizeVehiclePrintDraftField = useCallback((field: keyof VehiclePrintInfo) => {
+    setVehiclePrintDraft((prev) => ({
+      ...prev,
+      [field]:
+        field === "plate"
+          ? normalizeVehiclePlateInput(prev[field]).trim()
+          : field === "driver" || field === "convoyeur"
+            ? formatPersonName(prev[field])
+            : formatMaliPhone(prev[field]),
+    }));
+  }, []);
+
   const saveVehiclePrintInfo = useCallback(() => {
     setVehiclePrintDirty(true);
-    setVehiclePrintDraft((prev) => ({
-      plate: normalizeVehiclePlateInput(prev.plate).trim(),
-      driver: normalizeCrewNameInput(prev.driver).trim(),
-      driverPhone: prev.driverPhone.trim(),
-      convoyeur: normalizeCrewNameInput(prev.convoyeur).trim(),
-      convoyeurPhone: prev.convoyeurPhone.trim(),
-    }));
+    setVehiclePrintDraft((prev) => {
+      const next = sanitizeVehiclePrintInfo(prev);
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(vehiclePrintStorageKey, JSON.stringify(next));
+        } catch {
+          // L'impression reste possible même si le stockage local est indisponible.
+        }
+      }
+      return next;
+    });
     setVehiclePrintSavedAt(Date.now());
-  }, []);
+  }, [sanitizeVehiclePrintInfo, vehiclePrintStorageKey]);
+
+  useEffect(() => {
+    if (!vehiclePrintSavedAt) return;
+    const timeout = window.setTimeout(() => setVehiclePrintSavedAt(null), 2800);
+    return () => window.clearTimeout(timeout);
+  }, [vehiclePrintSavedAt]);
 
   const printVehiclePlate = vehiclePrintDraft.plate.trim();
   const printDriverLabel = joinPrintNamePhone(vehiclePrintDraft.driver, vehiclePrintDraft.driverPhone);
@@ -1299,6 +1379,7 @@ useEffect(() => {
     if (!heure) return;
     setSelectedTrip({
       id: st?.tripId,
+      tripInstanceId: st?.tripInstanceId,
       departure: dep,
       arrival: arr,
       heure,
@@ -2072,15 +2153,20 @@ useEffect(() => {
   }, [selectedTrip, selectedDate]);
   const [isClosed, setIsClosed] = useState(false);
   const [tripInstanceIdForSlot, setTripInstanceIdForSlot] = useState<string | null>(null);
+  const [departureWorkflow, setDepartureWorkflow] = useState<DepartureWorkflowDoc | null>(null);
   const [originDepartureDone, setOriginDepartureDone] = useState(false);
   const [sendingOriginDeparture, setSendingOriginDeparture] = useState(false);
+  const departureTripInstanceId = useMemo(() => {
+    // tripInstanceId identifie une instance datée du départ, contrairement à trajetId qui peut être legacy.
+    return selectedTrip?.tripInstanceId ?? tripInstanceIdForSlot;
+  }, [selectedTrip?.tripInstanceId, tripInstanceIdForSlot]);
 
   useEffect(() => {
-    if (!companyId || !tripInstanceIdForSlot) {
+    if (!companyId || !departureTripInstanceId) {
       setTripStatutMetier(null);
       return;
     }
-    const unsub = onSnapshot(tripInstanceRef(companyId, tripInstanceIdForSlot), (snap) => {
+    const unsub = onSnapshot(tripInstanceRef(companyId, departureTripInstanceId), (snap) => {
       if (!snap.exists()) {
         setTripStatutMetier(null);
         return;
@@ -2089,7 +2175,7 @@ useEffect(() => {
       setTripStatutMetier(data.statutMetier ?? null);
     });
     return () => unsub();
-  }, [companyId, tripInstanceIdForSlot]);
+  }, [companyId, departureTripInstanceId]);
 
   useEffect(() => {
     if (!companyId || !selectedAgencyId || !tripKey) { setIsClosed(false); return; }
@@ -2142,6 +2228,72 @@ useEffect(() => {
       cancelled = true;
     };
   }, [companyId, selectedAgencyId, selectedTrip, selectedDate]);
+
+  useEffect(() => {
+    if (!companyId || !selectedAgencyId || !selectedTrip || !selectedDate || !departureTripInstanceId) {
+      setDepartureWorkflow(null);
+      return;
+    }
+
+    const tripAssignmentId =
+      activeBoardingAssignment?.id ??
+      fallbackBoardingAssignment?.id ??
+      selectedTripAssignment?.id ??
+      (selectedTrip.id ? tripAssignmentDocId(selectedTrip.id, selectedDate, selectedTrip.heure) : null);
+    const vehicleId =
+      activeBoardingAssignment?.vehicleId ??
+      fallbackBoardingAssignment?.vehicleId ??
+      selectedTripAssignment?.vehicleId ??
+      null;
+
+    void ensureDepartureDocument({
+      companyId,
+      agencyId: selectedAgencyId,
+      tripInstanceId: departureTripInstanceId,
+      tripAssignmentId,
+      tripKey,
+      trajetId: selectedTrip.id ?? null,
+      departure: selectedTrip.departure,
+      arrival: selectedTrip.arrival,
+      date: selectedDate,
+      heure: selectedTrip.heure,
+      vehicleId,
+      vehicleLabel: assign.immat || assign.bus || selectedTripAssignment?.vehiclePlate || null,
+      driverId: null,
+      driverName: assign.chauffeur || selectedTripAssignment?.driverName || null,
+    }).catch((err) => {
+      if (import.meta.env.DEV) console.warn("[departureWorkflow] ensure skipped", err);
+    });
+
+    const ref = departureWorkflowRef(companyId, selectedAgencyId, departureTripInstanceId);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        setDepartureWorkflow(snap.exists() ? ({ id: snap.id, ...snap.data() } as unknown as DepartureWorkflowDoc) : null);
+      },
+      () => setDepartureWorkflow(null)
+    );
+
+    return () => unsub();
+  }, [
+    companyId,
+    selectedAgencyId,
+    selectedTrip,
+    selectedDate,
+    departureTripInstanceId,
+    activeBoardingAssignment?.id,
+    activeBoardingAssignment?.vehicleId,
+    fallbackBoardingAssignment?.id,
+    fallbackBoardingAssignment?.vehicleId,
+    selectedTripAssignment?.id,
+    selectedTripAssignment?.vehicleId,
+    selectedTripAssignment?.vehiclePlate,
+    selectedTripAssignment?.driverName,
+    tripKey,
+    assign.immat,
+    assign.bus,
+    assign.chauffeur,
+  ]);
 
   /* ---------- Auto-départ 30 min après clôture (ne bloque plus le bouton manuel) ---------- */
   useEffect(() => {
@@ -3534,35 +3686,67 @@ useEffect(() => {
         }
       `}</style>
 
-      <div className="w-full px-2 sm:px-3 py-3 space-y-3 pb-28">
-        <div className="no-print flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <button
-              type="button"
-              onClick={() => window.location.assign("/agence/boarding")}
-              className="shrink-0 inline-flex items-center justify-center px-3 py-1.5 rounded-lg text-sm font-semibold border border-gray-200 dark:border-slate-600 bg-white/70 dark:bg-slate-800/70 text-gray-900 dark:text-white"
-              title="Retour aux départs du jour"
-            >
-              ← Retours départs
-            </button>
-            <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-              {selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${selectedTrip.heure}` : "Sélectionner un trajet"}
+      <div className="w-full px-2 sm:px-3 py-3 space-y-3 pb-28 sm:pb-3">
+        <div className="no-print rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-3 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              {printCompanyLogo ? (
+                <img
+                  src={printCompanyLogo}
+                  alt=""
+                  className="h-9 w-9 sm:h-10 sm:w-10 rounded-full object-cover border border-gray-200 dark:border-slate-700"
+                />
+              ) : (
+                <div className="h-9 w-9 sm:h-10 sm:w-10 rounded-full border border-gray-200 dark:border-slate-700 bg-gray-100 dark:bg-slate-800 grid place-items-center text-xs font-bold text-gray-600 dark:text-gray-200">
+                  {printCompanyName.slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                <div className="text-sm sm:text-base font-bold text-gray-900 dark:text-white truncate">
+                  {printCompanyName}
+                </div>
+                {departureTripInstanceId && (
+                  <div className="mt-0.5 inline-flex rounded-md border border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-gray-500 dark:text-gray-300">
+                    Départ : {departureWorkflow?.tripStatus ?? "OPEN"}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <DatePicker
+                selected={selectedDateObj}
+                onChange={(d: Date | null) => {
+                  if (!d) return;
+                  setSelectedDate(toLocalISO(d));
+                }}
+                dateFormat="dd/MM"
+                locale={fr}
+                shouldCloseOnSelect
+                customInput={<DatePickerButton />}
+              />
+              <button
+                type="button"
+                onClick={() => window.location.assign("/agence/boarding")}
+                className="inline-flex items-center justify-center px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-semibold border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+                title="Retour aux départs du jour"
+              >
+                Retour
+              </button>
             </div>
           </div>
-          <DatePicker
-            selected={selectedDateObj}
-            onChange={(d: Date | null) => {
-              if (!d) return;
-              setSelectedDate(toLocalISO(d));
-            }}
-            dateFormat="dd/MM"
-            locale={fr}
-            shouldCloseOnSelect
-            customInput={<DatePickerButton />}
-          />
+          <div className="mt-3 text-center">
+            <h1 className="text-base sm:text-xl font-extrabold text-gray-950 dark:text-white">
+              Liste d'embarquement
+            </h1>
+            <div className="mt-1 text-xs sm:text-sm font-semibold text-gray-600 dark:text-gray-300">
+              {selectedTrip
+                ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${humanDate} • ${selectedTrip.heure}`
+                : `${humanDate} • Sélectionner un trajet`}
+            </div>
+          </div>
         </div>
 
-        <div className="no-print flex flex-nowrap overflow-x-auto gap-2">
+        <div className="no-print hidden sm:flex flex-nowrap overflow-x-auto gap-2">
           <button
             type="button"
             onClick={() => setMobileView("scan")}
@@ -3621,20 +3805,22 @@ useEffect(() => {
               </div>
             )}
             {selectedTrip && !hasOperationalAssignment ? (
-              <div className="mt-2 text-xs text-gray-500 dark:text-gray-300">Informations véhicule non définies</div>
+              <div className="mt-2 inline-flex rounded-md bg-gray-100 dark:bg-slate-700 px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-200">
+                Véhicule non affecté — scan autorisé
+              </div>
             ) : null}
           </div>
         )}
 
-        <div className="no-print rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-2 bg-gray-50 dark:bg-slate-800">
+        <div className={`no-print ${mobileView === "rapports" ? "block" : "hidden"} sm:block rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-2 bg-gray-50 dark:bg-slate-800`}>
           <div className="flex flex-col gap-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-[11px] font-semibold text-gray-700 dark:text-gray-200">
                 Informations véhicule avant impression
               </div>
               {vehiclePrintSavedAt && (
-                <div className="text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
-                  Infos enregistrées pour l'impression
+                <div className="rounded-md bg-emerald-50 dark:bg-emerald-950/40 px-2 py-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+                  Infos véhicule enregistrées
                 </div>
               )}
             </div>
@@ -3645,6 +3831,7 @@ useEffect(() => {
                   type="text"
                   value={vehiclePrintDraft.plate}
                   onChange={(e) => updateVehiclePrintDraft("plate", e.target.value)}
+                  onBlur={() => normalizeVehiclePrintDraftField("plate")}
                   placeholder="Ex : AA 223 BC"
                   className="w-full px-2 py-1.5 rounded-md border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-gray-900 dark:text-white uppercase"
                 />
@@ -3655,6 +3842,7 @@ useEffect(() => {
                   type="text"
                   value={vehiclePrintDraft.driver}
                   onChange={(e) => updateVehiclePrintDraft("driver", e.target.value)}
+                  onBlur={() => normalizeVehiclePrintDraftField("driver")}
                   placeholder="Nom complet du chauffeur"
                   className="w-full px-2 py-1.5 rounded-md border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-gray-900 dark:text-white"
                 />
@@ -3663,8 +3851,11 @@ useEffect(() => {
                 <span className="sr-only">Téléphone chauffeur</span>
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={11}
                   value={vehiclePrintDraft.driverPhone}
                   onChange={(e) => updateVehiclePrintDraft("driverPhone", e.target.value)}
+                  onBlur={() => normalizeVehiclePrintDraftField("driverPhone")}
                   placeholder="Téléphone chauffeur"
                   className="w-full px-2 py-1.5 rounded-md border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-gray-900 dark:text-white"
                 />
@@ -3675,6 +3866,7 @@ useEffect(() => {
                   type="text"
                   value={vehiclePrintDraft.convoyeur}
                   onChange={(e) => updateVehiclePrintDraft("convoyeur", e.target.value)}
+                  onBlur={() => normalizeVehiclePrintDraftField("convoyeur")}
                   placeholder="Nom complet du convoyeur"
                   className="w-full px-2 py-1.5 rounded-md border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-gray-900 dark:text-white"
                 />
@@ -3683,8 +3875,11 @@ useEffect(() => {
                 <span className="sr-only">Téléphone convoyeur</span>
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={11}
                   value={vehiclePrintDraft.convoyeurPhone}
                   onChange={(e) => updateVehiclePrintDraft("convoyeurPhone", e.target.value)}
+                  onBlur={() => normalizeVehiclePrintDraftField("convoyeurPhone")}
                   placeholder="Téléphone convoyeur"
                   className="w-full px-2 py-1.5 rounded-md border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-gray-900 dark:text-white"
                 />
@@ -3708,7 +3903,7 @@ useEffect(() => {
           )}
         </div>
 
-        <div className="no-print flex flex-nowrap overflow-x-auto gap-1.5 text-[11px] font-medium">
+        <div className={`no-print ${mobileView === "rapports" ? "flex" : "hidden"} sm:flex flex-nowrap overflow-x-auto gap-1.5 text-[11px] font-medium`}>
           <span className="shrink-0 px-2 py-1 rounded bg-blue-600 text-white whitespace-nowrap">
             R {totals.totalRes}
           </span>
@@ -3735,6 +3930,17 @@ useEffect(() => {
                 <div className="text-base font-bold text-red-900 dark:text-red-100">{totals.seatsAbsents}</div>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={() => setScanOn((v) => !v)}
+              className={`w-full px-3 py-3 rounded-xl text-sm font-semibold min-h-[48px] whitespace-nowrap shadow-sm ${
+                scanOn ? "bg-emerald-600 text-white" : "text-white"
+              }`}
+              style={!scanOn ? { background: primary } : undefined}
+              disabled={!selectedTrip || !selectedAgencyId}
+            >
+              {scanOn ? "Scan en cours..." : "Scanner les billets"}
+            </button>
             {scanOn && (
               <video
                 ref={videoRef}
@@ -3810,7 +4016,99 @@ useEffect(() => {
               </p>
             )}
             </div>
-            <div className="overflow-x-auto mt-1 bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-600">
+            <div className="sm:hidden space-y-2">
+              {isLoading ? (
+                <div className="rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-4 text-sm text-gray-500 dark:text-gray-200">
+                  Chargement…
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-4 text-sm text-gray-400 dark:text-gray-200">
+                  Aucun passager trouvé
+                </div>
+              ) : (
+                filtered.map((r) => {
+                  const eff = getEffectiveBoardingStatus(r);
+                  const embarked = eff === "boarded";
+                  const absent = eff === "no_show";
+                  const seats = r.seatsGo ?? 1;
+                  const statusLabel = embarked ? "Embarqué" : absent ? "Absent" : "En attente";
+                  const statusClass = embarked
+                    ? "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-100 dark:border-emerald-800"
+                    : absent
+                      ? "bg-red-100 text-red-800 border-red-200 dark:bg-red-950/40 dark:text-red-100 dark:border-red-800"
+                      : "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-100 dark:border-amber-800";
+
+                  return (
+                    <article
+                      key={getReservationDocId(r)}
+                      className="rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 shadow-sm"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <h2 className="truncate text-sm font-bold text-gray-950 dark:text-white">
+                            {formatDisplayName(r.nomClient)}
+                          </h2>
+                          <div className="mt-0.5 text-xs font-medium text-gray-500 dark:text-gray-300">
+                            {formatDisplayPhone(r.telephone)}
+                          </div>
+                        </div>
+                        <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] font-bold ${statusClass}`}>
+                          {statusLabel}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                        <div className="rounded-md bg-gray-50 dark:bg-slate-900 px-2 py-1.5">
+                          <div className="text-gray-500 dark:text-gray-400">Référence</div>
+                          <div className="truncate font-semibold text-gray-900 dark:text-white">{r.referenceCode || r.id}</div>
+                        </div>
+                        <div className="rounded-md bg-gray-50 dark:bg-slate-900 px-2 py-1.5">
+                          <div className="text-gray-500 dark:text-gray-400">Canal</div>
+                          <div className="font-semibold text-gray-900 dark:text-white">{formatReservationCanal(r.canal)}</div>
+                        </div>
+                        <div className="rounded-md bg-gray-50 dark:bg-slate-900 px-2 py-1.5">
+                          <div className="text-gray-500 dark:text-gray-400">Places</div>
+                          <div className="font-semibold text-gray-900 dark:text-white">{seats}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateStatut(getReservationDocId(r), embarked ? "en_attente" : "embarqué");
+                          }}
+                          className={`min-h-[44px] rounded-lg border px-3 py-2 text-sm font-bold ${
+                            embarked
+                              ? "border-emerald-500 bg-emerald-600 text-white"
+                              : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100"
+                          } disabled:opacity-50`}
+                          disabled={!canEditBoardingPassengers}
+                        >
+                          Embarqué
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateStatut(getReservationDocId(r), absent ? "en_attente" : "absent");
+                          }}
+                          className={`min-h-[44px] rounded-lg border px-3 py-2 text-sm font-bold ${
+                            absent
+                              ? "border-red-500 bg-red-600 text-white"
+                              : "border-red-300 bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-100"
+                          } disabled:opacity-50`}
+                          disabled={!canEditBoardingPassengers}
+                        >
+                          Absent
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="hidden sm:block overflow-x-auto mt-1 bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-600">
               <table className="w-full text-sm thin-table min-w-[600px]" style={{ fontSize: "14px" }}>
                 <colgroup>
                   <col className="col-idx" />
@@ -3861,7 +4159,7 @@ useEffect(() => {
                           <td className={embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}>{idx + 1}</td>
                           <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{formatDisplayName(r.nomClient)}</td>
                           <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{formatDisplayPhone(r.telephone)}</td>
-                          <td className={`capitalize truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.canal || "—"}</td>
+                          <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{formatReservationCanal(r.canal)}</td>
                           <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.referenceCode || r.id}</td>
                           <td className={`text-center font-semibold ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{seats}</td>
                           <td className="text-center">
@@ -3896,7 +4194,7 @@ useEffect(() => {
           </div>
         )}
 
-        <div className="no-print fixed bottom-0 left-0 right-0 z-40 border-t border-gray-200 dark:border-slate-600 bg-white/95 dark:bg-slate-900/95 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] space-y-2">
+        <div className={`no-print ${mobileView === "rapports" ? "block" : "hidden"} sm:block rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 p-2`}>
             <button
               type="button"
               onClick={() => void handleBusParti()}
@@ -3911,7 +4209,6 @@ useEffect(() => {
                 tripStatutMetier !== "validation_agence_requise"
               }
             >
-              🚌{" "}
               {sendingOriginDeparture
                 ? "Enregistrement..."
                 : originDepartureDone
@@ -3922,21 +4219,51 @@ useEffect(() => {
                       ? "Terminer embarquement puis valider agence"
                       : "Valider et lancer le trajet"}
             </button>
+          </div>
+
+        <nav className="no-print sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-gray-200 dark:border-slate-700 bg-white/95 dark:bg-slate-950/95 px-4 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.12)]">
+          <div className="grid grid-cols-3 items-end gap-2 max-w-md mx-auto">
             <button
               type="button"
-              onClick={() => {
-                setMobileView("scan");
-                setScanOn((v) => !v);
-              }}
-              className={`w-full px-3 py-3.5 rounded-xl text-sm font-semibold min-h-[52px] whitespace-nowrap shadow-md ${
-                scanOn ? "bg-emerald-600 text-white" : "text-white"
+              onClick={() => setMobileView("liste")}
+              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-lg text-xs font-semibold ${
+                mobileView === "liste"
+                  ? "text-red-700 dark:text-red-300"
+                  : "text-gray-600 dark:text-gray-300"
               }`}
-              style={!scanOn ? { background: primary } : undefined}
-              disabled={!selectedTrip || !selectedAgencyId}
+              aria-current={mobileView === "liste" ? "page" : undefined}
             >
-              {scanOn ? "🟢 Scan en cours..." : "📷 Scanner les billets"}
+              <List className="h-5 w-5" aria-hidden />
+              <span>Liste</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileView("scan")}
+              className={`mx-auto -mt-5 flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-full text-[11px] font-bold shadow-lg ${
+                mobileView === "scan"
+                  ? "bg-red-600 text-white"
+                  : "bg-gray-900 text-white dark:bg-white dark:text-slate-950"
+              }`}
+              aria-current={mobileView === "scan" ? "page" : undefined}
+            >
+              <Camera className="h-6 w-6" aria-hidden />
+              <span>Scanner</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileView("rapports")}
+              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-lg text-xs font-semibold ${
+                mobileView === "rapports"
+                  ? "text-red-700 dark:text-red-300"
+                  : "text-gray-600 dark:text-gray-300"
+              }`}
+              aria-current={mobileView === "rapports" ? "page" : undefined}
+            >
+              <BarChart3 className="h-5 w-5" aria-hidden />
+              <span>Rapports</span>
             </button>
           </div>
+        </nav>
 
         {/* Document officiel : uniquement visible à l’impression (hors flux mobile) */}
         <div id="print-area" className="boarding-official-print hidden print:block print-doc">
@@ -4039,19 +4366,16 @@ useEffect(() => {
           <div className="print-doc__signatures">
             <div>
               <div className="print-doc__sig-line" />
-              <div className="print-doc__sig-label">Chef embarquement (nom et signature)</div>
+              <div className="print-doc__sig-label">Chef d'embarquement</div>
             </div>
             <div>
               <div className="print-doc__sig-line" />
-              <div className="print-doc__sig-label">Chauffeur (nom et signature)</div>
+              <div className="print-doc__sig-label">Chauffeur</div>
             </div>
             <div>
               <div className="print-doc__sig-line" />
               <div className="print-doc__sig-label">Visa agence</div>
             </div>
-          </div>
-          <div className="print-doc__footer">
-            Édition du {format(new Date(), "EEEE d MMMM yyyy 'à' HH:mm", { locale: fr })}
           </div>
         </div>
       </div>
