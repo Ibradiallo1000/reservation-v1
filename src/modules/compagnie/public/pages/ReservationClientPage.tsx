@@ -661,6 +661,8 @@ export default function ReservationClientPage() {
         seatsHeld: seats,
         paymentChannel: 'online',
         referenceCode,
+        // tripInstanceId = instance datee du depart (weeklyTripId_YYYY-MM-DD_HH-mm).
+        // trajetId reste legacy selon le flux; l'embarquement privilegie tripInstanceId.
         trajetId: selectedTrip.id,
         tripInstanceId,
         publicToken: token,
@@ -670,6 +672,9 @@ export default function ReservationClientPage() {
         ...(originStopId != null && { originStopId }),
         ...(destinationStopId != null && { destinationStopId }),
         boardingStatus: 'pending',
+        statutEmbarquement: 'en_attente',
+        checkInTime: null,
+        controleurId: null,
         dropoffStatus: 'pending',
         journeyStatus: 'booked',
         payment: {

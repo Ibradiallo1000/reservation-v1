@@ -30,6 +30,10 @@ type OperatorCommitParams = {
 
 const PENDING_ONLINE_STATUSES = new Set(["preuve_recue", "verification"]);
 
+function hasOwnField(data: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(data, key);
+}
+
 export async function commitOperatorValidatedOnlineReservation({
   reservationRef,
   companyId,
@@ -116,6 +120,34 @@ export async function commitOperatorValidatedOnlineReservation({
       typeof reservation.payment === "object" && reservation.payment !== null
         ? (reservation.payment as Record<string, unknown>)
         : {};
+    const existingReservation =
+      typeof reservation.reservation === "object" && reservation.reservation !== null
+        ? (reservation.reservation as Record<string, unknown>)
+        : {};
+    const currentBoardingStatus = String(reservation.boardingStatus ?? "").toLowerCase();
+    const currentStatutEmbarquement = String(reservation.statutEmbarquement ?? "").toLowerCase();
+    const alreadyBoardingProcessed =
+      currentBoardingStatus === "boarded" ||
+      currentBoardingStatus === "checked_in" ||
+      currentStatutEmbarquement === "embarqué" ||
+      currentStatutEmbarquement === "embarque" ||
+      reservation.checkInTime != null ||
+      reservation.controleurId != null;
+    const boardingDefaultsPatch: Record<string, unknown> = {};
+    if (!alreadyBoardingProcessed) {
+      if (!hasOwnField(reservation, "boardingStatus")) {
+        boardingDefaultsPatch.boardingStatus = "pending";
+      }
+      if (!hasOwnField(reservation, "statutEmbarquement")) {
+        boardingDefaultsPatch.statutEmbarquement = "en_attente";
+      }
+      if (!hasOwnField(reservation, "checkInTime")) {
+        boardingDefaultsPatch.checkInTime = null;
+      }
+      if (!hasOwnField(reservation, "controleurId")) {
+        boardingDefaultsPatch.controleurId = null;
+      }
+    }
     const auditEntry = buildStatutTransitionPayload(
       PENDING_ONLINE_STATUSES.has(statut) ? statut : status,
       "confirme",
@@ -139,6 +171,11 @@ export async function commitOperatorValidatedOnlineReservation({
         ...existingPayment,
         status: "validated",
       },
+      reservation: {
+        ...existingReservation,
+        status: "confirme",
+      },
+      ...boardingDefaultsPatch,
       ticketValidatedAt: serverTimestamp(),
       validatedBy: uid,
       auditLog: arrayUnion(auditEntry),

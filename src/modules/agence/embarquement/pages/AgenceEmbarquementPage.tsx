@@ -13,7 +13,6 @@ import {
   Timestamp,
   writeBatch,
   updateDoc,
-  arrayUnion,
   limit as fsLimit,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
@@ -40,7 +39,6 @@ import {
 } from "@/modules/agence/aggregates/agencyLiveState";
 import { getAffectationForBoarding } from "@/modules/compagnie/fleet/affectationService";
 import { getEffectiveStatut, canEmbarkWithScan, RESERVATION_STATUT_QUERY_BOARDABLE } from "@/utils/reservationStatusUtils";
-import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
 import { ensureProgressArrival, markOriginDeparture, ensureAutoDepartIfNeeded, getTripProgress, ORIGIN_STOP_ORDER } from "@/modules/compagnie/tripInstances/tripProgressService";
 import {
   buildTripInstanceId,
@@ -123,6 +121,8 @@ type StatutEmbarquement = "embarqué" | "absent" | "en_attente";
 
 interface Reservation {
   id: string;
+  reservationDocId?: string;
+  firestoreId?: string;
   nomClient?: string;
   telephone?: string;
   depart?: string;
@@ -139,11 +139,24 @@ interface Reservation {
   checkInTime?: any;
   trajetId?: string;
   referenceCode?: string;
+  qrCode?: string;
+  publicToken?: string;
   controleurId?: string;
   arrival?: string;
   seatsGo?: number;
+  agencyId?: string;
+  companyId?: string;
+  compagnieId?: string;
   destinationStopOrder?: number | null;
 }
+
+type VehiclePrintInfo = {
+  plate: string;
+  driver: string;
+  driverPhone: string;
+  convoyeur: string;
+  convoyeurPhone: string;
+};
 
 /** Retourne le statut d'embarquement effectif (boardingStatus prioritaire, fallback statutEmbarquement). */
 function getEffectiveBoardingStatus(r: { boardingStatus?: string; statutEmbarquement?: string }): "boarded" | "no_show" | "pending" {
@@ -154,6 +167,30 @@ function getEffectiveBoardingStatus(r: { boardingStatus?: string; statutEmbarque
   if (s === "embarqué" || s === "embarque") return "boarded";
   if (s === "absent") return "no_show";
   return "pending";
+}
+
+function mapReservationDoc(docSnap: { id: string; data: () => Record<string, any> }): Reservation {
+  const data = docSnap.data();
+  return {
+    ...data,
+    id: String(data.id ?? docSnap.id),
+    reservationDocId: docSnap.id,
+    firestoreId: docSnap.id,
+  } as Reservation;
+}
+
+function getReservationDocId(r: Pick<Reservation, "id" | "reservationDocId" | "firestoreId">): string {
+  return r.reservationDocId || r.firestoreId || r.id;
+}
+
+function logEmbarkUpdateTarget(r: Reservation): void {
+  console.log("EMBARK_UPDATE_TARGET", {
+    displayedId: r.id,
+    reservationDocId: r.reservationDocId,
+    firestoreId: r.firestoreId,
+    qrCode: r.qrCode,
+    referenceCode: r.referenceCode,
+  });
 }
 
 /** Logs temporaires embarquement (dev uniquement) — retirer ou désactiver après diagnostic. */
@@ -302,6 +339,35 @@ function formatDisplayPhone(v?: string): string {
     return `${digits.slice(0, 2)} ${digits.slice(2, 4)} ${digits.slice(4, 6)} ${digits.slice(6, 8)}`;
   }
   return raw;
+}
+function formatDisplayPhoneOrEmpty(v?: string): string {
+  const raw = String(v ?? "").trim();
+  return raw ? formatDisplayPhone(raw) : "";
+}
+function formatPrintPersonName(v?: string): string {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  return s
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toLocaleUpperCase("fr-FR") + w.slice(1).toLocaleLowerCase("fr-FR"))
+    .join(" ");
+}
+function normalizeVehiclePlateInput(v: string): string {
+  return String(v ?? "")
+    .toLocaleUpperCase("fr-FR")
+    .replace(/[^A-Z0-9 -]/g, "")
+    .replace(/\s+/g, " ");
+}
+function normalizeCrewNameInput(v: string): string {
+  return String(v ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/[^\s]+/g, (word) => word.charAt(0).toLocaleUpperCase("fr-FR") + word.slice(1).toLocaleLowerCase("fr-FR"));
+}
+function joinPrintNamePhone(name?: string, phone?: string): string {
+  const displayName = formatPrintPersonName(name);
+  const displayPhone = formatDisplayPhoneOrEmpty(phone);
+  return [displayName, displayPhone].filter(Boolean).join(" — ");
 }
 
 /* ===================== Recherche robuste ===================== */
@@ -884,6 +950,78 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
     chef?: string;
     chefPhone?: string;
   }>({});
+  const [vehiclePrintDraft, setVehiclePrintDraft] = useState<VehiclePrintInfo>({
+    plate: "",
+    driver: "",
+    driverPhone: "",
+    convoyeur: "",
+    convoyeurPhone: "",
+  });
+  const [vehiclePrintDirty, setVehiclePrintDirty] = useState(false);
+  const [vehiclePrintSavedAt, setVehiclePrintSavedAt] = useState<number | null>(null);
+  const vehiclePrintContextKey = useMemo(
+    () =>
+      [
+        selectedDate,
+        selectedTrip?.id ?? "",
+        selectedTrip?.departure ?? "",
+        selectedTrip?.arrival ?? "",
+        selectedTrip?.heure ?? "",
+      ].join("|"),
+    [selectedDate, selectedTrip?.id, selectedTrip?.departure, selectedTrip?.arrival, selectedTrip?.heure]
+  );
+  const lastVehiclePrintContextRef = useRef("");
+
+  useEffect(() => {
+    const contextChanged = lastVehiclePrintContextRef.current !== vehiclePrintContextKey;
+    if (contextChanged) {
+      lastVehiclePrintContextRef.current = vehiclePrintContextKey;
+      setVehiclePrintDirty(false);
+      setVehiclePrintSavedAt(null);
+    }
+    if (contextChanged || !vehiclePrintDirty) {
+      setVehiclePrintDraft({
+        plate: normalizeVehiclePlateInput(assign.immat ?? "").trim(),
+        driver: normalizeCrewNameInput(assign.chauffeur ?? "").trim(),
+        driverPhone: String(assign.chauffeurPhone ?? "").trim(),
+        convoyeur: normalizeCrewNameInput(assign.chef ?? "").trim(),
+        convoyeurPhone: String(assign.chefPhone ?? "").trim(),
+      });
+    }
+  }, [
+    vehiclePrintContextKey,
+    vehiclePrintDirty,
+    assign.immat,
+    assign.chauffeur,
+    assign.chauffeurPhone,
+    assign.chef,
+    assign.chefPhone,
+  ]);
+
+  const updateVehiclePrintDraft = useCallback((field: keyof VehiclePrintInfo, value: string) => {
+    let next = value;
+    if (field === "plate") next = normalizeVehiclePlateInput(value);
+    if (field === "driver" || field === "convoyeur") next = normalizeCrewNameInput(value);
+    setVehiclePrintDirty(true);
+    setVehiclePrintSavedAt(null);
+    setVehiclePrintDraft((prev) => ({ ...prev, [field]: next }));
+  }, []);
+
+  const saveVehiclePrintInfo = useCallback(() => {
+    setVehiclePrintDirty(true);
+    setVehiclePrintDraft((prev) => ({
+      plate: normalizeVehiclePlateInput(prev.plate).trim(),
+      driver: normalizeCrewNameInput(prev.driver).trim(),
+      driverPhone: prev.driverPhone.trim(),
+      convoyeur: normalizeCrewNameInput(prev.convoyeur).trim(),
+      convoyeurPhone: prev.convoyeurPhone.trim(),
+    }));
+    setVehiclePrintSavedAt(Date.now());
+  }, []);
+
+  const printVehiclePlate = vehiclePrintDraft.plate.trim();
+  const printDriverLabel = joinPrintNamePhone(vehiclePrintDraft.driver, vehiclePrintDraft.driverPhone);
+  const printConvoyeurLabel = joinPrintNamePhone(vehiclePrintDraft.convoyeur, vehiclePrintDraft.convoyeurPhone);
 
   /* ---------- Charger les agences ---------- */
   useEffect(() => {
@@ -1225,7 +1363,7 @@ useEffect(() => {
 
     const commit = () => {
       const dedup = new Map<string, Reservation>();
-      for (const r of bag.values()) dedup.set(r.id, r);
+      for (const r of bag.values()) dedup.set(getReservationDocId(r), r);
       const list = Array.from(dedup.values()).sort((a, b) => {
         const aRep = !!(a.canal === "report" || (a as any).sourceReservationId);
         const bRep = !!(b.canal === "report" || (b as any).sourceReservationId);
@@ -1246,7 +1384,7 @@ useEffect(() => {
       fsLimit(200)
     );
     unsubs.push(onSnapshot(qAll, (snap) => {
-      snap.docs.forEach((d) => bag.set(d.id, { id: d.id, ...(d.data() as any) }));
+      snap.docs.forEach((d) => bag.set(d.id, mapReservationDoc(d)));
       commit();
     }, () => setIsLoading(false)));
 
@@ -1260,7 +1398,7 @@ useEffect(() => {
       fsLimit(200)
       );
       unsubs.push(onSnapshot(qById, (snap) => {
-        snap.docs.forEach((d) => bag.set(d.id, { id: d.id, ...(d.data() as any) }));
+        snap.docs.forEach((d) => bag.set(d.id, mapReservationDoc(d)));
         commit();
       }, () => setIsLoading(false)));
     }
@@ -1297,13 +1435,12 @@ useEffect(() => {
       const applyLocalBoardingStatus = () => {
         setReservations((prev) =>
           prev.map((r) =>
-            r.id === reservationId
+            getReservationDocId(r) === reservationId
               ? {
                   ...r,
                   boardingStatus: nextBoardingStatus,
                   statutEmbarquement: nextStatutEmbarquement,
                   checkInTime: statut === "embarqué" ? new Date() : null,
-                  ...(statut === "embarqué" ? { statut: "embarque" } : {}),
                 }
               : r
           )
@@ -1624,16 +1761,8 @@ useEffect(() => {
             controleurId: uid,
             checkInTime: statut === "embarqué" ? serverTimestamp() : null,
           };
-          if (statut === "embarqué") {
-            (patch as any).journeyStatus = "in_transit";
-            (patch as any).statut = "embarque";
-            (patch as any).auditLog = arrayUnion(
-              buildStatutTransitionPayload(String(data.statut ?? ""), "embarque", {
-                userId: uid,
-                userRole: (user as { role?: string })?.role ?? "controleur_embarquement",
-              })
-            );
-          }
+          console.log("EMBARK_PERMISSION_DEBUG_KEYS", Object.keys(patch));
+          console.log("EMBARK_PERMISSION_DEBUG_PAYLOAD", patch);
           tx.update(resRef, patch);
 
           const logsRef = collection(
@@ -1690,23 +1819,15 @@ useEffect(() => {
         if (permissionDenied) {
           try {
             // Fallback prod: write only fields accepted by strict boarding rules.
-            const current = await getDoc(resRef);
-            const currentStatut = current.exists() ? String((current.data() as Record<string, unknown>).statut ?? "") : "";
-            const nextStatut = statut === "embarqué" ? "embarque" : currentStatut;
-            await updateDoc(resRef, {
+            const fallbackPayload = {
               boardingStatus: nextBoardingStatus,
               statutEmbarquement: nextStatutEmbarquement,
-              ...(statut === "embarqué" ? { statut: nextStatut } : {}),
               controleurId: uid,
               checkInTime: statut === "embarqué" ? serverTimestamp() : null,
-              auditLog: arrayUnion(
-                buildStatutTransitionPayload(currentStatut, nextStatut || currentStatut, {
-                  userId: uid,
-                  userRole: (user as { role?: string })?.role ?? "controleur_embarquement",
-                })
-              ),
-              updatedAt: serverTimestamp(),
-            } as Record<string, unknown>);
+            } as Record<string, unknown>;
+            console.log("EMBARK_PERMISSION_DEBUG_KEYS", Object.keys(fallbackPayload));
+            console.log("EMBARK_PERMISSION_DEBUG_PAYLOAD", fallbackPayload);
+            await updateDoc(resRef, fallbackPayload);
             if (statut === "embarqué") {
               embarkDiag("embarqué:fallback-permissions", {
                 reservationId,
@@ -1876,9 +1997,8 @@ useEffect(() => {
       batch.update(resRef, {
         boardingStatus: "no_show",
         statutEmbarquement: "absent",
-        noShowAt: serverTimestamp(),
-        noShowBy: uid,
-        reprogrammedOnce: true,
+        controleurId: uid,
+        checkInTime: null,
       });
 
       const newRef = doc(collection(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations`));
@@ -2117,12 +2237,13 @@ useEffect(() => {
         for (const r of reservations) {
           const embarked = getEffectiveBoardingStatus(r) === "boarded";
           if (!embarked) {
-            const resRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations/${r.id}`);
+            const reservationDocId = getReservationDocId(r);
+            const resRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations/${reservationDocId}`);
             tx.update(resRef, {
               boardingStatus: "no_show",
               statutEmbarquement: "absent",
-              noShowAt: serverTimestamp(),
-              noShowBy: uid,
+              controleurId: uid,
+              checkInTime: null,
             });
           }
         }
@@ -2214,11 +2335,12 @@ useEffect(() => {
         if (embarked) continue;
 
         if ((r as any).reprogrammedOnce === true) continue;
+        const reservationDocId = getReservationDocId(r);
 
         const exists = await getDocs(
           query(
             collection(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations`),
-            where("sourceReservationId", "==", r.id),
+            where("sourceReservationId", "==", reservationDocId),
             fsLimit(1)
           )
         );
@@ -2248,17 +2370,22 @@ useEffect(() => {
             statut: "confirme",
             boardingStatus: "pending",
             statutEmbarquement: "en_attente",
-            sourceReservationId: r.id,
+            sourceReservationId: reservationDocId,
             createdBy: uid,
             createdAt: serverTimestamp(),
           });
 
-          const srcRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations/${r.id}`);
-          batch.update(srcRef, { reprogrammedOnce: true });
+          const srcRef = doc(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations/${reservationDocId}`);
+          batch.update(srcRef, {
+            boardingStatus: "no_show",
+            statutEmbarquement: "absent",
+            controleurId: uid,
+            checkInTime: null,
+          });
 
           const logRef = doc(collection(db, `companies/${companyId}/agences/${selectedAgencyId}/boardingLogs`));
           batch.set(logRef, {
-            reservationId: r.id,
+            reservationId: reservationDocId,
             trajetId: r.trajetId || selectedTrip.id || null,
             departure: r.depart,
             arrival: r.arrivee || r.arrival,
@@ -2271,7 +2398,7 @@ useEffect(() => {
             scannedAt: serverTimestamp(),
           });
         } catch (err) {
-          console.warn("Pas de prochain départ pour", r.id, err);
+          console.warn("Pas de prochain départ pour", reservationDocId, err);
         }
       }
 
@@ -2342,9 +2469,11 @@ useEffect(() => {
       if (!selectedAgencyId) return null;
       const c = (code || "").trim();
       const r = reservations.find(
-        (res) => (res.referenceCode || res.id || "").trim() === c
+        (res) =>
+          [res.referenceCode, res.qrCode, res.publicToken, res.id, res.reservationDocId, res.firestoreId]
+            .some((value) => String(value ?? "").trim() === c)
       );
-      return r ? { resId: r.id, agencyId: selectedAgencyId } : null;
+      return r ? { resId: getReservationDocId(r), agencyId: selectedAgencyId } : null;
     },
     [reservations, selectedAgencyId]
   );
@@ -2370,7 +2499,7 @@ useEffect(() => {
 
   /** Mise à jour toujours ciblée par `reservationId` ; ici on évite un aller serveur si la liste locale est déjà à jour. */
   const blockIfAlreadyBoardedLocal = useCallback((resId: string, onBlock: (msg: string) => void) => {
-    const row = reservationsRef.current.find((r) => r.id === resId);
+    const row = reservationsRef.current.find((r) => getReservationDocId(r) === resId);
     if (row && getEffectiveBoardingStatus(row) === "boarded") {
       onBlock("Billet déjà embarqué.");
       return true;
@@ -2840,7 +2969,8 @@ useEffect(() => {
     const toEmbark = reservations.filter((r) => getEffectiveBoardingStatus(r) === "pending");
     if (toEmbark.length === 0) return;
     for (const r of toEmbark) {
-      await updateStatut(r.id, "embarqué", undefined, { suppressAlert: true });
+      logEmbarkUpdateTarget(r);
+      await updateStatut(getReservationDocId(r), "embarqué", undefined, { suppressAlert: true });
     }
     showFastBoardSuccess(false, {
       nomClient: `${toEmbark.length} réservation(s)`,
@@ -2899,6 +3029,8 @@ useEffect(() => {
       ).trim(),
     [company]
   );
+  const printEditionDate = useMemo(() => format(new Date(), "dd/MM/yyyy"), []);
+  const printEditionTime = useMemo(() => format(new Date(), "HH:mm"), []);
   const printAgencyName = useMemo(
     () => {
       const name =
@@ -3181,25 +3313,32 @@ useEffect(() => {
         }
         .print-doc__header{
           border:1px solid #000;
-          padding:10px 12px;
+          padding:14px 16px 12px;
           margin-bottom:8px;
+        }
+        .print-doc__top{
+          display:flex;
+          align-items:flex-start;
+          justify-content:space-between;
+          gap:16px;
+          min-height:58px;
         }
         .print-doc__brand{
           display:flex;
           align-items:center;
-          justify-content:center;
-          gap:10px;
-          margin-bottom:8px;
+          justify-content:flex-start;
+          gap:12px;
+          min-width:260px;
         }
         .print-doc__logo{
-          width:52px;
-          height:52px;
+          width:56px;
+          height:56px;
           object-fit:cover;
           border-radius:50%;
         }
         .print-doc__logo-fallback{
-          width:52px;
-          height:52px;
+          width:56px;
+          height:56px;
           border:1px solid #000;
           border-radius:50%;
           display:flex;
@@ -3208,17 +3347,34 @@ useEffect(() => {
           font-size:9px;
           letter-spacing:0.08em;
         }
-        .print-doc__title{
-          font-size:34px;
+        .print-doc__company{
+          font-size:13px;
           font-weight:800;
+          line-height:1.1;
+          text-align:left;
+          text-transform:uppercase;
+        }
+        .print-doc__edition{
+          min-width:150px;
+          text-align:right;
+          font-size:8px;
+          line-height:1.45;
+        }
+        .print-doc__edition-row{
+          display:flex;
+          justify-content:flex-end;
+          gap:6px;
+        }
+        .print-doc__edition-k{
+          font-weight:700;
+        }
+        .print-doc__title{
+          margin:12px 0 14px;
+          font-size:19px;
+          font-weight:900;
           line-height:1.05;
           text-align:center;
-        }
-        .print-doc__company{
-          font-size:24px;
-          font-weight:700;
-          line-height:1.1;
-          text-align:center;
+          text-transform:uppercase;
         }
         .print-doc__meta{
           display:grid;
@@ -3236,6 +3392,9 @@ useEffect(() => {
         }
         .print-doc__meta .print-doc__span2{
           grid-column:span 3;
+        }
+        .print-doc__meta .print-doc__empty{
+          visibility:hidden;
         }
         .print-doc__summary{
           display:grid;
@@ -3424,11 +3583,80 @@ useEffect(() => {
           </div>
         )}
 
-        <div className="no-print rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-1.5 bg-gray-50 dark:bg-slate-800">
-          <div className="text-[11px] text-gray-600 dark:text-gray-300">
-            {assign.immat || assign.chauffeur || assign.chef
-              ? `Véhicule ${assign.immat || "—"} · Chauffeur ${formatDisplayName(assign.chauffeur)} · Convoyeur ${formatDisplayName(assign.chef)}`
-              : "Informations véhicule non définies"}
+        <div className="no-print rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-2 bg-gray-50 dark:bg-slate-800">
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-[11px] font-semibold text-gray-700 dark:text-gray-200">
+                Informations véhicule avant impression
+              </div>
+              {vehiclePrintSavedAt && (
+                <div className="text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+                  Infos enregistrées pour l'impression
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+              <label className="min-w-0">
+                <span className="sr-only">Véhicule / Plaque</span>
+                <input
+                  type="text"
+                  value={vehiclePrintDraft.plate}
+                  onChange={(e) => updateVehiclePrintDraft("plate", e.target.value)}
+                  placeholder="Ex : AA 223 BC"
+                  className="w-full px-2 py-1.5 rounded-md border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-gray-900 dark:text-white uppercase"
+                />
+              </label>
+              <label className="min-w-0">
+                <span className="sr-only">Chauffeur</span>
+                <input
+                  type="text"
+                  value={vehiclePrintDraft.driver}
+                  onChange={(e) => updateVehiclePrintDraft("driver", e.target.value)}
+                  placeholder="Nom complet du chauffeur"
+                  className="w-full px-2 py-1.5 rounded-md border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-gray-900 dark:text-white"
+                />
+              </label>
+              <label className="min-w-0">
+                <span className="sr-only">Téléphone chauffeur</span>
+                <input
+                  type="tel"
+                  value={vehiclePrintDraft.driverPhone}
+                  onChange={(e) => updateVehiclePrintDraft("driverPhone", e.target.value)}
+                  placeholder="Téléphone chauffeur"
+                  className="w-full px-2 py-1.5 rounded-md border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-gray-900 dark:text-white"
+                />
+              </label>
+              <label className="min-w-0">
+                <span className="sr-only">Convoyeur</span>
+                <input
+                  type="text"
+                  value={vehiclePrintDraft.convoyeur}
+                  onChange={(e) => updateVehiclePrintDraft("convoyeur", e.target.value)}
+                  placeholder="Nom complet du convoyeur"
+                  className="w-full px-2 py-1.5 rounded-md border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-gray-900 dark:text-white"
+                />
+              </label>
+              <label className="min-w-0">
+                <span className="sr-only">Téléphone convoyeur</span>
+                <input
+                  type="tel"
+                  value={vehiclePrintDraft.convoyeurPhone}
+                  onChange={(e) => updateVehiclePrintDraft("convoyeurPhone", e.target.value)}
+                  placeholder="Téléphone convoyeur"
+                  className="w-full px-2 py-1.5 rounded-md border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-gray-900 dark:text-white"
+                />
+              </label>
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={saveVehiclePrintInfo}
+                className="px-3 py-1.5 rounded-md text-xs font-semibold text-white"
+                style={{ background: primary }}
+              >
+                Enregistrer infos véhicule
+              </button>
+            </div>
           </div>
           {assignmentStatusBadge === "validated" && (
             <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-semibold">
@@ -3523,7 +3751,10 @@ useEffect(() => {
               </button>
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={() => {
+                  saveVehiclePrintInfo();
+                  window.print();
+                }}
                 className="shrink-0 px-3 py-2 rounded-lg text-sm border border-gray-300 dark:border-slate-600 min-h-[40px] whitespace-nowrap"
                 title="Imprimer la liste officielle"
               >
@@ -3581,7 +3812,7 @@ useEffect(() => {
                       const seats = r.seatsGo ?? 1;
                       return (
                         <tr
-                          key={r.id}
+                          key={getReservationDocId(r)}
                           className={`border-t border-gray-200 dark:border-slate-600 ${embarked ? "embarked bg-gray-50 dark:bg-slate-700 text-slate-700 dark:text-white" : `bg-white ${idx % 2 === 0 ? "dark:bg-slate-900" : "dark:bg-slate-800"} text-gray-900 dark:text-white`}`}
                         >
                           <td className={embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}>{idx + 1}</td>
@@ -3594,7 +3825,10 @@ useEffect(() => {
                             <button
                               className="case"
                               data-checked={embarked}
-                              onClick={() => updateStatut(r.id, embarked ? "en_attente" : "embarqué")}
+                              onClick={() => {
+                                logEmbarkUpdateTarget(r);
+                                updateStatut(getReservationDocId(r), embarked ? "en_attente" : "embarqué");
+                              }}
                               title="Basculer Embarqué"
                               disabled={!canEditBoardingPassengers}
                             />
@@ -3603,7 +3837,10 @@ useEffect(() => {
                             <button
                               className="case"
                               data-checked={absent}
-                              onClick={() => updateStatut(r.id, absent ? "en_attente" : "absent")}
+                              onClick={() => {
+                                logEmbarkUpdateTarget(r);
+                                updateStatut(getReservationDocId(r), absent ? "en_attente" : "absent");
+                              }}
                               title="Basculer Absent"
                               disabled={!canEditBoardingPassengers}
                             />
@@ -3663,38 +3900,50 @@ useEffect(() => {
         {/* Document officiel : uniquement visible à l’impression (hors flux mobile) */}
         <div id="print-area" className="boarding-official-print hidden print:block print-doc">
           <div className="print-doc__header">
-            <div className="print-doc__brand">
-              {printCompanyLogo ? (
-                <img src={printCompanyLogo} alt="" className="print-doc__logo" />
-              ) : (
-                <div className="print-doc__logo-fallback" aria-hidden>
-                  LOGO
-                </div>
-              )}
-              <div>
-                <div className="print-doc__title">LISTE D&apos;EMBARQUEMENT</div>
+            <div className="print-doc__top">
+              <div className="print-doc__brand">
+                {printCompanyLogo ? (
+                  <img src={printCompanyLogo} alt="" className="print-doc__logo" />
+                ) : (
+                  <div className="print-doc__logo-fallback" aria-hidden>
+                    LOGO
+                  </div>
+                )}
                 <div className="print-doc__company">{printCompanyName}</div>
               </div>
+              <div className="print-doc__edition" aria-label="Date et heure d'édition">
+                <div className="print-doc__edition-row">
+                  <span className="print-doc__edition-k">Date :</span>
+                  <span>{printEditionDate}</span>
+                </div>
+                <div className="print-doc__edition-row">
+                  <span className="print-doc__edition-k">Heure :</span>
+                  <span>{printEditionTime}</span>
+                </div>
+              </div>
             </div>
+            <div className="print-doc__title">LISTE D&apos;EMBARQUEMENT</div>
             <div className="print-doc__meta">
               <span className="print-doc__k">Agence :</span>
               <span className="print-doc__v">{printAgencyName}</span>
+              <span className="print-doc__k">Véhicule :</span>
+              <span className="print-doc__v">{printVehiclePlate}</span>
               <span className="print-doc__k">Téléphone :</span>
-              <span className="print-doc__v">{printAgencyPhone || "—"}</span>
+              <span className="print-doc__v">{printAgencyPhone || ""}</span>
+              <span className="print-doc__k">Chauffeur :</span>
+              <span className="print-doc__v">{printDriverLabel}</span>
               <span className="print-doc__k">Trajet :</span>
-              <span className="print-doc__v print-doc__span2">
+              <span className="print-doc__v">
                 {selectedTrip
                   ? `${selectedTrip.departure} → ${selectedTrip.arrival}${selectedTrip.heure ? ` — départ ${selectedTrip.heure}` : ""}`
                   : "—"}
               </span>
+              <span className="print-doc__k">Convoyeur :</span>
+              <span className="print-doc__v">{printConvoyeurLabel}</span>
               <span className="print-doc__k">Date :</span>
               <span className="print-doc__v">{humanDate}</span>
-              <span className="print-doc__k">Véhicule :</span>
-              <span className="print-doc__v">{assign.immat || ""}</span>
-              <span className="print-doc__k">Chauffeur :</span>
-              <span className="print-doc__v">{assign.chauffeur || ""}</span>
-              <span className="print-doc__k">Convoyeur :</span>
-              <span className="print-doc__v">{assign.chef || ""}</span>
+              <span className="print-doc__k print-doc__empty" aria-hidden="true">&nbsp;</span>
+              <span className="print-doc__v print-doc__empty" aria-hidden="true">&nbsp;</span>
             </div>
           </div>
 
@@ -3730,7 +3979,7 @@ useEffect(() => {
                   const absent = eff === "no_show";
                   const seats = r.seatsGo ?? 1;
                   return (
-                    <tr key={r.id}>
+                    <tr key={getReservationDocId(r)}>
                       <td>{idx + 1}</td>
                       <td>{formatDisplayName(r.nomClient)}</td>
                       <td>{formatDisplayPhone(r.telephone)}</td>

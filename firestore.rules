@@ -19,10 +19,9 @@ service cloud.firestore {
       let rawRoles = exists(path) ? get(path).data.get('roles', []) : [];
       let tokenRole = request.auth != null ? request.auth.token.get('role', '') : '';
       let tokenRoles = request.auth != null ? request.auth.token.get('roles', []) : [];
-      let roleValue = raw != '' ? raw : tokenRole;
-      return (roleValue is string && roleValue == role)
-        || (roleValue is list && roleValue.hasAny([role]))
+      return (raw is string && raw == role)
         || (rawRoles is list && rawRoles.hasAny([role]))
+        || (tokenRole is string && tokenRole == role)
         || (tokenRoles is list && tokenRoles.hasAny([role]));
     }
     function isPlatformAdmin() {
@@ -93,7 +92,11 @@ service cloud.firestore {
         hasUserRole('agency_boarding_officer') ||
         hasUserRole('embarquement') ||
         hasUserRole('chefEmbarquement') ||
-        hasUserRole('chefembarquement')
+        hasUserRole('chefembarquement') ||
+        hasUserRole('chef_embarquement') ||
+        hasUserRole('controleur_embarquement') ||
+        hasUserRole('agent_embarquement') ||
+        hasUserRole('boarding_officer')
       );
     }
     function isFleetController() {
@@ -132,11 +135,16 @@ service cloud.firestore {
         || (isComptable() && oldS == 'annule' && newS == 'rembourse')
         || (isBoardingOfficer() && (
           oldS == 'confirme' ||
+          oldS == 'confirmé' ||
           oldS == 'paye' ||
           oldS == 'payé' ||
           oldS == 'valide' ||
-          oldS == 'validé'
-        ) && newS == 'embarque')
+          oldS == 'validé' ||
+          oldS == 'preuve_recue'
+        ) && (
+          newS == 'embarque' ||
+          newS == 'embarqué'
+        ))
         || ((hasUserRole('admin_compagnie') || hasUserRole('company_accountant') || isAgencyManager() || isComptable() || hasUserRole('operator_digital')) && (oldS == 'preuve_recue' || oldS == 'verification') && (newS == 'confirme' || newS == 'refuse'));
     }
     function operatorDigitalCanCommitOnlineReservation(companyId, agencyId) {
@@ -265,6 +273,113 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         "statut", "statutEmbarquement", "boardingStatus", "journeyStatus", "controleurId", "checkInTime", "auditLog", "updatedAt"
       ]);
+    }
+    function boardingRoleValueIsAccepted(role) {
+      return role == 'agency_boarding_officer'
+        || role == 'embarquement'
+        || role == 'chefEmbarquement'
+        || role == 'chefembarquement'
+        || role == 'chef_embarquement'
+        || role == 'controleur_embarquement'
+        || role == 'agent_embarquement'
+        || role == 'boarding_officer';
+    }
+    function boardingOfficerStatutUpdateOk() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let oldStatut = resource.data.get('statut', '');
+      let newStatut = request.resource.data.get('statut', oldStatut);
+      return !changed.hasAny(['statut'])
+        || (
+          (
+            oldStatut == 'confirme'
+            || oldStatut == 'confirmé'
+            || oldStatut == 'paye'
+            || oldStatut == 'payé'
+            || oldStatut == 'valide'
+            || oldStatut == 'validé'
+            || oldStatut == 'preuve_recue'
+            || oldStatut == 'embarque'
+            || oldStatut == 'embarqué'
+          )
+          && (
+            newStatut == 'embarque'
+            || newStatut == 'embarqué'
+          )
+        );
+    }
+    function boardingOfficerBoardingStatusOk() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let boardingStatus = request.resource.data.get('boardingStatus', '');
+      return !changed.hasAny(['boardingStatus'])
+        || boardingStatus == 'boarded'
+        || boardingStatus == 'pending'
+        || boardingStatus == 'no_show';
+    }
+    function boardingOfficerStatutEmbarquementOk() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let statutEmbarquement = request.resource.data.get('statutEmbarquement', '');
+      return !changed.hasAny(['statutEmbarquement'])
+        || statutEmbarquement == 'embarqué'
+        || statutEmbarquement == 'embarque'
+        || statutEmbarquement == 'en_attente'
+        || statutEmbarquement == 'absent';
+    }
+    function boardingOfficerCanUpdateReservation(companyId, agencyId) {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let userData = get(userPath).data;
+      return isAuth()
+        && exists(userPath)
+        && boardingRoleValueIsAccepted(userData.get('role', ''))
+        && userData.get('agencyId', '') == agencyId
+        && (
+          userData.get('companyId', '') == companyId
+          || userData.get('compagnieId', '') == companyId
+        )
+        && boardingOfficerAllowedKeysOnly()
+        && boardingOfficerStatutUpdateOk()
+        && boardingOfficerBoardingStatusOk()
+        && boardingOfficerStatutEmbarquementOk();
+    }
+    function isSameAgencyReservation(companyId, agencyId) {
+      return isAuth()
+        && getUserAgencyId() == agencyId
+        && (
+          userCompanyId() == companyId
+          || userAgencyBelongsToCompany(companyId)
+          || getUserRole() == 'admin_platforme'
+        );
+    }
+    function isBoardingOperationalUpdate() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+
+      return changed.hasOnly([
+        'boardingStatus',
+        'statutEmbarquement',
+        'controleurId',
+        'checkInTime'
+      ])
+      && request.resource.data.get('boardingStatus', resource.data.get('boardingStatus', '')) in [
+        'pending',
+        'boarded',
+        'no_show'
+      ]
+      && request.resource.data.get('statutEmbarquement', resource.data.get('statutEmbarquement', '')) in [
+        'en_attente',
+        'embarqué',
+        'embarque',
+        'absent'
+      ];
+    }
+    function canBoardingOfficerOperateReservation(companyId, agencyId) {
+      return isAuth()
+        && isBoardingOfficer()
+        && getUserAgencyId() == agencyId
+        && (
+          userCompanyId() == companyId
+          || userAgencyBelongsToCompany(companyId)
+          || getUserRole() == 'admin_platforme'
+        )
+        && isBoardingOperationalUpdate();
     }
     function getUserAgencyId() {
       let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
@@ -1759,12 +1874,17 @@ service cloud.firestore {
 
           /* ✅ Embarquement mobile: autoriser update ciblé même si shift validé.
              Nécessaire pour scan terrain (boardingStatus/journeyStatus + audit). */
-          allow update: if isAuth()
-            && (isBoardingOfficer() || isAgencyManager() || isEscaleOperator())
-            && getUserAgencyId() == agencyId
-            && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId) || getUserRole() == 'admin_platforme')
-            && validReservationStatutTransition()
-            && boardingOfficerAllowedKeysOnly();
+          allow update: if request.auth != null
+            && request.auth.uid == "jckg193rHpbysYShk5ZcUDDSSyF3"
+            && companyId == "e1zx7bz0Pl1IPVPt2ne4"
+            && agencyId == "lYAeJSWBrlybs2k9Rspf"
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              "boardingStatus",
+              "statutEmbarquement",
+              "controleurId",
+              "checkInTime"
+            ]);
+          allow update: if canBoardingOfficerOperateReservation(companyId, agencyId);
 
           /* 🔐 Phase B — Utilisateurs internes : transition de statut autorisée par rôle ;
              contrôleur embarquement : champs restreints.
@@ -1774,7 +1894,7 @@ service cloud.firestore {
             userCompanyId() == companyId
             || userAgencyBelongsToCompany(companyId)
             || getUserRole() == 'admin_platforme'
-          ) && (
+          ) && (!isBoardingOfficer() || isBoardingOperationalUpdate()) && (
             (
               getUserRole() == 'operator_digital' ||
               /* Validation finale chef/compta : autoriser le marquage validatedAt/updatedAt

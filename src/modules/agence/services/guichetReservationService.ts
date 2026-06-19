@@ -77,6 +77,8 @@ export type CreateGuichetReservationParams = {
   companySlug: string;
   compagnieNom: string;
   agencyNom: string;
+  agencyName?: string;
+  nomAgence?: string;
   agencyTelephone?: string | null;
   referenceCode: string;
   tripType: string;
@@ -605,8 +607,14 @@ export async function createGuichetReservation(
 
   const phoneOriginal = params.telephoneOriginal ?? params.telephone;
   const phoneNormalized = normalizePhone(phoneOriginal || params.telephone || '');
+  const agencyDisplayName =
+    String(params.agencyNom ?? '').trim() ||
+    String(params.agencyName ?? '').trim() ||
+    String(params.nomAgence ?? '').trim();
   
   const payload: Record<string, unknown> = {
+    // tripInstanceId = instance datee du depart (weeklyTripId_YYYY-MM-DD_HH-mm).
+    // trajetId peut rester legacy selon le flux; l'embarquement privilegie tripInstanceId.
     trajetId: params.trajetId,
     date: params.date,
     heure: params.heure,
@@ -625,19 +633,23 @@ export async function createGuichetReservation(
     seatsGo: params.seatsGo,
     seatsReturn: params.seatsReturn,
     montant: params.montant,
+    status: 'paye',
     statut: 'paye',
-    statutEmbarquement: 'en_attente',
     boardingStatus: 'pending',
+    statutEmbarquement: 'en_attente',
     dropoffStatus: 'pending',
     journeyStatus: 'booked',
     checkInTime: null,
+    controleurId: null,
     reportInfo: null,
     compagnieId: params.companyId,
     companyId: params.companyId,
     agencyId: params.agencyId,
     companySlug: params.companySlug,
     compagnieNom: params.compagnieNom,
-    agencyNom: params.agencyNom,
+    agencyName: agencyDisplayName,
+    agencyNom: agencyDisplayName,
+    nomAgence: agencyDisplayName,
     agencyTelephone: params.agencyTelephone ?? null,
     canal: 'guichet',
     paymentChannel: 'guichet',

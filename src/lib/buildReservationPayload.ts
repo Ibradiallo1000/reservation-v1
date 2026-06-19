@@ -50,11 +50,15 @@ export interface ReservationPayload {
   time: string;
 
   montant: number;
-  statut: "paye";
-  status: "pay\u00e9";
+  statut: "paye" | "en_attente";
+  status: "paye" | "en_attente";
+  boardingStatus: "pending";
+  statutEmbarquement: "en_attente";
+  checkInTime: null;
+  controleurId: null;
   canal: ReservationWriteChannel;
   paymentChannel: ReservationWriteChannel;
-  paymentStatus: "paid";
+  paymentStatus: "paid" | "pending";
   paymentMethod: string;
   paiement: string;
   preuveVia: string | null;
@@ -81,13 +85,13 @@ export interface ReservationPayload {
   };
   payment: {
     amount: number;
-    status: "paid";
+    status: "paid" | "pending";
     method: string;
     wallet: string | null;
   };
   reservation: {
     channel: ReservationWriteChannel;
-    status: "confirmed";
+    status: "paye" | "en_attente";
   };
 }
 
@@ -116,6 +120,9 @@ export function buildReservationPayload(input: BuildReservationPayloadInput): Re
   const amount = cleanAmount(input.amount);
   const paymentMethod = cleanString(input.paymentMethod);
   const wallet = input.walletProvider ? cleanString(input.walletProvider) || null : null;
+  const isOnline = input.channel === "en_ligne";
+  const commercialStatus = isOnline ? "en_attente" : "paye";
+  const paymentStatus = isOnline ? "pending" : "paid";
 
   return {
     // Legacy company fields.
@@ -148,11 +155,15 @@ export function buildReservationPayload(input: BuildReservationPayloadInput): Re
 
     // Legacy payment/reservation fields.
     montant: amount,
-    statut: "paye",
-    status: "pay\u00e9",
+    statut: commercialStatus,
+    status: commercialStatus,
+    boardingStatus: "pending",
+    statutEmbarquement: "en_attente",
+    checkInTime: null,
+    controleurId: null,
     canal: input.channel,
     paymentChannel: input.channel,
-    paymentStatus: "paid",
+    paymentStatus,
     paymentMethod,
     paiement: paymentMethod,
     preuveVia: wallet,
@@ -179,13 +190,13 @@ export function buildReservationPayload(input: BuildReservationPayloadInput): Re
     },
     payment: {
       amount,
-      status: "paid",
+      status: paymentStatus,
       method: paymentMethod,
       wallet,
     },
     reservation: {
       channel: input.channel,
-      status: "confirmed",
+      status: commercialStatus,
     },
   };
 }

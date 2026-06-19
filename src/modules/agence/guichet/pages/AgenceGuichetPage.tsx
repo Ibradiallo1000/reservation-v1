@@ -948,6 +948,8 @@ const AgenceGuichetPage: React.FC = () => {
     }
 
     const timeNormSale = normalizeTripInstanceTime(selectedTrip.time);
+    // tripInstanceId = instance datee du depart (weeklyTripId_YYYY-MM-DD_HH-mm).
+    // trajetId reste legacy selon le flux; l'embarquement privilegie tripInstanceId.
     const trajetIdForSale = selectedTrip.weeklyTripId ?? selectedTrip.id;
     const prospectiveTiId =
       selectedTrip.weeklyTripId != null && String(selectedTrip.weeklyTripId).trim() !== ""
