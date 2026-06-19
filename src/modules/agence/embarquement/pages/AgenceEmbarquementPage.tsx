@@ -183,24 +183,8 @@ function getReservationDocId(r: Pick<Reservation, "id" | "reservationDocId" | "f
   return r.reservationDocId || r.firestoreId || r.id;
 }
 
-function logEmbarkUpdateTarget(r: Reservation): void {
-  console.log("EMBARK_UPDATE_TARGET", {
-    displayedId: r.id,
-    reservationDocId: r.reservationDocId,
-    firestoreId: r.firestoreId,
-    qrCode: r.qrCode,
-    referenceCode: r.referenceCode,
-  });
-}
-
-/** Logs temporaires embarquement (dev uniquement) — retirer ou désactiver après diagnostic. */
-const EMBARK_DIAG_ENABLED = import.meta.env.DEV;
-function embarkDiag(event: string, data: Record<string, unknown>) {
-  if (!EMBARK_DIAG_ENABLED) return;
-  console.info(`[EMBARK_DIAG] ${event}`, { ...data, ts: Date.now() });
-}
 function qrDiag(event: "QR_DECODE_RESULT" | "QR_CODE_VALUE" | "RESERVATION_MATCH_FOUND" | "BOARDING_UPDATE_SUCCESS" | "BOARDING_UPDATE_ERROR", data: Record<string, unknown>) {
-  if (!EMBARK_DIAG_ENABLED) return;
+  if (!import.meta.env.DEV) return;
   console.info(`[${event}]`, { ...data, ts: Date.now() });
 }
 
@@ -631,8 +615,6 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   const offlineHydratedKeyRef = useRef<string>("");
   /** Un seul flux d’embarquement actif par réservation (évite double traitement scan / rappels). */
   const embarkInflightIdsRef = useRef<Set<string>>(new Set());
-  /** Compteurs diagnostic (dev) : demandes vs transactions réussies. */
-  const embarkDiagCountRef = useRef({ requested: 0, txOk: 0 });
   /** Incrémenté au cleanup du scanner : annule les callbacks async d’une session précédente (Strict Mode / remount). */
   const scanDecoderGenerationRef = useRef(0);
   /** Évite deux syncs parallèles de la file hors-ligne (double effet ou deps qui bougent). */
@@ -1351,16 +1333,6 @@ useEffect(() => {
     const unsubs: Array<() => void> = [];
     const bag = new Map<string, Reservation>();
 
-    // Diagnostic ciblé (dev) : pourquoi la liste peut être vide (mismatch date/heure/trajetId ou statuts filtrés).
-    embarkDiag("reservations-query-start", {
-      selectedDate,
-      selectedHour: selectedTrip.heure,
-      selectedDep: selectedTrip.departure,
-      selectedArr: selectedTrip.arrival,
-      selectedTripId: selectedTrip.id ?? null,
-    });
-
-
     const commit = () => {
       const dedup = new Map<string, Reservation>();
       for (const r of bag.values()) dedup.set(getReservationDocId(r), r);
@@ -1464,7 +1436,6 @@ useEffect(() => {
         if (embarkPrecheckSnap.exists()) {
           const preRow = embarkPrecheckSnap.data() as { boardingStatus?: string; statutEmbarquement?: string };
           if (getEffectiveBoardingStatus(preRow) === "boarded") {
-            embarkDiag("embarqué:ignoré-déjà-embarqué", { reservationId });
             throw new Error("Déjà embarqué");
           }
         }
@@ -1553,13 +1524,7 @@ useEffect(() => {
 
       let embarkInflightHeld = false;
       if (statut === "embarqué") {
-        embarkDiagCountRef.current.requested += 1;
-        embarkDiag("embarqué:demandé", {
-          reservationId,
-          demandes: embarkDiagCountRef.current.requested,
-        });
         if (embarkInflightIdsRef.current.has(reservationId)) {
-          embarkDiag("embarqué:ignoré-doublon-concurrent", { reservationId });
           return;
         }
         embarkInflightIdsRef.current.add(reservationId);
@@ -1761,8 +1726,6 @@ useEffect(() => {
             controleurId: uid,
             checkInTime: statut === "embarqué" ? serverTimestamp() : null,
           };
-          console.log("EMBARK_PERMISSION_DEBUG_KEYS", Object.keys(patch));
-          console.log("EMBARK_PERMISSION_DEBUG_PAYLOAD", patch);
           tx.update(resRef, patch);
 
           const logsRef = collection(
@@ -1785,11 +1748,6 @@ useEffect(() => {
         applyLocalBoardingStatus();
 
         if (statut === "embarqué") {
-          embarkDiagCountRef.current.txOk += 1;
-          embarkDiag("embarqué:transaction-ok", {
-            reservationId,
-            transactionsOk: embarkDiagCountRef.current.txOk,
-          });
           logAgentHistoryEvent({
             companyId,
             agencyId: agencyIdToUse,
@@ -1825,15 +1783,7 @@ useEffect(() => {
               controleurId: uid,
               checkInTime: statut === "embarqué" ? serverTimestamp() : null,
             } as Record<string, unknown>;
-            console.log("EMBARK_PERMISSION_DEBUG_KEYS", Object.keys(fallbackPayload));
-            console.log("EMBARK_PERMISSION_DEBUG_PAYLOAD", fallbackPayload);
             await updateDoc(resRef, fallbackPayload);
-            if (statut === "embarqué") {
-              embarkDiag("embarqué:fallback-permissions", {
-                reservationId,
-                note: "réservation mise à jour sans agrégats (locks/stats/live)",
-              });
-            }
             applyLocalBoardingStatus();
             if (!options?.suppressAlert) {
               try {
@@ -1887,7 +1837,6 @@ useEffect(() => {
     let cancelled = false;
     const run = async () => {
       if (boardingQueueSyncInFlightRef.current) {
-        embarkDiag("file-hors-ligne:sync-déjà-en-cours", {});
         return;
       }
       boardingQueueSyncInFlightRef.current = true;
@@ -2969,7 +2918,6 @@ useEffect(() => {
     const toEmbark = reservations.filter((r) => getEffectiveBoardingStatus(r) === "pending");
     if (toEmbark.length === 0) return;
     for (const r of toEmbark) {
-      logEmbarkUpdateTarget(r);
       await updateStatut(getReservationDocId(r), "embarqué", undefined, { suppressAlert: true });
     }
     showFastBoardSuccess(false, {
@@ -3826,7 +3774,6 @@ useEffect(() => {
                               className="case"
                               data-checked={embarked}
                               onClick={() => {
-                                logEmbarkUpdateTarget(r);
                                 updateStatut(getReservationDocId(r), embarked ? "en_attente" : "embarqué");
                               }}
                               title="Basculer Embarqué"
@@ -3838,7 +3785,6 @@ useEffect(() => {
                               className="case"
                               data-checked={absent}
                               onClick={() => {
-                                logEmbarkUpdateTarget(r);
                                 updateStatut(getReservationDocId(r), absent ? "en_attente" : "absent");
                               }}
                               title="Basculer Absent"

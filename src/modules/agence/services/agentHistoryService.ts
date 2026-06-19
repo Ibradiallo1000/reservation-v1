@@ -68,7 +68,7 @@ export async function createAgentHistoryEvent(input: CreateAgentHistoryEventInpu
       agencyId: input.agencyId,
     });
   } catch (e) {
-    console.warn("[agentHistory] createAgentHistoryEvent failed (non-blocking):", e);
+    // Non bloquant: l'historique ne doit jamais polluer les flux métier ni la console terrain.
   }
 }
 
