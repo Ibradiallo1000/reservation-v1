@@ -1379,6 +1379,55 @@ useEffect(() => {
   }, [companyId, selectedAgencyId, selectedTrip, selectedDate, scanOn]);
 
   /* ---------- Mise à jour Embarqué / Absent (verrou + concordance) ---------- */
+  const patchLocalReservationBoardingStatus = useCallback(
+    (reservationId: string, status: StatutEmbarquement) => {
+      setReservations((prev) => {
+        let matched = false;
+        const next = prev.map((r): Reservation => {
+          const docId = getReservationDocId(r);
+
+          if (docId !== reservationId) return r;
+          matched = true;
+
+          if (status === "embarqué") {
+            return {
+              ...r,
+              boardingStatus: "boarded",
+              statutEmbarquement: "embarqué",
+              controleurId: uid ?? r.controleurId,
+              checkInTime: new Date(),
+            };
+          }
+
+          if (status === "absent") {
+            return {
+              ...r,
+              boardingStatus: "no_show",
+              statutEmbarquement: "absent",
+              controleurId: uid ?? r.controleurId,
+              checkInTime: null,
+            };
+          }
+
+          return {
+            ...r,
+            boardingStatus: "pending",
+            statutEmbarquement: "en_attente",
+            controleurId: uid ?? r.controleurId,
+            checkInTime: null,
+          };
+        });
+
+        if (!matched) {
+          console.warn("[EMBARK_SCAN] réservation scannée non présente dans la liste locale", reservationId);
+        }
+
+        return next;
+      });
+    },
+    [uid]
+  );
+
   const updateStatut = useCallback(
     async (
       reservationId: string,
@@ -2555,6 +2604,7 @@ useEffect(() => {
             }
           } catch (_) {}
           await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+          patchLocalReservationBoardingStatus(found.resId, "embarqué");
           qrDiag("BOARDING_UPDATE_SUCCESS", { source: "manual", reservationId: found.resId, agencyId: found.agencyId });
           showFastBoardSuccess(false, scanDetails);
           setScanCode("");
@@ -2574,6 +2624,7 @@ useEffect(() => {
       isOnline,
       findFromCache,
       updateStatut,
+      patchLocalReservationBoardingStatus,
       selectedTrip,
       selectedDate,
       showFastBoardSuccess,
@@ -2723,6 +2774,7 @@ useEffect(() => {
                 } catch (_) {}
                 if (isDecoderStale()) return;
                 await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+                patchLocalReservationBoardingStatus(found.resId, "embarqué");
                 qrDiag("BOARDING_UPDATE_SUCCESS", { source: "camera_constraints", reservationId: found.resId, agencyId: found.agencyId });
                 if (isDecoderStale()) return;
                 showFastBoardSuccess(false, scanDetails);
@@ -2838,6 +2890,7 @@ useEffect(() => {
                   } catch (_) {}
                   if (isDecoderStale()) return;
                   await updateStatut(found.resId, "embarqué", found.agencyId, { suppressAlert: true });
+                  patchLocalReservationBoardingStatus(found.resId, "embarqué");
                   qrDiag("BOARDING_UPDATE_SUCCESS", { source: "camera_device", reservationId: found.resId, agencyId: found.agencyId });
                   if (isDecoderStale()) return;
                   showFastBoardSuccess(false, scanDetails);
@@ -2889,6 +2942,7 @@ useEffect(() => {
     isOnline,
     findFromCache,
     updateStatut,
+    patchLocalReservationBoardingStatus,
     selectedTrip,
     selectedDate,
     showFastBoardSuccess,
