@@ -616,6 +616,8 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   // Scan caméra
   const [scanOn, setScanOn] = useState(false);
   const [mobileView, setMobileView] = useState<"scan" | "liste" | "rapports">("scan");
+  const [vehicleInfoOpenMobile, setVehicleInfoOpenMobile] = useState(false);
+  const [passengerListOpenMobile, setPassengerListOpenMobile] = useState(false);
   // Refactor UI Phase 1 (visible uniquement côté UI): prioriser liste+impression desktop/tablette, scan mobile.
   // Ne modifie pas la logique métier : uniquement l'affichage (switch UI).
   const [isMobile, setIsMobile] = useState<boolean>(() => {
@@ -4135,11 +4137,41 @@ useEffect(() => {
                 )}
                 {isDepartureDeparted && (
                   <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                    Départ validé — liste verrouillée
+                    Départ confirmé
                   </span>
                 )}
               </div>
             )}
+          </div>
+        </div>
+
+        <div className="no-print sm:hidden rounded-2xl border border-gray-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+          <div className="flex items-center gap-3">
+            {printCompanyLogo ? (
+              <img
+                src={printCompanyLogo}
+                alt=""
+                className="h-10 w-10 rounded-full border border-gray-200 object-cover dark:border-slate-700"
+              />
+            ) : (
+              <div className="grid h-10 w-10 place-items-center rounded-full border border-gray-200 bg-gray-100 text-sm font-extrabold text-gray-700 dark:border-slate-700 dark:bg-slate-900 dark:text-gray-100">
+                {printCompanyName.slice(0, 1).toUpperCase()}
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-extrabold text-gray-950 dark:text-white">
+                {printCompanyName}
+              </div>
+              <div className="mt-0.5 truncate text-xs font-semibold text-gray-600 dark:text-gray-300">
+                {selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival}` : "Sélectionner un trajet"}
+              </div>
+              <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                {humanDate}{selectedTrip?.heure ? ` • ${selectedTrip.heure}` : ""}
+              </div>
+            </div>
+            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-extrabold text-slate-700 dark:bg-slate-700 dark:text-slate-100">
+              {isDepartureDeparted ? "DEPARTED" : departureWorkflow?.tripStatus ?? "OPEN"}
+            </span>
           </div>
         </div>
 
@@ -4202,26 +4234,39 @@ useEffect(() => {
               </div>
             )}
             {selectedTrip && !hasOperationalAssignment ? (
-              <div className="mt-2 inline-flex rounded-md bg-gray-100 dark:bg-slate-700 px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-200">
+              <div className="mt-2 hidden sm:inline-flex rounded-md bg-gray-100 dark:bg-slate-700 px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-200">
                 Véhicule non affecté — scan autorisé
               </div>
             ) : null}
           </div>
         )}
 
-        <div className={`no-print ${mobileView === "rapports" ? "block" : "hidden"} sm:block rounded-lg border border-gray-200 dark:border-slate-600 px-2 py-2 bg-gray-50 dark:bg-slate-800`}>
+        <div className={`no-print ${mobileView === "rapports" ? "block" : "hidden"} sm:block rounded-2xl sm:rounded-lg border border-gray-200 dark:border-slate-600 px-3 sm:px-2 py-3 sm:py-2 bg-white sm:bg-gray-50 dark:bg-slate-800`}>
           <div className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-[11px] font-semibold text-gray-700 dark:text-gray-200">
-                Informations véhicule avant impression
-              </div>
+            <button
+              type="button"
+              onClick={() => setVehicleInfoOpenMobile((v) => !v)}
+              className="flex w-full items-center justify-between gap-3 text-left sm:pointer-events-none"
+              aria-expanded={vehicleInfoOpenMobile}
+            >
+              <span className="min-w-0">
+                <span className="block text-sm sm:text-[11px] font-extrabold sm:font-semibold text-gray-900 dark:text-gray-100">
+                  Informations véhicule
+                </span>
+                <span className="block text-xs sm:hidden font-medium text-gray-500 dark:text-gray-300">
+                  À renseigner avant impression si nécessaire
+                </span>
+              </span>
               {vehiclePrintSavedAt && (
-                <div className="rounded-md bg-emerald-50 dark:bg-emerald-950/40 px-2 py-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+                <span className="rounded-md bg-emerald-50 dark:bg-emerald-950/40 px-2 py-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
                   Infos véhicule enregistrées
-                </div>
+                </span>
               )}
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+              <span className="sm:hidden text-xs font-bold text-gray-500 dark:text-gray-300">
+                {vehicleInfoOpenMobile ? "Fermer" : "Ouvrir"}
+              </span>
+            </button>
+            <div className={`${vehicleInfoOpenMobile ? "grid" : "hidden"} sm:grid grid-cols-1 md:grid-cols-5 gap-2`}>
               <label className="min-w-0">
                 <span className="sr-only">Véhicule / Plaque</span>
                 <input
@@ -4282,14 +4327,14 @@ useEffect(() => {
                 />
               </label>
             </div>
-            <div className="flex justify-end">
+            <div className={`${vehicleInfoOpenMobile ? "flex" : "hidden"} sm:flex justify-end`}>
               <button
                 type="button"
                 onClick={saveVehiclePrintInfo}
                 className="px-3 py-1.5 rounded-md text-xs font-semibold text-white"
                 style={{ background: primary }}
               >
-                Enregistrer infos véhicule
+                Enregistrer
               </button>
             </div>
           </div>
@@ -4330,13 +4375,14 @@ useEffect(() => {
             <button
               type="button"
               onClick={() => setScanOn((v) => !v)}
-              className={`w-full px-3 py-3 rounded-xl text-sm font-semibold min-h-[48px] whitespace-nowrap shadow-sm ${
+              className={`w-full inline-flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-base font-extrabold min-h-[56px] whitespace-nowrap shadow-sm ${
                 scanOn ? "bg-emerald-600 text-white" : "text-white"
               }`}
               style={!scanOn ? { background: primary } : undefined}
               disabled={!selectedTrip || !selectedAgencyId || isDepartureDeparted}
             >
-              {scanOn ? "Scan en cours..." : "Scanner les billets"}
+              <Camera className="h-5 w-5" aria-hidden />
+              {scanOn ? "Scan en cours..." : "Scanner un billet"}
             </button>
             {scanOn && (
               <video
@@ -4347,13 +4393,13 @@ useEffect(() => {
                 autoPlay
               />
             )}
-            <form onSubmit={submitManual} className="flex flex-nowrap gap-2">
+            <form onSubmit={submitManual} className="flex flex-nowrap gap-2 rounded-2xl border border-gray-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-800">
               <input
                 value={scanCode}
                 onChange={(e) => setScanCode(e.target.value)}
-                placeholder="Entrer code billet"
+                placeholder="Entrer un code billet"
                 disabled={isDepartureDeparted}
-                className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+                className="flex-1 min-w-0 px-3 py-2 border border-gray-200 dark:border-slate-600 rounded-xl text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
               />
               <button
                 type="submit"
@@ -4369,52 +4415,70 @@ useEffect(() => {
 
         {mobileView === "liste" && (
           <div className="no-print space-y-2">
-            <input
-              type="text"
-              placeholder="Rechercher nom / téléphone…"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
-            />
-            <div className="flex flex-col gap-1">
-            <div className="flex flex-nowrap overflow-x-auto gap-2">
-              <button
-                type="button"
-                onClick={() => void markAllEmbarked()}
-                className={`shrink-0 px-3 py-2 rounded-lg text-sm border min-h-[40px] whitespace-nowrap ${
-                  totals.allPassengersEmbarked
-                    ? "border-emerald-500 bg-emerald-100 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100"
-                    : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100"
-                } disabled:opacity-50`}
-                disabled={
-                  isLoading ||
-                  totals.totalSeats === 0 ||
-                  totals.allPassengersEmbarked ||
-                  !hasOperationalAssignment ||
-                  !canOperateBoardingPassengers
-                }
-              >
-                {totals.allPassengersEmbarked ? "✓ Tous embarqués" : "Tout marquer embarqué"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  saveVehiclePrintInfo();
-                  window.print();
-                }}
-                className="shrink-0 px-3 py-2 rounded-lg text-sm border border-gray-300 dark:border-slate-600 min-h-[40px] whitespace-nowrap"
-                title="Imprimer la liste officielle"
-              >
-                Imprimer
-              </button>
+            <button
+              type="button"
+              onClick={() => setPassengerListOpenMobile((v) => !v)}
+              className="sm:hidden flex w-full items-center justify-between rounded-2xl border border-gray-200 bg-white px-3 py-3 text-left shadow-sm dark:border-slate-700 dark:bg-slate-800"
+              aria-expanded={passengerListOpenMobile}
+            >
+              <span>
+                <span className="block text-sm font-extrabold text-gray-950 dark:text-white">Liste passagers</span>
+                <span className="block text-xs font-medium text-gray-500 dark:text-gray-300">
+                  {totals.totalRes} passagers
+                </span>
+              </span>
+              <span className="text-xs font-bold text-gray-500 dark:text-gray-300">
+                {passengerListOpenMobile ? "Masquer" : "Afficher"}
+              </span>
+            </button>
+            <div className={`${passengerListOpenMobile ? "block" : "hidden"} sm:block space-y-2`}>
+              <input
+                type="text"
+                placeholder="Rechercher nom / téléphone…"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+              />
+              <div className="flex flex-col gap-1">
+              <div className="flex flex-nowrap overflow-x-auto gap-2">
+                <button
+                  type="button"
+                  onClick={() => void markAllEmbarked()}
+                  className={`shrink-0 px-3 py-2 rounded-lg text-sm border min-h-[40px] whitespace-nowrap ${
+                    totals.allPassengersEmbarked
+                      ? "border-emerald-500 bg-emerald-100 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100"
+                      : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100"
+                  } disabled:opacity-50`}
+                  disabled={
+                    isLoading ||
+                    totals.totalSeats === 0 ||
+                    totals.allPassengersEmbarked ||
+                    !hasOperationalAssignment ||
+                    !canOperateBoardingPassengers
+                  }
+                >
+                  {totals.allPassengersEmbarked ? "✓ Tous embarqués" : "Tout marquer embarqué"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    saveVehiclePrintInfo();
+                    window.print();
+                  }}
+                  className="shrink-0 px-3 py-2 rounded-lg text-sm border border-gray-300 dark:border-slate-600 min-h-[40px] whitespace-nowrap"
+                  title="Imprimer la liste officielle"
+                >
+                  Imprimer
+                </button>
+              </div>
+              {totals.totalSeats > 0 && totals.allPassengersEmbarked && (
+                <p className="text-xs text-emerald-800 dark:text-emerald-200">
+                  Toutes les places du manifeste sont embarquées ({totals.seatsEmbarques}/{totals.totalSeats}).
+                </p>
+              )}
+              </div>
             </div>
-            {totals.totalSeats > 0 && totals.allPassengersEmbarked && (
-              <p className="text-xs text-emerald-800 dark:text-emerald-200">
-                Toutes les places du manifeste sont embarquées ({totals.seatsEmbarques}/{totals.totalSeats}).
-              </p>
-            )}
-            </div>
-            <div className="sm:hidden space-y-2">
+            <div className={`${passengerListOpenMobile ? "space-y-2" : "hidden"} sm:hidden`}>
               {isLoading ? (
                 <div className="rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-4 text-sm text-gray-500 dark:text-gray-200">
                   Chargement…
@@ -4689,13 +4753,13 @@ useEffect(() => {
         )}
 
         <nav className="no-print sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-gray-200 dark:border-slate-700 bg-white/95 dark:bg-slate-950/95 px-4 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.12)]">
-          <div className="grid grid-cols-3 items-end gap-2 max-w-md mx-auto">
+          <div className="grid grid-cols-3 items-center gap-2 max-w-md mx-auto">
             <button
               type="button"
               onClick={() => setMobileView("liste")}
-              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-lg text-xs font-semibold ${
+              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-xs font-bold ${
                 mobileView === "liste"
-                  ? "text-red-700 dark:text-red-300"
+                  ? "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-200"
                   : "text-gray-600 dark:text-gray-300"
               }`}
               aria-current={mobileView === "liste" ? "page" : undefined}
@@ -4706,22 +4770,22 @@ useEffect(() => {
             <button
               type="button"
               onClick={() => setMobileView("scan")}
-              className={`mx-auto -mt-5 flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-full text-[11px] font-bold shadow-lg ${
+              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-xs font-bold ${
                 mobileView === "scan"
-                  ? "bg-red-600 text-white"
-                  : "bg-gray-900 text-white dark:bg-white dark:text-slate-950"
+                  ? "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-200"
+                  : "text-gray-600 dark:text-gray-300"
               }`}
               aria-current={mobileView === "scan" ? "page" : undefined}
             >
-              <Camera className="h-6 w-6" aria-hidden />
-              <span>Scanner</span>
+              <Camera className="h-5 w-5" aria-hidden />
+              <span>Scan</span>
             </button>
             <button
               type="button"
               onClick={() => setMobileView("rapports")}
-              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-lg text-xs font-semibold ${
+              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-xs font-bold ${
                 mobileView === "rapports"
-                  ? "text-red-700 dark:text-red-300"
+                  ? "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-200"
                   : "text-gray-600 dark:text-gray-300"
               }`}
               aria-current={mobileView === "rapports" ? "page" : undefined}

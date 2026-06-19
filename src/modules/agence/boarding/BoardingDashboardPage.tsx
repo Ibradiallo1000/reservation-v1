@@ -382,15 +382,21 @@ const BoardingDashboardPage: React.FC = () => {
             {dedupedDepartures.map((d) => (
               <div
                 key={`${d.date}|${d.heure}|${d.departure}|${d.arrival}`}
-                className="rounded-xl border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 shadow-sm p-3"
+                className="rounded-2xl border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 shadow-sm p-3 sm:p-4"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                    <div className="text-base sm:text-sm font-extrabold sm:font-semibold text-gray-900 dark:text-white truncate">
                       {d.departure} → {d.arrival}
                     </div>
-                    <div className="text-xs text-gray-600 dark:text-gray-300 mt-0.5">Heure : {d.heure}</div>
-                    <div className="text-xs text-gray-600 dark:text-gray-300 mt-0.5">Véhicule : {d.plate || "—"}</div>
+                    <div className="text-xs font-medium text-gray-600 dark:text-gray-300 mt-1">
+                      {d.date.slice(5).split("-").reverse().join("/")} • {d.heure}
+                    </div>
+                    {d.plate && (
+                      <div className="hidden sm:block text-xs text-gray-600 dark:text-gray-300 mt-0.5">
+                        Véhicule : {d.plate}
+                      </div>
+                    )}
                   </div>
 
                   <div className="shrink-0 flex flex-col items-end gap-2">
@@ -403,11 +409,18 @@ const BoardingDashboardPage: React.FC = () => {
                     >
                       {d.assignmentStatus === "validated" ? "Validé" : "Planifié"}
                     </span>
-                    <div className="text-[10px] text-gray-500 dark:text-gray-400">{d.agencyNom}</div>
+                    <div className="hidden sm:block text-[10px] text-gray-500 dark:text-gray-400">{d.agencyNom}</div>
                   </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <div className="mt-3 flex items-center justify-between rounded-xl bg-gray-50 dark:bg-slate-900/40 px-3 py-2 text-xs sm:hidden">
+                  <span className="font-semibold text-gray-700 dark:text-gray-200">
+                    {d.boardedPassengers} embarqués / {d.absentPassengers} absents
+                  </span>
+                  <span className="text-gray-500 dark:text-gray-400">{d.expectedPassengers} passagers</span>
+                </div>
+
+                <div className="mt-3 hidden sm:grid grid-cols-2 gap-2 text-xs">
                   <div className="rounded-lg bg-gray-50 dark:bg-slate-900/30 border border-gray-100 dark:border-slate-700 px-2 py-1">
                     <div className="text-[10px] text-gray-500 dark:text-gray-400">Passagers</div>
                     <div className="font-semibold">{d.expectedPassengers}</div>
@@ -423,10 +436,12 @@ const BoardingDashboardPage: React.FC = () => {
                     <div className="font-semibold">{d.absentPassengers}</div>
                   </div>
 
-                  <div className="rounded-lg bg-gray-50 dark:bg-slate-900/30 border border-gray-100 dark:border-slate-700 px-2 py-1">
-                    <div className="text-[10px] text-gray-500 dark:text-gray-400">Places restantes</div>
-                    <div className="font-semibold">{d.remainingSeats == null ? "—" : d.remainingSeats}</div>
-                  </div>
+                  {d.remainingSeats != null && (
+                    <div className="rounded-lg bg-gray-50 dark:bg-slate-900/30 border border-gray-100 dark:border-slate-700 px-2 py-1">
+                      <div className="text-[10px] text-gray-500 dark:text-gray-400">Places restantes</div>
+                      <div className="font-semibold">{d.remainingSeats}</div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-3 flex items-center justify-end">
@@ -445,10 +460,10 @@ const BoardingDashboardPage: React.FC = () => {
                         },
                       })
                     }
-                    className="px-4 py-2 rounded-lg text-sm font-semibold"
+                    className="w-full sm:w-auto px-4 py-2.5 sm:py-2 rounded-xl sm:rounded-lg text-sm font-bold sm:font-semibold"
                     style={{ background: primaryColor, color: "white" }}
                   >
-                    Ouvrir
+                    Ouvrir l&apos;embarquement
                   </button>
                 </div>
               </div>
