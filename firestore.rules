@@ -1317,6 +1317,7 @@ service cloud.firestore {
               || getUserRole() == 'escale_agent'
               || getUserRole() == 'escale_manager'
               || getUserRole() == 'operator_digital'
+              || isBoardingOfficer()
               || getUserRole() == 'admin_compagnie'
               || getUserRole() == 'admin_platforme'
             )
@@ -1813,6 +1814,34 @@ service cloud.firestore {
               'tripStatus',
               'boardingClosedAt',
               'boardingClosedBy',
+              'boardedPassengersCount',
+              'absentPassengersCount',
+              'pendingPassengersCount',
+              'updatedAt'
+            ]);
+
+          allow update: if isAuth()
+            && getUserAgencyId() == agencyId
+            && (
+              userCompanyId() == companyId
+              || userAgencyBelongsToCompany(companyId)
+              || getUserRole() == 'admin_platforme'
+            )
+            && (
+              isBoardingOfficer()
+              || isAgencyManager()
+              || getUserRole() == 'admin_compagnie'
+              || getUserRole() == 'admin_platforme'
+            )
+            && resource.data.get('tripStatus', '') == 'CLOSED'
+            && request.resource.data.get('tripStatus', '') == 'DEPARTED'
+            && request.resource.data.get('companyId', '') == companyId
+            && request.resource.data.get('agencyId', '') == agencyId
+            && request.resource.data.get('tripInstanceId', '') == tripInstanceId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'tripStatus',
+              'departureConfirmedAt',
+              'departureConfirmedBy',
               'boardedPassengersCount',
               'absentPassengersCount',
               'pendingPassengersCount',

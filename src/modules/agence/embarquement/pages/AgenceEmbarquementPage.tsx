@@ -87,7 +87,11 @@ import {
 import {
   departureWorkflowRef,
   closeDepartureBoarding,
+  confirmDeparture,
   ensureDepartureDocument,
+  reportFinalAbsentReservations,
+  resolveNextReportDeparture,
+  type ReportNextDeparture,
   type DepartureWorkflowDoc,
 } from "@/modules/agence/embarquement/services/departureWorkflowService";
 import { StandardLayoutWrapper } from "@/ui";
@@ -154,10 +158,15 @@ interface Reservation {
   controleurId?: string;
   arrival?: string;
   seatsGo?: number;
+  sourceReservationId?: string;
+  tripInstanceId?: string;
   agencyId?: string;
   companyId?: string;
   compagnieId?: string;
+  originStopOrder?: number | null;
   destinationStopOrder?: number | null;
+  originStopId?: string | null;
+  destinationStopId?: string | null;
 }
 
 type VehiclePrintInfo = {
@@ -1546,6 +1555,12 @@ useEffect(() => {
       options?: { suppressAlert?: boolean }
     ) => {
       if (!companyId || !uid) return;
+      if (departureTripStatusRef.current === "DEPARTED") {
+        const message = "Départ déjà validé — modification impossible";
+        if (options?.suppressAlert) throw new Error(message);
+        alert(message);
+        return;
+      }
       if (!canEditBoardingPassengers) {
         throw new Error("Embarquement non disponible pour ce départ. Vérifiez le départ sélectionné.");
       }
@@ -2167,11 +2182,34 @@ useEffect(() => {
   const [departureWorkflow, setDepartureWorkflow] = useState<DepartureWorkflowDoc | null>(null);
   const [closingDeparture, setClosingDeparture] = useState(false);
   const [closeDepartureFeedback, setCloseDepartureFeedback] = useState<string | null>(null);
+  const [confirmingDeparture, setConfirmingDeparture] = useState(false);
+  const [confirmDepartureFeedback, setConfirmDepartureFeedback] = useState<string | null>(null);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [nextReportDeparture, setNextReportDeparture] = useState<ReportNextDeparture | null>(null);
+  const [loadingReportDeparture, setLoadingReportDeparture] = useState(false);
+  const [reportingAbsents, setReportingAbsents] = useState(false);
+  const [reportFeedback, setReportFeedback] = useState<string | null>(null);
   const [originDepartureDone, setOriginDepartureDone] = useState(false);
   const [sendingOriginDeparture, setSendingOriginDeparture] = useState(false);
   useEffect(() => {
     departureTripStatusRef.current = departureWorkflow?.tripStatus ?? "OPEN";
   }, [departureWorkflow?.tripStatus]);
+  const isDepartureDeparted = departureWorkflow?.tripStatus === "DEPARTED";
+  const canOperateBoardingPassengers = canEditBoardingPassengers && !isDepartureDeparted;
+  const finalAbsentReservations = useMemo(
+    () =>
+      reservations.filter(
+        (r) => r.boardingStatus === "no_show" && r.statutEmbarquement === "absent"
+      ),
+    [reservations]
+  );
+  const reportableAbsentPassengersCount = useMemo(
+    () => finalAbsentReservations.reduce((sum, r) => sum + Math.max(1, Number(r.seatsGo ?? 1) || 1), 0),
+    [finalAbsentReservations]
+  );
+  useEffect(() => {
+    if (isDepartureDeparted && scanOn) setScanOn(false);
+  }, [isDepartureDeparted, scanOn]);
   const departureTripInstanceId = useMemo(() => {
     // tripInstanceId identifie une instance datée du départ, contrairement à trajetId qui peut être legacy.
     return selectedTrip?.tripInstanceId ?? tripInstanceIdForSlot;
@@ -2395,6 +2433,186 @@ useEffect(() => {
     uid,
     departureWorkflow?.tripStatus,
     reservations,
+  ]);
+
+  useEffect(() => {
+    if (!confirmDepartureFeedback) return;
+    const timeout = window.setTimeout(() => setConfirmDepartureFeedback(null), 2800);
+    return () => window.clearTimeout(timeout);
+  }, [confirmDepartureFeedback]);
+
+  const handleConfirmDeparture = useCallback(async () => {
+    if (!companyId || !selectedAgencyId || !departureTripInstanceId || !uid) {
+      alert("Contexte incomplet pour valider le départ.");
+      return;
+    }
+    if (departureWorkflow?.tripStatus !== "CLOSED") {
+      alert("L'embarquement doit être clôturé avant de valider le départ.");
+      return;
+    }
+
+    const vehicleLabel = vehiclePrintDraft.plate || assign.immat || assign.bus || "Véhicule non renseigné";
+    const driverName = vehiclePrintDraft.driver || assign.chauffeur || "Chauffeur non renseigné";
+    const tripLabel = selectedTrip
+      ? `${selectedTrip.departure} → ${selectedTrip.arrival}`
+      : "Trajet non renseigné";
+    const dateLabel = selectedTrip ? `${selectedDate} • ${selectedTrip.heure}` : selectedDate;
+    const finalCounts = reservations.reduce(
+      (acc, r) => {
+        const seats = r.seatsGo ?? 1;
+        const status = getEffectiveBoardingStatus(r);
+        if (status === "boarded") acc.boarded += seats;
+        if (status === "no_show") acc.absent += seats;
+        return acc;
+      },
+      { boarded: 0, absent: 0 }
+    );
+    const ok = window.confirm(
+      [
+        "Confirmer le départ ? Après validation, la liste sera verrouillée.",
+        "",
+        `Trajet : ${tripLabel}`,
+        `Date/heure : ${dateLabel}`,
+        `Embarqués : ${finalCounts.boarded}`,
+        `Absents : ${finalCounts.absent}`,
+        `Véhicule : ${vehicleLabel}`,
+        `Chauffeur : ${driverName}`,
+      ].join("\n")
+    );
+    if (!ok) return;
+
+    setConfirmingDeparture(true);
+    try {
+      await confirmDeparture({
+        companyId,
+        agencyId: selectedAgencyId,
+        tripInstanceId: departureTripInstanceId,
+        userId: uid,
+        boardedPassengersCount: finalCounts.boarded,
+        absentPassengersCount: finalCounts.absent,
+      });
+      setScanOn(false);
+      setDepartureWorkflow((prev) =>
+        prev
+          ? {
+              ...prev,
+              tripStatus: "DEPARTED",
+              departureConfirmedAt: new Date(),
+              departureConfirmedBy: uid,
+              boardedPassengersCount: finalCounts.boarded,
+              absentPassengersCount: finalCounts.absent,
+              pendingPassengersCount: 0,
+              updatedAt: new Date(),
+            }
+          : prev
+      );
+      setConfirmDepartureFeedback("Départ validé");
+    } catch (err) {
+      console.error("[departureWorkflow] confirm departure failed", err);
+      alert(err instanceof Error ? err.message : "Erreur lors de la validation du départ.");
+    } finally {
+      setConfirmingDeparture(false);
+    }
+  }, [
+    companyId,
+    selectedAgencyId,
+    departureTripInstanceId,
+    uid,
+    departureWorkflow?.tripStatus,
+    vehiclePrintDraft.plate,
+    vehiclePrintDraft.driver,
+    assign.immat,
+    assign.bus,
+    assign.chauffeur,
+    selectedTrip,
+    selectedDate,
+    reservations,
+  ]);
+
+  const handleOpenReportAbsents = useCallback(async () => {
+    if (!companyId || !selectedAgencyId || !selectedTrip || !selectedDate) {
+      alert("Contexte incomplet pour reporter les absents.");
+      return;
+    }
+    if (departureWorkflow?.tripStatus !== "DEPARTED") {
+      alert("Le report est autorisé uniquement après validation du départ.");
+      return;
+    }
+    setReportFeedback(null);
+    setReportModalOpen(true);
+    setLoadingReportDeparture(true);
+    try {
+      const next = await resolveNextReportDeparture({
+        companyId,
+        agencyId: selectedAgencyId,
+        trajetId: selectedTrip.id ?? null,
+        departure: selectedTrip.departure,
+        arrival: selectedTrip.arrival,
+        date: selectedDate,
+        heure: selectedTrip.heure,
+      });
+      setNextReportDeparture(next);
+    } catch (err) {
+      console.error("[departureWorkflow] resolve report departure failed", err);
+      setNextReportDeparture(null);
+      alert(err instanceof Error ? err.message : "Aucun prochain départ disponible.");
+    } finally {
+      setLoadingReportDeparture(false);
+    }
+  }, [companyId, selectedAgencyId, selectedTrip, selectedDate, departureWorkflow?.tripStatus]);
+
+  const handleConfirmReportAbsents = useCallback(async () => {
+    if (!companyId || !selectedAgencyId || !selectedTrip || !selectedDate || !departureTripInstanceId || !uid) {
+      alert("Contexte incomplet pour reporter les absents.");
+      return;
+    }
+    if (departureWorkflow?.tripStatus !== "DEPARTED") {
+      alert("Le report est autorisé uniquement après validation du départ.");
+      return;
+    }
+    if (finalAbsentReservations.length === 0) {
+      alert("Aucun absent final à reporter.");
+      return;
+    }
+
+    setReportingAbsents(true);
+    try {
+      const result = await reportFinalAbsentReservations({
+        companyId,
+        agencyId: selectedAgencyId,
+        tripInstanceId: departureTripInstanceId,
+        userId: uid,
+        trajetId: selectedTrip.id ?? null,
+        departure: selectedTrip.departure,
+        arrival: selectedTrip.arrival,
+        date: selectedDate,
+        heure: selectedTrip.heure,
+        seatCapacity: capacityLimit,
+        reservations: finalAbsentReservations,
+      });
+      const message = `${result.reportedCount} passagers reportés sur le prochain départ`;
+      setReportFeedback(message);
+      setNextReportDeparture(result.nextDeparture);
+      setReportModalOpen(false);
+      if (result.skippedCount > 0) {
+        console.warn("[EMBARK_REPORT] réservations déjà reportées ou non éligibles", result.skippedCount);
+      }
+    } catch (err) {
+      console.error("[departureWorkflow] report absents failed", err);
+      alert(err instanceof Error ? err.message : "Erreur lors du report des absents.");
+    } finally {
+      setReportingAbsents(false);
+    }
+  }, [
+    companyId,
+    selectedAgencyId,
+    selectedTrip,
+    selectedDate,
+    departureTripInstanceId,
+    uid,
+    departureWorkflow?.tripStatus,
+    finalAbsentReservations,
+    capacityLimit,
   ]);
 
   /* ---------- Auto-départ 30 min après clôture (ne bloque plus le bouton manuel) ---------- */
@@ -2793,6 +3011,10 @@ useEffect(() => {
     async (e: React.FormEvent) => {
       e.preventDefault();
       if (!companyId) return;
+      if (departureTripStatusRef.current === "DEPARTED") {
+        showFastBoardError("Départ déjà validé — modification impossible");
+        return;
+      }
       if (!canEditBoardingPassengers) {
         showFastBoardError("Embarquement non disponible pour ce départ. Vérifiez le départ sélectionné.");
         return;
@@ -2986,6 +3208,11 @@ useEffect(() => {
                 showFastBoardError("Billet non reconnu pour ce départ.");
                 return;
               }
+              if (departureTripStatusRef.current === "DEPARTED") {
+                showFastBoardError("Départ déjà validé — modification impossible");
+                setScanOn(false);
+                return;
+              }
               if (!canEditBoardingPassengers) {
                 showFastBoardError("Embarquement non disponible pour ce départ. Vérifiez le départ sélectionné.");
                 return;
@@ -3101,6 +3328,11 @@ useEffect(() => {
               try {
                 if (!code) {
                   showFastBoardError("Billet non reconnu pour ce départ.");
+                  return;
+                }
+                if (departureTripStatusRef.current === "DEPARTED") {
+                  showFastBoardError("Départ déjà validé — modification impossible");
+                  setScanOn(false);
                   return;
                 }
                 if (!canEditBoardingPassengers) {
@@ -3251,6 +3483,10 @@ useEffect(() => {
   const assignmentStatusBadge = activeBoardingAssignment?.status ?? fallbackBoardingAssignment?.status ?? null;
 
   const markAllEmbarked = useCallback(async () => {
+    if (departureTripStatusRef.current === "DEPARTED") {
+      showFastBoardError("Départ déjà validé — modification impossible");
+      return;
+    }
     /* Toute la liste du créneau (pas le filtre recherche) ; n’embarque que les encore « en attente ». */
     const toEmbark = reservations.filter((r) => getEffectiveBoardingStatus(r) === "pending");
     if (toEmbark.length === 0) return;
@@ -3261,7 +3497,7 @@ useEffect(() => {
       nomClient: `${toEmbark.length} réservation(s)`,
       statutEmbarquement: "embarqué",
     });
-  }, [reservations, updateStatut, showFastBoardSuccess]);
+  }, [reservations, updateStatut, showFastBoardSuccess, showFastBoardError]);
 
   const totals = useMemo(() => {
     let totalRes = 0, totalSeats = 0, seatsEmbarques = 0, seatsAbsents = 0;
@@ -3845,7 +4081,12 @@ useEffect(() => {
                 ? `${selectedTrip.departure} → ${selectedTrip.arrival} • ${humanDate} • ${selectedTrip.heure}`
                 : `${humanDate} • Sélectionner un trajet`}
             </div>
-            {(departureWorkflow?.tripStatus === "OPEN" || closeDepartureFeedback) && (
+            {(departureWorkflow?.tripStatus === "OPEN" ||
+              departureWorkflow?.tripStatus === "CLOSED" ||
+              isDepartureDeparted ||
+              closeDepartureFeedback ||
+              confirmDepartureFeedback ||
+              reportFeedback) && (
               <div className="mt-2 flex flex-col items-center gap-1 sm:flex-row sm:justify-center">
                 {departureWorkflow?.tripStatus === "OPEN" && (
                   <button
@@ -3857,9 +4098,44 @@ useEffect(() => {
                     {closingDeparture ? "Clôture..." : "Clôturer l'embarquement"}
                   </button>
                 )}
+                {departureWorkflow?.tripStatus === "CLOSED" && (
+                  <button
+                    type="button"
+                    onClick={() => void handleConfirmDeparture()}
+                    disabled={confirmingDeparture}
+                    className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-900 disabled:opacity-50 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-100"
+                  >
+                    {confirmingDeparture ? "Validation..." : "Valider le départ"}
+                  </button>
+                )}
                 {closeDepartureFeedback && (
                   <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100">
                     {closeDepartureFeedback}
+                  </span>
+                )}
+                {confirmDepartureFeedback && (
+                  <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100">
+                    {confirmDepartureFeedback}
+                  </span>
+                )}
+                {isDepartureDeparted && reportableAbsentPassengersCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenReportAbsents()}
+                    disabled={loadingReportDeparture || reportingAbsents}
+                    className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-900 disabled:opacity-50 dark:border-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-100"
+                  >
+                    {loadingReportDeparture ? "Recherche..." : "Reporter les absents"}
+                  </button>
+                )}
+                {reportFeedback && (
+                  <span className="rounded-md bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-100">
+                    {reportFeedback}
+                  </span>
+                )}
+                {isDepartureDeparted && (
+                  <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                    Départ validé — liste verrouillée
                   </span>
                 )}
               </div>
@@ -4058,7 +4334,7 @@ useEffect(() => {
                 scanOn ? "bg-emerald-600 text-white" : "text-white"
               }`}
               style={!scanOn ? { background: primary } : undefined}
-              disabled={!selectedTrip || !selectedAgencyId}
+              disabled={!selectedTrip || !selectedAgencyId || isDepartureDeparted}
             >
               {scanOn ? "Scan en cours..." : "Scanner les billets"}
             </button>
@@ -4076,13 +4352,14 @@ useEffect(() => {
                 value={scanCode}
                 onChange={(e) => setScanCode(e.target.value)}
                 placeholder="Entrer code billet"
+                disabled={isDepartureDeparted}
                 className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
               />
               <button
                 type="submit"
                 className="shrink-0 px-3 py-2 rounded-lg text-white text-sm"
                 style={{ background: primary }}
-                disabled={(!selectedAgencyId && !userAgencyId) || !canEditBoardingPassengers}
+                disabled={(!selectedAgencyId && !userAgencyId) || !canOperateBoardingPassengers}
               >
                 Valider
               </button>
@@ -4114,7 +4391,7 @@ useEffect(() => {
                   totals.totalSeats === 0 ||
                   totals.allPassengersEmbarked ||
                   !hasOperationalAssignment ||
-                  !canEditBoardingPassengers
+                  !canOperateBoardingPassengers
                 }
               >
                 {totals.allPassengersEmbarked ? "✓ Tous embarqués" : "Tout marquer embarqué"}
@@ -4152,6 +4429,7 @@ useEffect(() => {
                   const embarked = eff === "boarded";
                   const absent = eff === "no_show";
                   const seats = r.seatsGo ?? 1;
+                  const isReportedReservation = r.canal === "report" || !!r.sourceReservationId;
                   const statusLabel = embarked ? "Embarqué" : absent ? "Absent" : "En attente";
                   const statusClass = embarked
                     ? "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-100 dark:border-emerald-800"
@@ -4172,6 +4450,11 @@ useEffect(() => {
                           <div className="mt-0.5 text-xs font-medium text-gray-500 dark:text-gray-300">
                             {formatDisplayPhone(r.telephone)}
                           </div>
+                          {isReportedReservation && (
+                            <div className="mt-1 inline-flex rounded-md bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-100">
+                              Reporté du départ précédent
+                            </div>
+                          )}
                         </div>
                         <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] font-bold ${statusClass}`}>
                           {statusLabel}
@@ -4204,7 +4487,7 @@ useEffect(() => {
                               ? "border-emerald-500 bg-emerald-600 text-white"
                               : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100"
                           } disabled:opacity-50`}
-                          disabled={!canEditBoardingPassengers}
+                          disabled={!canOperateBoardingPassengers}
                         >
                           Embarqué
                         </button>
@@ -4218,7 +4501,7 @@ useEffect(() => {
                               ? "border-red-500 bg-red-600 text-white"
                               : "border-red-300 bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-100"
                           } disabled:opacity-50`}
-                          disabled={!canEditBoardingPassengers}
+                          disabled={!canOperateBoardingPassengers}
                         >
                           Absent
                         </button>
@@ -4272,13 +4555,21 @@ useEffect(() => {
                       const embarked = eff === "boarded";
                       const absent = eff === "no_show";
                       const seats = r.seatsGo ?? 1;
+                      const isReportedReservation = r.canal === "report" || !!r.sourceReservationId;
                       return (
                         <tr
                           key={getReservationDocId(r)}
                           className={`border-t border-gray-200 dark:border-slate-600 ${embarked ? "embarked bg-gray-50 dark:bg-slate-700 text-slate-700 dark:text-white" : `bg-white ${idx % 2 === 0 ? "dark:bg-slate-900" : "dark:bg-slate-800"} text-gray-900 dark:text-white`}`}
                         >
                           <td className={embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}>{idx + 1}</td>
-                          <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{formatDisplayName(r.nomClient)}</td>
+                          <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>
+                            <div className="truncate">{formatDisplayName(r.nomClient)}</div>
+                            {isReportedReservation && (
+                              <div className="mt-0.5 inline-flex rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-100">
+                                Reporté du départ précédent
+                              </div>
+                            )}
+                          </td>
                           <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{formatDisplayPhone(r.telephone)}</td>
                           <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{formatReservationCanal(r.canal)}</td>
                           <td className={`truncate ${embarked ? "text-slate-700 dark:text-white" : "text-gray-900 dark:text-white"}`}>{r.referenceCode || r.id}</td>
@@ -4291,7 +4582,7 @@ useEffect(() => {
                                 updateStatut(getReservationDocId(r), embarked ? "en_attente" : "embarqué");
                               }}
                               title="Basculer Embarqué"
-                              disabled={!canEditBoardingPassengers}
+                              disabled={!canOperateBoardingPassengers}
                             />
                           </td>
                           <td className="text-center">
@@ -4302,7 +4593,7 @@ useEffect(() => {
                                 updateStatut(getReservationDocId(r), absent ? "en_attente" : "absent");
                               }}
                               title="Basculer Absent"
-                              disabled={!canEditBoardingPassengers}
+                              disabled={!canOperateBoardingPassengers}
                             />
                           </td>
                         </tr>
@@ -4325,6 +4616,7 @@ useEffect(() => {
                 sendingOriginDeparture ||
                 originDepartureDone ||
                 scanOn ||
+                isDepartureDeparted ||
                 totals.seatsEmbarques <= 0 ||
                 !canLaunchTripAfterAgencyValidation ||
                 tripStatutMetier !== "validation_agence_requise"
@@ -4341,6 +4633,60 @@ useEffect(() => {
                       : "Valider et lancer le trajet"}
             </button>
           </div>
+
+        {reportModalOpen && (
+          <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4">
+            <div className="w-full max-w-md rounded-lg bg-white p-4 shadow-xl dark:bg-slate-900">
+              <h2 className="text-base font-extrabold text-slate-950 dark:text-white">
+                Reporter les absents du départ
+              </h2>
+              <div className="mt-3 space-y-2 text-sm text-slate-700 dark:text-slate-200">
+                <div className="flex justify-between gap-3">
+                  <span>Absents</span>
+                  <strong>{reportableAbsentPassengersCount}</strong>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span>Trajet actuel</span>
+                  <strong className="text-right">
+                    {selectedTrip ? `${selectedTrip.departure} → ${selectedTrip.arrival}` : "—"}
+                  </strong>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span>Date actuelle</span>
+                  <strong>{selectedTrip ? `${selectedDate} • ${selectedTrip.heure}` : selectedDate}</strong>
+                </div>
+                <div className="rounded-md bg-indigo-50 px-3 py-2 text-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-100">
+                  <div className="text-xs font-semibold uppercase tracking-wide">Prochain départ proposé</div>
+                  <div className="mt-1 font-bold">
+                    {loadingReportDeparture
+                      ? "Recherche..."
+                      : nextReportDeparture
+                        ? `${nextReportDeparture.date} • ${nextReportDeparture.heure}`
+                        : "Aucun départ disponible"}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReportModalOpen(false)}
+                  disabled={reportingAbsents}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50 dark:border-slate-600 dark:text-slate-200"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleConfirmReportAbsents()}
+                  disabled={loadingReportDeparture || reportingAbsents || !nextReportDeparture}
+                  className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  {reportingAbsents ? "Report..." : "Confirmer le report"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <nav className="no-print sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-gray-200 dark:border-slate-700 bg-white/95 dark:bg-slate-950/95 px-4 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.12)]">
           <div className="grid grid-cols-3 items-end gap-2 max-w-md mx-auto">
