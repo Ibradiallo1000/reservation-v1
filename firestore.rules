@@ -577,31 +577,65 @@ service cloud.firestore {
       let ledgerId = 'session_' + shiftId + '_accountant_validation';
       return /databases/$(database)/documents/companies/$(companyId)/accounts/$(accountId)/ledger/$(ledgerId);
     }
-    function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
-      let shiftId = request.resource.data.get('lastAccountantValidationShiftId', '');
-      let ledgerPath = agencyAccountantCashLedgerPath(companyId, accountId, shiftId);
-      let previousBalance = isCreate ? 0 : resource.data.get('balance', 0);
-      let nextBalance = request.resource.data.get('balance', 0);
-      let amount = nextBalance - previousBalance;
-      return isAuth()
-        && isComptable()
-        && userAgencyBelongsToCompany(companyId)
-        && accountId == 'agency_' + getUserAgencyId() + '_cash'
-        && request.resource.data.get('companyId', '') == companyId
-        && request.resource.data.get('agencyId', '') == getUserAgencyId()
-        && shiftId is string
-        && shiftId.size() > 0
-        && amount > 0
-        && amount < 100000000
-        && existsAfter(ledgerPath)
-        && getAfter(ledgerPath).data.get('companyId', '') == companyId
-        && getAfter(ledgerPath).data.get('agencyId', '') == getUserAgencyId()
-        && getAfter(ledgerPath).data.get('shiftId', '') == shiftId
-        && getAfter(ledgerPath).data.get('amount', 0) == amount
-        && getAfter(ledgerPath).data.get('source', '') == 'shift_accountant_validation'
-        && getAfter(ledgerPath).data.get('createdBy', '') == request.auth.uid
-        && getAfter(ledgerPath).data.get('status', '') == 'posted';
-    }
+function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
+  let shiftId = request.resource.data.get('lastAccountantValidationShiftId', '');
+  let previousBalance = isCreate ? 0 : resource.data.get('balance', 0);
+  let nextBalance = request.resource.data.get('balance', 0);
+  let amount = nextBalance - previousBalance;
+  let changed = isCreate
+    ? request.resource.data.keys()
+    : request.resource.data.diff(resource.data).affectedKeys();
+  let shiftPath = /databases/$(database)/documents/companies/$(companyId)/agences/$(getUserAgencyId())/shifts/$(shiftId);
+
+  return isAuth()
+    && isComptable()
+    && userAgencyBelongsToCompany(companyId)
+    && getUserAgencyId() != ''
+    && accountId == 'agency_' + getUserAgencyId() + '_cash'
+    && request.resource.data.get('companyId', companyId) == companyId
+    && request.resource.data.get('agencyId', getUserAgencyId()) == getUserAgencyId()
+    && shiftId is string
+    && shiftId.size() > 0
+    && request.resource.data.get('balance', 0) is number
+    && amount > 0
+    && amount < 100000000
+    && request.resource.data.get('updatedAt', null) == request.time
+    && existsAfter(shiftPath)
+    && getAfter(shiftPath).data.get('status', '') == 'validated_agency'
+    && getAfter(shiftPath).data.get('validationAudit', {}).get('receivedCashAmount', 0) == amount
+    && getAfter(shiftPath).data.get('validationAudit', {}).get('validatedBy', {}).get('id', '') == request.auth.uid
+    && (
+      (
+        isCreate
+        && changed.hasOnly([
+          'id',
+          'companyId',
+          'agencyId',
+          'type',
+          'label',
+          'balance',
+          'currency',
+          'includeInLiquidity',
+          'lastAccountantValidationShiftId',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.get('type', '') == 'cash'
+        && request.resource.data.get('currency', 'XOF') == 'XOF'
+        && request.resource.data.get('includeInLiquidity', false) == true
+        && request.resource.data.get('createdAt', null) == request.time
+      )
+      ||
+      (
+        !isCreate
+        && changed.hasOnly([
+          'balance',
+          'lastAccountantValidationShiftId',
+          'updatedAt'
+        ])
+      )
+    );
+}
     function canReadOwnAgencyCashAccount(companyId, accountId) {
       return resource != null
         && isAuth()
@@ -2567,6 +2601,15 @@ match /shiftReports/{reportId} {
             && request.resource.data.get('type', '') == 'cash'
             && request.resource.data.get('includeInLiquidity', false) == true
           );
+
+          allow update: if isComptable()
+  && userAgencyBelongsToCompany(companyId)
+  && accountId == 'agency_' + getUserAgencyId() + '_cash'
+  && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+    'balance',
+    'lastAccountantValidationShiftId',
+    'updatedAt'
+  ]);
         allow update: if courierCashLedgerAccountUpdateOk(companyId, accountId)
         || agencyAccountantRemittanceLedgerAccountUpdateOk(companyId, accountId)
         || (
@@ -2958,6 +3001,7 @@ match /shiftReports/{reportId} {
           );
         /* setDoc sur doc existant = update : idempotence (double envoi preuve / course). */
         /* Mise à jour staff : même tenant (companyId profil / token) ou rôles siège / opérateur digital rattaché à la compagnie. */
+        allow update: if canValidateGuichetPayment(companyId);
         allow update: if (isAuth() && (
             userCompanyId() == companyId
             || getUserRole() == 'admin_platforme'

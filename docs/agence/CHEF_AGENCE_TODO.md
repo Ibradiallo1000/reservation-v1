@@ -108,7 +108,6 @@ Matrice :
 * scan
 * cocher passager
 * cloturer embarquement
-* valider depart reel
 * imprimer manifeste
 
 Test :
@@ -281,7 +280,7 @@ Un role global ne peut pas etre cree par erreur.
 Reversible :
 Oui.
 
-## P1.7 - Fusionner Trajets et planification locale
+## P1.7 - Simplifier Trajets et horaires recurrents
 
 Objectif :
 Rendre les trajets comprehensibles pour un superviseur.
@@ -409,11 +408,37 @@ Le chantier doit commencer par une seule surface fonctionnelle, puis avancer par
 Objectif :
 Faire d'Activite le cockpit principal du Chef d'Agence.
 
+Statut :
+Audit Phase 1 VALIDE apres corrections documentaires obligatoires.
+
+Regles obligatoires Phase 1 :
+
+* Activite = synthese et supervision.
+* Postes = detail operationnel des services.
+* Finance = detail financier.
+* Aucune duplication massive des memes tableaux entre Activite, Postes, Finance et Departs.
+* Presence du personnel reportee a une future phase RH.
+* Departs operationnels lus uniquement via `departures` + `reservations`.
+* Ne pas utiliser `tripInstances`, `boardingClosures` ou `weeklyTrips` pour les widgets Depart de l'Activite.
+
 Taches :
 
 * P1.1 - Concevoir Activite comme cockpit principal
 * limiter cette phase aux informations du jour
 * ne pas refondre Postes, Departs, Finance ou Rapports dans cette phase
+* appliquer la matrice widgets Phase 1 comme reference unique
+
+Avancement :
+
+* [x] Corrections documentaires obligatoires appliquees.
+* [x] Audit Phase 1 marque comme valide.
+* [x] StaffPresenceCard et indicateurs de presence exclus de la Phase 1.
+* [x] Widgets Depart de l'Activite relies a `departures` + `reservations`.
+* [x] Alertes Depart du shell Chef d'Agence reliees a `departures`.
+* [x] Actions Finance renvoyees vers Finance, sans execution comptable dans Activite.
+* [x] Widgets Analyse/Premium/recommandations retires du cockpit Phase 1.
+* [x] Build Phase 1 OK.
+* [ ] Validation visuelle et metier par utilisateur sur donnees reelles.
 
 ## Phase 2 - Postes
 
@@ -467,7 +492,7 @@ Stabiliser les zones de configuration.
 Taches :
 
 * P1.6 - Simplifier Equipe
-* P1.7 - Fusionner Trajets et planification locale
+* P1.7 - Simplifier Trajets et horaires recurrents
 
 ## Phase 7 - Nettoyage legacy et optimisation
 

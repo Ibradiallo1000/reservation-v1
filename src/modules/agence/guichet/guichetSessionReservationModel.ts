@@ -56,29 +56,15 @@ export async function fetchReservationDocsForShiftSlot(
 ): Promise<QueryDocumentSnapshot<DocumentData>[]> {
   const lim = opts?.perQueryLimit ?? 500;
   const rRef = collection(db, `companies/${companyId}/agences/${agencyId}/reservations`);
+  
   const readForAudit = async (field: 'sessionId' | 'shiftId') => {
-    if (opts?.auditLabel) {
-      console.error(`[closeSession audit] BEFORE ${opts.auditLabel} reservations.${field} query`, {
-        path: `companies/${companyId}/agences/${agencyId}/reservations`,
-        type: 'getDocs',
-        where: { [field]: shiftId },
-        limit: lim,
-      });
-    }
     try {
       return await getDocs(query(rRef, where(field, '==', shiftId), limit(lim)));
     } catch (error) {
-      if (opts?.auditLabel) {
-        console.error(`[closeSession audit] FAILED ${opts.auditLabel} reservations.${field} query`, {
-          path: `companies/${companyId}/agences/${agencyId}/reservations`,
-          where: { [field]: shiftId },
-          limit: lim,
-          error,
-        });
-      }
       throw error;
     }
   };
+  
   const [a, b] = await Promise.all([
     readForAudit('sessionId'),
     readForAudit('shiftId'),
@@ -136,7 +122,7 @@ export function computeGuichetSessionTotals(reservations: ReservationLike[]): Gu
   return { totalReservations, tickets, totalSalesAmount, cashExpected, mmExpected };
 }
 
-/** Côté client / services : garde-fous à l’écriture. */
+/** Côté client / services : garde-fous à l'écriture. */
 export function assertReservationChannelInvariantsOnWrite(data: {
   paymentChannel?: string;
   agentId?: string;

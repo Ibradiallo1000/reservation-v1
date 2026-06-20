@@ -42,13 +42,11 @@ import {
   dailyStatsTimezoneFromAgencyData,
 } from '../aggregates/dailyStats';
 import { updateAgencyLiveStateOnSessionOpened, updateAgencyLiveStateOnSessionClosed, updateAgencyLiveStateOnSessionValidated } from '../aggregates/agencyLiveState';
-import { isConfirmedTransactionStatus } from '@/modules/compagnie/treasury/financialTransactions';
 import {
   PENDING_CASH_LEDGER_SYSTEM_VERSION,
   type PendingCashRemittanceStatus,
 } from '@/modules/agence/comptabilite/pendingCashSafety';
 import { writeComptaEncaissementInTransaction } from '@/modules/agence/comptabilite/comptaEncaissementsService';
-import type { FinancialTransactionDoc } from '@/modules/compagnie/treasury/types';
 import { fetchAgencyStaffProfile } from '@/modules/agence/services/agencyStaffProfileService';
 import { logAgentHistoryEvent } from '@/modules/agence/services/agentHistoryService';
 import {
@@ -72,7 +70,6 @@ type SessionHeadValidationHistoryLog = {
 
 const SHIFTS_COLLECTION = 'shifts';
 const RESERVATIONS_COLLECTION = 'reservations';
-const FINANCIAL_TRANSACTIONS_COLLECTION = 'financialTransactions';
 
 export type CashSession = {
   id: string;
@@ -118,7 +115,6 @@ type ReservationSessionRow = {
 
 type CloseSessionAmountAudit = CloseSessionTotals & {
   computedReservationAmount: number;
-  computedFinancialTransactionAmount: number;
   routeBreakdown: { route: string; tickets: number; amount: number }[];
 };
 
@@ -371,31 +367,12 @@ function isSoldReservationStatus(statut: unknown): boolean {
   return ['paye', 'payé', 'confirme', 'confirmé', 'valide', 'validé', 'paid'].includes(s);
 }
 
-function closeSessionAudit(step: string, details: Record<string, unknown>): void {
-  console.error(`[closeSession audit] BEFORE ${step}`, details);
-}
-
-function closeSessionAuditFailure(step: string, error: unknown, details: Record<string, unknown>): void {
-  console.error(`[closeSession audit] FAILED ${step}`, {
-    ...details,
-    error,
-  });
-}
-
 async function computeCloseSessionAmounts(params: {
   companyId: string;
   agencyId: string;
   shiftId: string;
   shiftAgentId: string;
 }): Promise<CloseSessionAmountAudit> {
-  const reservationsPath = `companies/${params.companyId}/agences/${params.agencyId}/reservations`;
-  closeSessionAudit('ledger reservation queries', {
-    path: reservationsPath,
-    operations: [
-      { type: 'getDocs', where: { sessionId: params.shiftId }, limit: 500 },
-      { type: 'getDocs', where: { shiftId: params.shiftId }, limit: 500 },
-    ],
-  });
   let mergedDocs;
   try {
     mergedDocs = await fetchReservationDocsForShiftSlot(
@@ -405,7 +382,6 @@ async function computeCloseSessionAmounts(params: {
       { perQueryLimit: 500, auditLabel: 'ledger totals' }
     );
   } catch (error) {
-    closeSessionAuditFailure('ledger reservation queries', error, { path: reservationsPath });
     throw error;
   }
   const mergedById = new Map<string, { id: string } & Omit<ReservationSessionRow, 'id'>>();
@@ -448,49 +424,6 @@ async function computeCloseSessionAmounts(params: {
     else totalCash += amount;
   }
 
-  let computedFinancialTransactionAmount = 0;
-  for (const r of reservations) {
-    const ledgerPath = `companies/${params.companyId}/${FINANCIAL_TRANSACTIONS_COLLECTION}`;
-    const ledgerFilters = {
-      type: 'payment_received',
-      reservationId: r.id,
-      agencyId: params.agencyId,
-      companyId: params.companyId,
-      limit: 25,
-    };
-    closeSessionAudit('financialTransactions query', {
-      path: ledgerPath,
-      type: 'getDocs',
-      where: ledgerFilters,
-    });
-    let txSnap;
-    try {
-      txSnap = await getDocs(
-        query(
-          collection(db, ledgerPath),
-          where('type', '==', 'payment_received'),
-          where('reservationId', '==', r.id),
-          where('agencyId', '==', params.agencyId),
-          where('companyId', '==', params.companyId),
-          limit(25)
-        )
-      );
-    } catch (error) {
-      closeSessionAuditFailure('financialTransactions query', error, {
-        path: ledgerPath,
-        where: ledgerFilters,
-      });
-      throw error;
-    }
-    for (const d of txSnap.docs) {
-      const row = d.data() as FinancialTransactionDoc;
-      if (!isConfirmedTransactionStatus(row.status)) continue;
-      const amt = Number(row.amount ?? 0);
-      if (amt <= 0) continue;
-      computedFinancialTransactionAmount += amt;
-    }
-  }
-
   const details = Object.entries(byRoute).map(([trajet, v]) => ({
     trajet,
     billets: v.billets,
@@ -511,7 +444,6 @@ async function computeCloseSessionAmounts(params: {
     tickets,
     details,
     computedReservationAmount,
-    computedFinancialTransactionAmount,
     routeBreakdown,
   };
 }
@@ -537,27 +469,14 @@ export async function closeSession(params: {
   const shiftsRef = collection(db, `${base}/${SHIFTS_COLLECTION}`);
   const shiftRef = doc(shiftsRef, params.shiftId);
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
-  closeSessionAudit('shift pre-read', {
-    path: `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
-    type: 'getDoc',
-  });
+
   let shiftPreSnap;
   try {
     shiftPreSnap = await getDoc(shiftRef);
   } catch (error) {
-    closeSessionAuditFailure('shift pre-read', error, {
-      path: `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
-    });
     throw error;
   }
   if (!shiftPreSnap.exists()) throw new Error('Poste introuvable.');
-  closeSessionAudit('shift pre-read identity check', {
-    path: `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
-    documentCompanyId: shiftPreSnap.data().companyId ?? null,
-    documentAgencyId: shiftPreSnap.data().agencyId ?? null,
-    expectedCompanyId: params.companyId,
-    expectedAgencyId: params.agencyId,
-  });
   const shiftAgentId = String((shiftPreSnap.data() as { userId?: string }).userId ?? '');
   if (!shiftAgentId) {
     throw new Error('Poste sans vendeur associé : impossible de calculer les totaux guichet.');
@@ -569,13 +488,6 @@ export async function closeSession(params: {
     shiftAgentId,
   });
   const expectedAmount = closingAmounts.computedReservationAmount;
-  console.error('[closeSession amount audit]', {
-    reservationsCount: closingAmounts.totalReservations,
-    ticketsCount: closingAmounts.tickets,
-    computedReservationAmount: closingAmounts.computedReservationAmount,
-    computedFinancialTransactionAmount: closingAmounts.computedFinancialTransactionAmount,
-    finalExpectedAmount: expectedAmount,
-  });
   const actualAmount = Number(params.actualAmount ?? expectedAmount);
   const ecart = actualAmount - expectedAmount;
   const hasDiscrepancy = Math.abs(ecart) > 0;
@@ -584,46 +496,11 @@ export async function closeSession(params: {
   const agencyRef = doc(db, `companies/${params.companyId}/agences/${params.agencyId}`);
   let shiftAgentName: string | null = null;
 
-  closeSessionAudit('close transaction', {
-    type: 'runTransaction',
-    reads: [
-      `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
-      `companies/${params.companyId}/agences/${params.agencyId}`,
-    ],
-    writes: [
-      `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`,
-      `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
-      `${base}/dailyStats/{agency-local-date}`,
-      `${base}/agencyLiveState/current`,
-    ],
-  });
   try {
     await runTransaction(db, async (tx) => {
-    closeSessionAudit('transaction reads', {
-      type: 'transaction.get',
-      paths: [
-        `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
-        `companies/${params.companyId}/agences/${params.agencyId}`,
-      ],
-    });
     const [shiftSnap, agencySnap] = await Promise.all([tx.get(shiftRef), tx.get(agencyRef)]);
     if (!shiftSnap.exists()) throw new Error('Poste introuvable.');
     const shiftData = shiftSnap.data() as Record<string, unknown>;
-    closeSessionAudit('transaction identity check', {
-      shift: {
-        companyId: shiftData.companyId ?? null,
-        agencyId: shiftData.agencyId ?? null,
-        userId: shiftData.userId ?? null,
-      },
-      agency: {
-        exists: agencySnap.exists(),
-        companyId: agencySnap.data()?.companyId ?? agencySnap.data()?.compagnieId ?? null,
-        agencyId: agencySnap.data()?.agencyId ?? agencySnap.id,
-      },
-      expectedCompanyId: params.companyId,
-      expectedAgencyId: params.agencyId,
-      authenticatedUserId: params.userId,
-    });
     shiftAgentName = (shiftData.userName ?? null) as string | null;
     const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
     const status = shiftData.status as string;
@@ -640,11 +517,6 @@ export async function closeSession(params: {
     const now = Timestamp.now();
     const startAt = (shiftData.startAt ?? shiftData.startTime ?? now) as Timestamp;
 
-    closeSessionAudit('transaction shiftReport merge', {
-      path: `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`,
-      type: 'transaction.set merge',
-      identityFields: { shiftId: params.shiftId, companyId: params.companyId, agencyId: params.agencyId },
-    });
     const shiftReportFields = stripUndefined({
       shiftId: params.shiftId,
       companyId: params.companyId,
@@ -682,16 +554,9 @@ export async function closeSession(params: {
       createdAt: shiftData.createdAt,
       updatedAt: serverTimestamp(),
     });
-    console.error('[closeSession amount audit] written shiftReport fields', shiftReportFields);
     tx.set(reportRef, shiftReportFields, { merge: true });
 
     const nextLegacyStatus = SHIFT_STATUS.CLOSED;
-    closeSessionAudit('transaction shift close update', {
-      path: `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
-      type: 'transaction.update',
-      identityFieldsPreserved: { companyId: shiftData.companyId ?? null, agencyId: shiftData.agencyId ?? null },
-      statusTransition: { from: shiftData.status ?? null, to: nextLegacyStatus },
-    });
     tx.update(shiftRef, stripUndefined({
       status: nextLegacyStatus,
       endAt: now,
@@ -716,17 +581,7 @@ export async function closeSession(params: {
     }));
 
     const statsDate = timestampToDailyStatsDateKey(now, agencyTz);
-    closeSessionAudit('transaction dailyStats merge', {
-      path: `${base}/dailyStats/${statsDate}`,
-      type: 'transaction.set merge',
-      identityFields: { companyId: params.companyId, agencyId: params.agencyId, date: statsDate },
-    });
     updateDailyStatsOnSessionClosed(tx, params.companyId, params.agencyId, statsDate, agencyTz);
-    closeSessionAudit('transaction agencyLiveState merge', {
-      path: `${base}/agencyLiveState/current`,
-      type: 'transaction.set merge',
-      identityFields: { companyId: params.companyId, agencyId: params.agencyId },
-    });
     updateAgencyLiveStateOnSessionClosed(tx, params.companyId, params.agencyId);
 
     resultTotals = {
@@ -739,26 +594,9 @@ export async function closeSession(params: {
     };
   });
   } catch (error) {
-    closeSessionAuditFailure('close transaction commit', error, {
-      reads: [
-        `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
-        `companies/${params.companyId}/agences/${params.agencyId}`,
-      ],
-      writes: [
-        `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`,
-        `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`,
-        `${base}/dailyStats/{agency-local-date}`,
-        `${base}/agencyLiveState/current`,
-      ],
-    });
     throw error;
   }
 
-  closeSessionAudit('agentHistory create (non-blocking)', {
-    path: `${base}/agentHistory/{autoId}`,
-    type: 'addDoc',
-    identityFields: { companyId: params.companyId, agencyId: params.agencyId },
-  });
   logAgentHistoryEvent({
     companyId: params.companyId,
     agencyId: params.agencyId,

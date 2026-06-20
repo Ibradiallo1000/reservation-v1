@@ -12,6 +12,15 @@ Le Chef d'Agence est un superviseur operationnel. Les ecrans doivent donc privil
 
 Les actions d'execution doivent rester dans les modules des roles concernes.
 
+Regle anti-duplication :
+
+* Activite = synthese et supervision.
+* Postes = detail operationnel des services.
+* Finance = detail financier.
+* Departs = detail operationnel des departs.
+
+Activite ne doit afficher que des compteurs, alertes et raccourcis. Les tableaux complets de shifts, sessions courrier, recettes, depenses, transferts, ecarts et manifestes appartiennent aux menus dedies.
+
 ## Activite
 
 ### Role UX
@@ -93,9 +102,9 @@ Contenu :
 
 Usage :
 
-* ouvrir le depart ;
+* ouvrir le detail du depart ;
 * consulter manifeste ;
-* valider depart reel si requis.
+* suivre les alertes et decisions de supervision.
 
 #### Activite finance
 
@@ -124,7 +133,8 @@ Types d'alertes attendues :
 * ecart caisse
 * session courrier avec difference
 * planning sans depart attendu
-* personnel absent ou inactif
+
+La presence du personnel est reportee a une future phase RH. Aucun widget de presence ne doit etre cree dans la Phase 1.
 
 Chaque alerte doit afficher :
 
@@ -151,6 +161,21 @@ Widgets a eviter :
 * indicateurs sans decision associee
 * doublons de montants deja affiches ailleurs
 * identifiants techniques
+* presence du personnel sans source RH stabilisee
+
+### Matrice widgets Phase 1
+
+| Widget | Source Firestore | Proprietaire metier | Action au clic |
+| ------ | ---------------- | ------------------- | -------------- |
+| Depenses en attente | `companies/{companyId}/expenses` | Comptable | Finance |
+| Departs en retard | `companies/{companyId}/agences/{agencyId}/departures` + `reservations` | Chef embarquement | Departs |
+| Postes ouverts | `companies/{companyId}/agences/{agencyId}/shifts` | Guichet | Postes |
+| Sessions courrier | `companies/{companyId}/agences/{agencyId}/courierSessions` | Agent courrier | Postes |
+| Ecarts financiers | `financialTransactions` + rapports de poste/session | Comptable | Finance |
+| Ventes guichet du jour | `reservations` + `shifts` | Guichet | Postes |
+| Ventes en ligne du jour | `reservations` | Operateur digital / reservation en ligne | Rapports |
+| Colis du jour | `shipments` + `courierSessions` | Agent courrier | Postes |
+| Activite recente | sources proprietaires de chaque domaine | Role proprietaire | Detail du domaine |
 
 ## Postes
 
@@ -273,8 +298,6 @@ Donnees :
 * date
 * heure
 * statut tripStatus
-* vehicule
-* chauffeur
 * capacite
 * passagers attendus
 * embarques
@@ -283,10 +306,10 @@ Donnees :
 
 Actions :
 
-* ouvrir le depart
+* ouvrir le detail du depart
 * consulter manifeste
 * imprimer
-* valider depart si statut metier l'exige
+* consulter les decisions de supervision associees
 
 ### Retards
 
@@ -302,7 +325,6 @@ Actions :
 
 * ouvrir detail
 * signaler
-* valider depart si pret
 
 ### Absents
 
@@ -524,4 +546,3 @@ Interdites :
 * modifier les donnees source
 * corriger un montant
 * changer un statut operationnel
-

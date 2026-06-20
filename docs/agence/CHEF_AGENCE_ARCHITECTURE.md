@@ -19,6 +19,14 @@ Son espace doit donc etre construit autour de trois principes :
 
 Le Chef d'Agence ne doit pas devenir un "super agent" capable de tout faire. Il doit disposer d'un cockpit de decision, pas d'une copie des interfaces metier des autres roles.
 
+Regle de separation des menus :
+
+* Activite = synthese et supervision.
+* Postes = detail operationnel des services.
+* Finance = detail financier.
+
+Le menu Activite ne doit pas dupliquer massivement les tableaux des menus Postes, Finance ou Departs. Il affiche des compteurs, alertes et raccourcis de supervision ; les details complets restent dans le menu proprietaire.
+
 Le Chef d'Agence ne realise pas les operations suivantes :
 
 * vente de billet
@@ -82,7 +90,6 @@ Ce menu doit repondre a la question :
 * departs a valider
 * depenses en attente chef
 * ecarts caisse ouverts
-* alertes personnel
 * activite recente
 
 ### Actions autorisees
@@ -103,6 +110,8 @@ Ce menu doit repondre a la question :
 * saisir une remise caisse
 * creer une ecriture de tresorerie
 * modifier directement un statut passager
+
+La presence du personnel est reportee a une future phase RH. Aucun faux indicateur de presence ne doit etre cree tant qu'une source RH stabilisee n'existe pas.
 
 ## Postes
 
@@ -169,8 +178,6 @@ Le Chef d'Agence consulte les departs, suit les retards, controle les manifestes
 * trajet
 * date
 * heure
-* vehicule si affecte
-* chauffeur si affecte
 * passagers attendus
 * passagers embarques
 * absents
@@ -313,9 +320,9 @@ Gerer le personnel local de l'agence.
 
 ### Objectif metier
 
-Superviser ou gerer le planning local selon l'organisation de la compagnie.
+Superviser les trajets et horaires visibles par l'agence selon l'organisation de la compagnie.
 
-Ce menu regroupe les trajets, horaires, departs recurrents et affectations utiles a l'agence.
+Ce menu regroupe les trajets, horaires et departs recurrents utiles a l'agence. Il ne gere pas la flotte, les chauffeurs ou les affectations operationnelles.
 
 ### Donnees affichees
 
@@ -324,7 +331,6 @@ Ce menu regroupe les trajets, horaires, departs recurrents et affectations utile
 * weeklyTrips
 * capacite
 * departs planifies
-* affectations vehicule si disponibles
 * taux de remplissage
 * trajets sous-remplis
 * incoherences de planning
@@ -343,3 +349,5 @@ Ce menu regroupe les trajets, horaires, departs recurrents et affectations utile
 * changer les horaires critiques sans validation metier
 * supprimer un trajet utilise par des reservations
 * modifier la capacite sans controle de reservations existantes
+* planifier un vehicule
+* affecter un chauffeur

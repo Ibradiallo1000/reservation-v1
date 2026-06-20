@@ -173,7 +173,7 @@ async function verifyGlobalReservationConsistency(
       try {
         paymentExists = (await getDoc(doc(db, 'companies', companyId, 'payments', paymentId))).exists();
       } catch (e) {
-        console.warn('[verifyGlobalReservationConsistency] Cannot access payment:', e);
+        // Permission error - skip silently
       }
     }
 
@@ -187,7 +187,7 @@ async function verifyGlobalReservationConsistency(
       ));
       financialTransactionExists = !txSnap.empty;
     } catch (e) {
-      console.debug('[verifyGlobalReservationConsistency] Cannot access financialTransactions (insufficient permissions, skipping):', e);
+      // Insufficient permissions - skip silently
       return;
     }
 
@@ -205,7 +205,7 @@ async function verifyGlobalReservationConsistency(
         updatedAt: serverTimestamp(),
       });
     } catch (e) {
-      console.warn('[verifyGlobalReservationConsistency] Cannot update reservation:', e);
+      // Non-critical update - skip silently
     }
     
     if (!isConsistent) {
@@ -217,15 +217,17 @@ async function verifyGlobalReservationConsistency(
       });
     }
   } catch (e) {
-    console.debug('[verifyGlobalReservationConsistency] Non-critical consistency check skipped:', e);
+    // Non-critical check - skip silently
   }
 }
 
-async function logGuichetFinanceAuthDebug(params: {
-  companyId: string;
-  agencyId: string;
-  userId: string;
-}): Promise<void> {
+async function logGuichetFinanceAuthDebug(
+  params: {
+    companyId: string;
+    agencyId: string;
+    userId: string;
+  }
+): Promise<void> {
   try {
     const currentUid = auth.currentUser?.uid ?? null;
     const token = auth.currentUser ? await auth.currentUser.getIdTokenResult(false) : null;
@@ -267,7 +269,7 @@ async function logGuichetFinanceAuthDebug(params: {
       },
     });
   } catch (e) {
-    console.warn('[GUICHET_FINANCE_DEBUG] unable to resolve auth debug:', e);
+    // Ignore diagnostics failures
   }
 }
 
@@ -440,7 +442,6 @@ async function validateAndConfirmGuichetPayment(
   const paymentData = paymentSnap.data();
   
   if (paymentData.status !== 'pending') {
-    console.log('[validateAndConfirmGuichetPayment] Payment already processed', { status: paymentData.status });
     return;
   }
   
@@ -453,11 +454,6 @@ async function validateAndConfirmGuichetPayment(
     validatedBy: currentUid,
     validatedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  });
-  
-  console.log('[validateAndConfirmGuichetPayment] Payment validated successfully', {
-    paymentId,
-    validatedBy: currentUid,
   });
 }
 
@@ -487,14 +483,6 @@ export async function closeGuichetSession(
   const sessionOwnerId = shiftData?.userId;
   const currentStatus = shiftData?.status;
   
-  console.log('[closeGuichetSession] Vérification session', {
-    sessionId,
-    sessionOwnerId,
-    currentStatus,
-    currentUid,
-    isOwner: sessionOwnerId === currentUid,
-  });
-  
   // Vérification que c'est bien ta session
   if (sessionOwnerId !== currentUid) {
     throw new Error('Vous ne pouvez clôturer que votre propre session');
@@ -511,8 +499,6 @@ export async function closeGuichetSession(
     status: 'closed',
     updatedAt: serverTimestamp(),
   });
-  
-  console.log('✅ Session clôturée avec succès', { sessionId });
 }
 
 /**
@@ -532,11 +518,6 @@ export async function createGuichetReservation(
   const currentUid = authenticatedUser.uid;
   
   validateUserMatch(params.userId, currentUid);
-  
-  console.log('[createGuichetReservation] Authentication validated', {
-    authenticatedUid: currentUid,
-    paramsUserId: params.userId,
-  });
   
   assertGuichetReservationCreateInput(params);
   await validateEscaleAgentReservation(
@@ -680,12 +661,6 @@ export async function createGuichetReservation(
   let isNewReservation = true;
   const operationPlans = await loadOperationPlanSettings();
 
-  console.log("🚀 START reservation creation", {
-    companyId: params.companyId,
-    agencyId: params.agencyId,
-    authenticatedAgent: currentUid,
-  });
-
   try {
     await runTransaction(db, async (tx) => {
       const idemSnap = await tx.get(idemRef);
@@ -772,8 +747,6 @@ export async function createGuichetReservation(
         applyGuichetCashSessionExpectedAmountPlan(tx, cashPlan);
       }
 
-
-      console.log("✅ RESERVATION CREATED");
       writeTicketGuichetActivityInTransaction(tx, {
         companyId: params.companyId,
         agencyId: params.agencyId,
@@ -815,26 +788,12 @@ export async function createGuichetReservation(
 
   if (montant > 0) {
     try {
-      console.log("[createGuichetReservation] Processing payment", {
-        reservationId: resultReservationId,
-        amount: montant,
-        authenticatedAgent: currentUid,
-      });
-
       const provider = params.paymentMethod === 'mobile_money' ? 'wave' : (params.paymentMethod === 'bank' ? 'wave' : 'cash');
       const paymentMethodLedger = params.paymentMethod === 'mobile_money'
         ? 'mobile_money'
         : params.paymentMethod === 'bank'
           ? 'card'
           : 'cash';
-      
-      console.warn('[FINANCE_WRITE_ATTEMPT]', {
-        target: 'createPayment',
-        companyId: params.companyId,
-        agencyId: params.agencyId,
-        uid: currentUid,
-        role: 'unknown',
-      });
 
       const paymentId = await createPayment({
         reservationId: resultReservationId,
@@ -845,24 +804,6 @@ export async function createGuichetReservation(
         channel: 'guichet',
         provider,
         status: 'pending',
-      }).catch((e) => {
-        console.error('[FINANCE_WRITE_FAILED]', {
-          target: 'createPayment',
-          path: `companies/${params.companyId}/payments/*` ,
-          companyId: params.companyId,
-          agencyId: params.agencyId,
-          uid: currentUid,
-          error: e,
-        });
-        throw e;
-      });
-
-      console.warn('[FINANCE_WRITE_ATTEMPT]', {
-        target: 'validateAndConfirmGuichetPayment',
-        companyId: params.companyId,
-        agencyId: params.agencyId,
-        uid: currentUid,
-        role: 'unknown',
       });
 
       await validateAndConfirmGuichetPayment(
@@ -873,38 +814,7 @@ export async function createGuichetReservation(
         montant,
         params.sessionId,
         currentUid
-      ).catch((e) => {
-        console.error('[FINANCE_WRITE_FAILED]', {
-          target: 'validateAndConfirmGuichetPayment',
-          path: `companies/${params.companyId}/payments/${paymentId}`,
-          companyId: params.companyId,
-          agencyId: params.agencyId,
-          uid: currentUid,
-          error: e,
-        });
-        throw e;
-      });
-
-      // NOTE PRODUCT/SECURITY:
-      // Do NOT patch `companies/.../reservations/{reservationId}` after payment validation.
-      // The validated payment is source of truth in `companies/{companyId}/payments/{paymentId}`.
-      // This late update is fragile under current Firestore permissions and breaks guichet sales.
-      console.warn('[FINANCE_WRITE_SKIPPED]', {
-        target: 'updateDoc(reservation.payment) after validateAndConfirmGuichetPayment()',
-        companyId: params.companyId,
-        agencyId: params.agencyId,
-        uid: currentUid,
-        path: `companies/${params.companyId}/agences/${params.agencyId}/reservations/${resultReservationId}`,
-      });
-
-      console.warn('[FINANCE_WRITE_ATTEMPT]', {
-        target: 'logAgentHistoryEvent',
-        companyId: params.companyId,
-        agencyId: params.agencyId,
-        uid: currentUid,
-        role: 'unknown',
-        path: `companies/${params.companyId}/*` ,
-      });
+      );
 
       await (async () => {
         logAgentHistoryEvent({
@@ -925,18 +835,10 @@ export async function createGuichetReservation(
           },
         });
       })().catch((e) => {
-        console.error('[FINANCE_WRITE_FAILED]', {
-          target: 'logAgentHistoryEvent',
-          path: `companies/${params.companyId}/agences/${params.agencyId}/*`,
-          companyId: params.companyId,
-          agencyId: params.agencyId,
-          uid: currentUid,
-          error: e,
-        });
+        console.error('[guichetReservationService] agent history event failed:', e);
         throw e;
       });
       
-      console.log('[createGuichetReservation] Payment completed successfully', { paymentId });
     } catch (err) {
       console.error('[guichetReservationService] financial side-effects failed:', err);
 
@@ -986,13 +888,12 @@ export async function createGuichetReservation(
     }).catch(() => {});
   }
 
-  void verifyReservationIntegrity(params.companyId, params.agencyId, resultReservationId).catch((err) => {
-    // Non-critical debug-only check: never block guichet sale flow.
-    console.warn('[guichetReservationService] verifyReservationIntegrity non-blocking failure:', err);
+  void verifyReservationIntegrity(params.companyId, params.agencyId, resultReservationId).catch(() => {
+    // Non-critical check - silent fail
   });
   
-  void verifyGlobalReservationConsistency(params.companyId, params.agencyId, resultReservationId).catch((err) => {
-    console.debug('[guichetReservationService] Non-critical consistency check warning:', err?.message);
+  void verifyGlobalReservationConsistency(params.companyId, params.agencyId, resultReservationId).catch(() => {
+    // Non-critical check - silent fail
   });
 
   return resultReservationId;

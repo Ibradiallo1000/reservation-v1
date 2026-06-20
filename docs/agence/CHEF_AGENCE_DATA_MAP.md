@@ -29,6 +29,13 @@ Exemples :
 * Courrier -> `courierSessions` + `shipments`
 * Finance -> `financialTransactions`
 
+Toute logique depart Chef d'Agence doit utiliser les memes sources que le module Embarquement afin de garantir une seule source de verite :
+
+* `departures`
+* `reservations`
+
+Le cockpit Chef d'Agence ne doit pas dependre de `tripInstances`, `boardingClosures` ou `weeklyTrips` pour les departs operationnels.
+
 # Activite
 
 ## Collections Firestore utilisees
@@ -37,7 +44,7 @@ Exemples :
 * `companies/{companyId}/agences/{agencyId}/courierSessions`
 * `companies/{companyId}/agences/{agencyId}/reservations`
 * `companies/{companyId}/logistics/data/shipments`
-* `companies/{companyId}/tripInstances`
+* `companies/{companyId}/agences/{agencyId}/departures`
 * `companies/{companyId}/expenses`
 * `companies/{companyId}/agences/{agencyId}/dailyStats/{date}`
 * `companies/{companyId}/agences/{agencyId}/agencyLiveState/current`
@@ -48,7 +55,7 @@ Exemples :
 * sessions courrier actives
 * reservations du jour
 * colis du jour
-* tripInstances origine et destination
+* departures du jour
 * depenses pending_manager
 * dailyStats du jour
 * agencyLiveState/current
@@ -60,13 +67,13 @@ Exemples :
 * postes : `shifts`
 * courrier : `courierSessions` et `shipments`
 * depenses : `expenses`
-* departs : `tripInstances` et `departures` selon niveau d'information
+* departs : `departures` + `reservations`
 
 ## Doublons
 
 * ventes recalculees depuis `reservations` alors que `dailyStats` existe.
 * postes actifs lus directement alors que `agencyLiveState` contient des compteurs.
-* depart du jour derive depuis `tripInstances` alors que l'embarquement utilise aussi `departures`.
+* depart du jour derive depuis `tripInstances`, `boardingClosures` ou `weeklyTrips` alors que l'embarquement utilise `departures`.
 
 ## Calculs redondants
 
@@ -80,6 +87,21 @@ Exemples :
 
 * anciens dashboards qui recalculent les statistiques hors cockpit.
 * listeners limites par `limit(...)` pouvant sous-compter une grosse agence.
+* indicateurs de presence personnel sans source RH stabilisee.
+
+## Matrice widgets Phase 1
+
+| Widget | Source Firestore | Proprietaire metier | Action au clic |
+| ------ | ---------------- | ------------------- | -------------- |
+| Depenses en attente | `companies/{companyId}/expenses` | Comptable | Finance |
+| Departs en retard | `companies/{companyId}/agences/{agencyId}/departures` + `reservations` | Chef embarquement | Departs |
+| Postes ouverts | `companies/{companyId}/agences/{agencyId}/shifts` | Guichet | Postes |
+| Sessions courrier | `companies/{companyId}/agences/{agencyId}/courierSessions` | Agent courrier | Postes |
+| Ecarts financiers | `companies/{companyId}/financialTransactions` + rapports de poste/session | Comptable | Finance |
+| Ventes guichet du jour | `reservations` + `shifts` | Guichet | Postes |
+| Ventes en ligne du jour | `reservations` | Operateur digital / reservation en ligne | Rapports |
+| Colis du jour | `shipments` + `courierSessions` | Agent courrier | Postes |
+| Activite recente | sources proprietaires de chaque domaine | Role proprietaire | Detail du domaine |
 
 # Postes
 
@@ -145,11 +167,9 @@ Exemples :
 * `companies/{companyId}/agences/{agencyId}/reservations`
 * `companies/{companyId}/agences/{agencyId}/boardingLogs`
 * `companies/{companyId}/agences/{agencyId}/boardingStats`
-* `companies/{companyId}/agences/{agencyId}/tripAssignments`
 * `companies/{companyId}/agences/{agencyId}/weeklyTrips`
 * `companies/{companyId}/tripInstances`
 * `companies/{companyId}/tripExecutions`
-* `companies/{companyId}/fleetVehicles`
 
 ## Documents utilises
 
@@ -158,10 +178,8 @@ Exemples :
 * logs embarquement
 * stats embarquement
 * weeklyTrip
-* tripAssignment
 * tripInstance
 * tripExecution
-* vehicule
 
 ## Sources de verite
 
@@ -170,14 +188,14 @@ Exemples :
 * planning recurrent : `weeklyTrips`
 * instance reseau : `tripInstances`
 * progression trajet : `tripExecutions`
-* affectation vehicule : `tripAssignments`
+
+Les affectations vehicule, chauffeurs et donnees flotte ne sont pas des sources de verite de l'espace Chef d'Agence. Elles appartiennent aux modules operationnels proprietaires et ne doivent pas etre reintroduites dans ce chantier.
 
 ## Doublons
 
 * `departures.tripStatus` et statuts metier dans `tripInstances`.
 * `boardingStats` et compteurs stockes dans `departures`.
 * `boardingClosures` si encore utilise dans certains anciens ecrans.
-* `tripAssignments` et donnees vehicule copiees dans `departures`.
 
 ## Calculs redondants
 
@@ -349,25 +367,20 @@ Exemples :
 
 * `companies/{companyId}/agences/{agencyId}/weeklyTrips`
 * `companies/{companyId}/tripInstances`
-* `companies/{companyId}/agences/{agencyId}/tripAssignments`
 * `companies/{companyId}/agences/{agencyId}/reservations`
 * `companies/{companyId}/agences/{agencyId}/departures`
-* `companies/{companyId}/fleetVehicles`
 
 ## Documents utilises
 
 * weeklyTrip
 * tripInstance
-* tripAssignment
 * reservations du trajet
 * departure
-* vehicule
 
 ## Sources de verite
 
 * planning recurrent : `weeklyTrips`
 * instance datee : `tripInstances`
-* affectation locale : `tripAssignments`
 * depart operationnel : `departures`
 * reservation capacite : `reservations`
 
@@ -375,7 +388,6 @@ Exemples :
 
 * trajet copie dans reservations, weeklyTrips, tripInstances et departures.
 * heure/date presentes dans plusieurs documents.
-* vehicule copie dans assignment et departure.
 
 ## Calculs redondants
 
