@@ -632,6 +632,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   }, [activeBoardingAssignment, fallbackBoardingAssignment]);
 
   const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [manifestReservations, setManifestReservations] = useState<Reservation[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMoreReservations, setIsLoadingMoreReservations] = useState(false);
   const [reservationTotalCount, setReservationTotalCount] = useState(0);
@@ -1656,6 +1657,53 @@ useEffect(() => {
     void loadReservationPage("reset");
   }, [loadReservationPage]);
 
+  /* ---------- Manifeste complet : source des statistiques et actions globales ---------- */
+  useEffect(() => {
+    if (!companyId || !selectedAgencyId || !selectedTrip?.departure || !selectedTrip.arrival || !selectedTrip.heure) {
+      setManifestReservations([]);
+      return;
+    }
+
+    const base = collection(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations`);
+    const q = query(base, where("date", "==", selectedDate));
+    const statusValues = new Set([...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"].map((s) => String(s).toLowerCase()));
+    const expectedDeparture = String(selectedTrip.departure).trim();
+    const expectedArrival = String(selectedTrip.arrival).trim();
+    const expectedHeure = String(selectedTrip.heure).trim();
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs
+          .map(mapReservationDoc)
+          .filter((r) => {
+            const statut = String(r.statut ?? "").trim().toLowerCase();
+            if (statut === INVALID_RESERVATION_STATUT || !statusValues.has(statut)) return false;
+
+            const heure = String(r.heure ?? "").trim();
+            if (heure !== expectedHeure) return false;
+
+            const departure = String((r as any).departure ?? r.depart ?? "").trim();
+            const arrival = String(r.arrival ?? r.arrivee ?? "").trim();
+            return departure === expectedDeparture && arrival === expectedArrival;
+          });
+
+        setManifestReservations(sortReservationsForBoarding(rows));
+      },
+      () => setManifestReservations([])
+    );
+
+    return () => unsub();
+  }, [
+    companyId,
+    selectedAgencyId,
+    selectedDate,
+    selectedTrip?.arrival,
+    selectedTrip?.departure,
+    selectedTrip?.heure,
+    sortReservationsForBoarding,
+  ]);
+
   /* ---------- Mise à jour Embarqué / Absent (verrou + concordance) ---------- */
   const patchLocalReservationBoardingStatus = useCallback(
     (reservationId: string, status: StatutEmbarquement) => {
@@ -2357,10 +2405,10 @@ useEffect(() => {
   const canOperateBoardingPassengers = canEditBoardingPassengers && !isDepartureDeparted;
   const finalAbsentReservations = useMemo(
     () =>
-      reservations.filter(
+      manifestReservations.filter(
         (r) => r.boardingStatus === "no_show" && r.statutEmbarquement === "absent"
       ),
-    [reservations]
+    [manifestReservations]
   );
   const reportableAbsentPassengersCount = useMemo(
     () => finalAbsentReservations.reduce((sum, r) => sum + Math.max(1, Number(r.seatsGo ?? 1) || 1), 0),
@@ -2523,7 +2571,7 @@ useEffect(() => {
       alert("Ce départ n'est pas ouvert.");
       return;
     }
-    if (reservations.length > 400) {
+    if (manifestReservations.length > 400) {
       alert("Trop de réservations à clôturer en une seule opération.");
       return;
     }
@@ -2542,7 +2590,7 @@ useEffect(() => {
         agencyId: selectedAgencyId,
         tripInstanceId: departureTripInstanceId,
         userId: uid,
-        reservations: reservations.map((r) => ({
+        reservations: manifestReservations.map((r) => ({
           id: getReservationDocId(r),
           reservationDocId: r.reservationDocId,
           firestoreId: r.firestoreId,
@@ -2591,7 +2639,7 @@ useEffect(() => {
     departureTripInstanceId,
     uid,
     departureWorkflow?.tripStatus,
-    reservations,
+    manifestReservations,
   ]);
 
   useEffect(() => {
@@ -2616,7 +2664,7 @@ useEffect(() => {
       ? `${selectedTrip.departure} → ${selectedTrip.arrival}`
       : "Trajet non renseigné";
     const dateLabel = selectedTrip ? `${selectedDate} • ${selectedTrip.heure}` : selectedDate;
-    const finalCounts = reservations.reduce(
+    const finalCounts = manifestReservations.reduce(
       (acc, r) => {
         const seats = r.seatsGo ?? 1;
         const status = getEffectiveBoardingStatus(r);
@@ -2685,7 +2733,7 @@ useEffect(() => {
     assign.chauffeur,
     selectedTrip,
     selectedDate,
-    reservations,
+    manifestReservations,
   ]);
 
   const handleOpenReportAbsents = useCallback(async () => {
@@ -3644,7 +3692,7 @@ useEffect(() => {
     );
   }, [reservations, searchTerm]);
   const loadedReservationsCount = reservations.length;
-  const passengerTotalDisplay = Math.max(reservationTotalCount, loadedReservationsCount);
+  const passengerTotalDisplay = Math.max(manifestReservations.length, reservationTotalCount, loadedReservationsCount);
   const assignmentStatusBadge = activeBoardingAssignment?.status ?? fallbackBoardingAssignment?.status ?? null;
 
   const markAllEmbarked = useCallback(async () => {
@@ -3653,7 +3701,7 @@ useEffect(() => {
       return;
     }
     /* Toute la liste du créneau (pas le filtre recherche) ; n’embarque que les encore « en attente ». */
-    const toEmbark = reservations.filter((r) => getEffectiveBoardingStatus(r) === "pending");
+    const toEmbark = manifestReservations.filter((r) => getEffectiveBoardingStatus(r) === "pending");
     if (toEmbark.length === 0) return;
     for (const r of toEmbark) {
       await updateStatut(getReservationDocId(r), "embarqué", undefined, { suppressAlert: true });
@@ -3662,11 +3710,11 @@ useEffect(() => {
       nomClient: `${toEmbark.length} réservation(s)`,
       statutEmbarquement: "embarqué",
     });
-  }, [reservations, updateStatut, showFastBoardSuccess, showFastBoardError]);
+  }, [manifestReservations, updateStatut, showFastBoardSuccess, showFastBoardError]);
 
   const totals = useMemo(() => {
     let totalRes = 0, totalSeats = 0, seatsEmbarques = 0, seatsAbsents = 0;
-    for (const r of reservations) {
+    for (const r of manifestReservations) {
       if (String(r.statut ?? "").toLowerCase() === INVALID_RESERVATION_STATUT) continue;
       const seats = r.seatsGo ?? 1;
       totalRes += 1;
@@ -3678,7 +3726,7 @@ useEffect(() => {
     /** Tous embarqués : toutes les places du manifeste sont en statut embarqué (aucun absent ni en attente). */
     const allPassengersEmbarked = totalSeats > 0 && seatsEmbarques === totalSeats;
     return { totalRes, totalSeats, seatsEmbarques, seatsAbsents, allPassengersEmbarked };
-  }, [reservations]);
+  }, [manifestReservations]);
 
   const humanDate = useMemo(() => {
     try {
