@@ -4,15 +4,17 @@ import React from "react";
 import { Navigate, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
-import { LayoutDashboard, ClipboardCheck } from "lucide-react";
+import { BarChart3, BusFront, Camera, List } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
 import type { Company } from "@/types/companyTypes";
 import { useOnlineStatus, useAgencyDarkMode, useAgencyKeyboardShortcuts } from "@/modules/agence/shared";
 
 const BOARDING_SECTIONS: NavSection[] = [
-  { label: "Départs planifiés", icon: LayoutDashboard, path: "/agence/boarding", end: true },
-  { label: "Scan / Liste", icon: ClipboardCheck, path: "/agence/boarding/scan" },
+  { label: "Départs", icon: BusFront, path: "/agence/boarding", end: true },
+  { label: "Scan", icon: Camera, path: "/agence/boarding/scan?view=scan" },
+  { label: "Liste", icon: List, path: "/agence/boarding/scan?view=liste" },
+  { label: "Rapports", icon: BarChart3, path: "/agence/boarding/scan?view=rapports" },
 ];
 
 const ALLOWED_BOARDING_ROLES = [
@@ -24,12 +26,14 @@ const ALLOWED_BOARDING_ROLES = [
   "admin_compagnie",
 ] as const;
 
+const BOARDING_THEME_STORAGE_KEY = "teliya:boarding-theme";
+
 const BoardingLayout: React.FC = () => {
   const { user, company, logout } = useAuth() as { user: { role?: string | string[]; displayName?: string; nom?: string; email?: string }; company: unknown; logout: () => Promise<void> };
   const navigate = useNavigate();
   const theme = useCompanyTheme(company as Company | null);
   const isOnline = useOnlineStatus();
-  const [darkMode] = useAgencyDarkMode();
+  const [darkMode] = useAgencyDarkMode(BOARDING_THEME_STORAGE_KEY);
 
   useAgencyKeyboardShortcuts(BOARDING_SECTIONS);
 
@@ -55,7 +59,7 @@ const BoardingLayout: React.FC = () => {
   };
 
   return (
-    <div className={darkMode ? "agency-dark" : ""}>
+    <div className={`${darkMode ? "agency-dark " : ""}min-h-screen bg-gray-50 dark:bg-slate-950`}>
       <InternalLayout
         sections={BOARDING_SECTIONS}
         role={rolesArr[0] || "chefEmbarquement"}
@@ -79,6 +83,9 @@ const BoardingLayout: React.FC = () => {
           </>
         }
         mainClassName="agency-content-transition"
+        hideTabsOnMobile
+        themeStorageKey={BOARDING_THEME_STORAGE_KEY}
+        binaryThemeToggle
       >
         <Outlet />
       </InternalLayout>

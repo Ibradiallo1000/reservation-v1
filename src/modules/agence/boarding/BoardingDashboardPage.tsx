@@ -1,20 +1,27 @@
 // src/modules/agence/boarding/BoardingDashboardPage.tsx
-// Départs planifiés (date sélectionnée) : tripAssignments (planifié / validé) = source unique pour l’embarquement.
+// Départs planifiés (date sélectionnée) : weeklyTrips = source planning, enrichie par tripAssignments/réservations.
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { collection, getDoc, getDocs, query, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState } from "@/ui";
-import { Plane } from "lucide-react";
+import { StandardLayoutWrapper, SectionCard, EmptyState } from "@/ui";
+import { BarChart3, BusFront, Camera, List } from "lucide-react";
 import { listBoardingTripAssignmentsForDate } from "@/modules/agence/planning/tripAssignmentService";
 import { vehicleRef } from "@/modules/compagnie/fleet/vehiclesService";
+import { buildTripInstanceId } from "@/modules/compagnie/tripInstances/tripInstanceService";
 import DatePicker from "react-datepicker";
 import { fr } from "date-fns/locale";
 import "react-datepicker/dist/react-datepicker.css";
 
-type WeeklyTripLite = { id: string; departure: string; arrival: string };
+type WeeklyTripLite = {
+  id: string;
+  departure: string;
+  arrival: string;
+  active: boolean;
+  horaires: Record<string, string[]>;
+};
 
 type DepartureCardItem = {
   agencyId: string;
@@ -24,9 +31,12 @@ type DepartureCardItem = {
   heure: string;
   date: string;
   vehicleId: string;
+  assignmentId?: string;
   assignmentStatus: "planned" | "validated";
   plate: string;
   tripId?: string;
+  tripInstanceId?: string;
+  tripStatus?: string;
   expectedPassengers: number;
   boardedPassengers: number;
   absentPassengers: number;
@@ -51,6 +61,33 @@ const normalizeKeyPart = (v: unknown) => {
 
 const toBusinessKey = (date: string, heure: string, departure: string, arrival: string) =>
   `${normalizeKeyPart(date)}|${normalizeKeyPart(heure)}|${normalizeKeyPart(departure)}|${normalizeKeyPart(arrival)}`;
+
+function weekdayFRFromISO(date: string): string {
+  return new Date(`${date}T12:00:00`).toLocaleDateString("fr-FR", { weekday: "long" }).toLowerCase();
+}
+
+function formatDateFrShort(date: string): string {
+  const [y, m, d] = date.split("-");
+  if (!y || !m || !d) return date;
+  return `${d}/${m}/${y}`;
+}
+
+function displayDepartureStatus(d: DepartureCardItem & { tripStatus?: string }): {
+  label: string;
+  className: string;
+} {
+  const status = String(d.tripStatus ?? "").trim().toUpperCase();
+  if (status === "OPEN") {
+    return { label: "Ouvert", className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200" };
+  }
+  if (status === "CLOSED") {
+    return { label: "Clôturé", className: "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100" };
+  }
+  if (status === "DEPARTED") {
+    return { label: "Départ confirmé", className: "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-100" };
+  }
+  return { label: "Planifié", className: "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100" };
+}
 
 const BoardingDashboardPage: React.FC = () => {
   const { user, company } = useAuth() as { user: { companyId?: string; agencyId?: string }; company: unknown };
@@ -100,7 +137,11 @@ const BoardingDashboardPage: React.FC = () => {
       });
     }
 
-    return Array.from(map.values()).sort((x, y) => (x.heure < y.heure ? -1 : x.heure > y.heure ? 1 : 0));
+    return Array.from(map.values()).sort((x, y) => {
+      const byTime = x.heure.localeCompare(y.heure);
+      if (byTime !== 0) return byTime;
+      return `${x.departure} ${x.arrival}`.localeCompare(`${y.departure} ${y.arrival}`);
+    });
   }, [departures]);
 
   useEffect(() => {
@@ -123,6 +164,7 @@ const BoardingDashboardPage: React.FC = () => {
         }));
 
         const agencyIds = userAgencyId ? [userAgencyId] : agencyList.map((a) => a.id);
+        const dayName = weekdayFRFromISO(selectedDate);
 
         type ReservationGroup = {
           key: string;
@@ -147,13 +189,64 @@ const BoardingDashboardPage: React.FC = () => {
           const tripsSnap = await getDocs(collection(db, `companies/${companyId}/agences/${agencyId}/weeklyTrips`));
           const tripById = new Map<string, WeeklyTripLite>();
           tripsSnap.docs.forEach((d) => {
-            const data = d.data() as { departure?: string; arrival?: string };
+            const data = d.data() as { departure?: string; arrival?: string; active?: boolean; horaires?: Record<string, unknown> };
             tripById.set(d.id, {
               id: d.id,
               departure: String(data.departure ?? ""),
               arrival: String(data.arrival ?? ""),
+              active: data.active === true,
+              horaires: Object.fromEntries(
+                Object.entries(data.horaires ?? {}).map(([day, values]) => [
+                  day,
+                  Array.isArray(values) ? values.map(String).filter(Boolean) : [],
+                ])
+              ),
             });
           });
+
+          for (const t of tripById.values()) {
+            if (!t.active) continue;
+            const departure = t.departure.trim();
+            const arrival = t.arrival.trim();
+            if (!departure || !arrival) continue;
+
+            const hours = [...(t.horaires[dayName] ?? [])].map(String).filter(Boolean).sort();
+            for (const heureRaw of hours) {
+              const heure = String(heureRaw).trim();
+              if (!heure) continue;
+
+              const key = toBusinessKey(selectedDate, heure, departure, arrival);
+              const tripInstanceId = buildTripInstanceId(t.id, selectedDate, heure);
+              let tripStatus: string | undefined;
+
+              try {
+                const departureSnap = await getDoc(
+                  doc(db, `companies/${companyId}/agences/${agencyId}/departures/${tripInstanceId}`)
+                );
+                if (departureSnap.exists()) {
+                  tripStatus = String((departureSnap.data() as { tripStatus?: string }).tripStatus ?? "") || undefined;
+                }
+              } catch {
+                tripStatus = undefined;
+              }
+
+              planningGroups.set(key, {
+                agencyId,
+                agencyNom,
+                departure,
+                arrival,
+                heure,
+                date: selectedDate,
+                vehicleId: "",
+                assignmentId: undefined,
+                assignmentStatus: "planned",
+                plate: "",
+                tripId: t.id,
+                tripInstanceId,
+                tripStatus,
+              });
+            }
+          }
 
           const assignments = await listBoardingTripAssignmentsForDate(companyId, agencyId, selectedDate);
           const plates = new Map<string, string>();
@@ -196,9 +289,11 @@ const BoardingDashboardPage: React.FC = () => {
                 heure,
                 date,
                 vehicleId: a.vehicleId ?? "",
+                assignmentId: (a as { id?: string }).id,
                 assignmentStatus,
                 plate: plates.get(a.vehicleId) ?? a.vehicleId ?? "",
                 tripId: a.tripId ?? "",
+                tripInstanceId: a.tripId ? buildTripInstanceId(a.tripId, date, heure) : undefined,
               });
             } else {
               planningGroups.set(key, {
@@ -206,8 +301,10 @@ const BoardingDashboardPage: React.FC = () => {
                 assignmentStatus:
                   existing.assignmentStatus === "validated" || assignmentStatus === "validated" ? "validated" : "planned",
                 vehicleId: existing.vehicleId || a.vehicleId || "",
+                assignmentId: existing.assignmentId || (a as { id?: string }).id,
                 plate: existing.plate || plates.get(a.vehicleId) || a.vehicleId || "",
                 tripId: existing.tripId || a.tripId || "",
+                tripInstanceId: existing.tripInstanceId || (a.tripId ? buildTripInstanceId(a.tripId, date, heure) : undefined),
               });
             }
           }
@@ -294,9 +391,11 @@ const BoardingDashboardPage: React.FC = () => {
             heure: r.heure,
             date: r.date,
             vehicleId: "",
+            assignmentId: undefined,
             assignmentStatus: "planned",
             plate: "",
             tripId: undefined,
+            tripInstanceId: undefined,
             expectedPassengers: r.expectedPassengers,
             boardedPassengers: r.boardedPassengers,
             absentPassengers: r.absentPassengers,
@@ -304,7 +403,11 @@ const BoardingDashboardPage: React.FC = () => {
           });
         }
 
-        const finalList = Array.from(finalMap.values()).sort((x, y) => (x.heure < y.heure ? -1 : x.heure > y.heure ? 1 : 0));
+        const finalList = Array.from(finalMap.values()).sort((x, y) => {
+          const byTime = x.heure.localeCompare(y.heure);
+          if (byTime !== 0) return byTime;
+          return `${x.departure} ${x.arrival}`.localeCompare(`${y.departure} ${y.arrival}`);
+        });
         setDepartures(finalList);
       } finally {
         setLoading(false);
@@ -315,85 +418,91 @@ const BoardingDashboardPage: React.FC = () => {
   const primaryColor = (company as { couleurPrimaire?: string })?.couleurPrimaire ?? "#0ea5e9";
 
   return (
-    <StandardLayoutWrapper maxWidthClass="max-w-4xl">
-      <PageHeader title="Départs du jour" subtitle="Suivez les départs à embarquer aujourd’hui." icon={Plane} />
-
-      <SectionCard title="Filtre date">
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            className="px-2 py-1 rounded border border-gray-200 dark:border-slate-600 text-sm"
-            onClick={() => {
-              const d = new Date(`${selectedDate}T00:00:00`);
-              d.setDate(d.getDate() - 1);
-              setSelectedDate(toLocalISO(d));
-            }}
-          >
-            ◀ Jour précédent
-          </button>
-
-          <input type="hidden" value={selectedDate} readOnly />
-
-          <DatePicker
-            selected={selectedDateObj}
-            onChange={(d: Date | null) => {
-              if (!d) return;
-              setSelectedDate(toLocalISO(d));
-            }}
-            dateFormat="dd/MM/yyyy"
-            locale={fr}
-            shouldCloseOnSelect
-            className="border rounded px-3 py-1 text-sm bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-600 w-[120px]"
-          />
-
-          <button
-            type="button"
-            className="px-2 py-1 rounded border border-gray-200 dark:border-slate-600 text-sm"
-            onClick={() => {
-              const d = new Date(`${selectedDate}T00:00:00`);
-              d.setDate(d.getDate() + 1);
-              setSelectedDate(toLocalISO(d));
-            }}
-          >
-            Jour suivant ▶
-          </button>
-
-          {selectedDate !== today && (
+    <StandardLayoutWrapper maxWidthClass="max-w-none">
+      <div className="w-full pb-24 sm:pb-0">
+        <div className="mb-3 flex flex-col gap-2 rounded-2xl border border-gray-200 bg-white px-3 py-3 shadow-sm dark:border-slate-700 dark:bg-slate-800 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+            Suivez les départs à embarquer aujourd’hui.
+          </p>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              className="px-2 py-1 rounded border border-emerald-200 text-emerald-700 dark:border-emerald-700 dark:text-emerald-300 text-sm"
-              onClick={() => setSelectedDate(today)}
+              className="grid h-9 w-9 place-items-center rounded-lg border border-gray-200 text-lg font-bold text-gray-700 hover:bg-gray-50 dark:border-slate-600 dark:text-gray-100 dark:hover:bg-slate-900"
+              aria-label="Jour précédent"
+              onClick={() => {
+                const d = new Date(`${selectedDate}T00:00:00`);
+                d.setDate(d.getDate() - 1);
+                setSelectedDate(toLocalISO(d));
+              }}
             >
-              Revenir à aujourd&apos;hui
+              ‹
             </button>
-          )}
+
+            <input type="hidden" value={selectedDate} readOnly />
+
+            <DatePicker
+              selected={selectedDateObj}
+              onChange={(d: Date | null) => {
+                if (!d) return;
+                setSelectedDate(toLocalISO(d));
+              }}
+              dateFormat="dd/MM/yyyy"
+              locale={fr}
+              shouldCloseOnSelect
+              className="h-9 w-[132px] rounded-lg border border-gray-200 bg-gray-50 px-3 text-center text-sm font-extrabold text-gray-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+            />
+
+            <button
+              type="button"
+              className="grid h-9 w-9 place-items-center rounded-lg border border-gray-200 text-lg font-bold text-gray-700 hover:bg-gray-50 dark:border-slate-600 dark:text-gray-100 dark:hover:bg-slate-900"
+              aria-label="Jour suivant"
+              onClick={() => {
+                const d = new Date(`${selectedDate}T00:00:00`);
+                d.setDate(d.getDate() + 1);
+                setSelectedDate(toLocalISO(d));
+              }}
+            >
+              ›
+            </button>
+
+            {selectedDate !== today && (
+              <button
+                type="button"
+                className="hidden h-9 items-center rounded-lg border border-emerald-200 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-950/30 sm:inline-flex"
+                onClick={() => setSelectedDate(today)}
+              >
+                Aujourd&apos;hui
+              </button>
+            )}
+          </div>
         </div>
-      </SectionCard>
 
       {loading ? (
         <p className="text-gray-600 dark:text-gray-200">Chargement…</p>
       ) : dedupedDepartures.length === 0 ? (
         <SectionCard title="Départs">
-          <EmptyState message="Aucun départ planifié pour cette date (tripAssignments). Planifiez un véhicule par créneau ; la logistique peut valider avant embarquement." />
+          <EmptyState message="Aucun départ configuré pour cette date." />
         </SectionCard>
       ) : (
-        <SectionCard title="Départs pour la date sélectionnée">
-          <div className="grid gap-3 sm:grid-cols-1 md:grid-cols-2">
-            {dedupedDepartures.map((d) => (
+        <section className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+          <div className="grid w-full grid-cols-1 justify-start gap-3 sm:grid-cols-[repeat(auto-fit,minmax(220px,280px))]">
+            {dedupedDepartures.map((d) => {
+              const status = displayDepartureStatus(d);
+              return (
               <div
                 key={`${d.date}|${d.heure}|${d.departure}|${d.arrival}`}
-                className="rounded-2xl border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 shadow-sm p-3 sm:p-4"
+                className="flex min-h-[142px] flex-col rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition-shadow hover:shadow-md dark:border-slate-600 dark:bg-slate-800"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-base sm:text-sm font-extrabold sm:font-semibold text-gray-900 dark:text-white truncate">
+                    <div className="truncate text-base font-extrabold text-gray-900 dark:text-white sm:text-sm">
                       {d.departure} → {d.arrival}
                     </div>
-                    <div className="text-xs font-medium text-gray-600 dark:text-gray-300 mt-1">
-                      {d.date.slice(5).split("-").reverse().join("/")} • {d.heure}
+                    <div className="mt-1 text-xs font-medium text-gray-600 dark:text-gray-300">
+                      {formatDateFrShort(d.date)} • {d.heure}
                     </div>
                     {d.plate && (
-                      <div className="hidden sm:block text-xs text-gray-600 dark:text-gray-300 mt-0.5">
+                      <div className="mt-0.5 truncate text-xs text-gray-600 dark:text-gray-300">
                         Véhicule : {d.plate}
                       </div>
                     )}
@@ -401,76 +510,95 @@ const BoardingDashboardPage: React.FC = () => {
 
                   <div className="shrink-0 flex flex-col items-end gap-2">
                     <span
-                      className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                        d.assignmentStatus === "validated"
-                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
-                          : "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100"
-                      }`}
+                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${status.className}`}
                     >
-                      {d.assignmentStatus === "validated" ? "Validé" : "Planifié"}
+                      {status.label}
                     </span>
-                    <div className="hidden sm:block text-[10px] text-gray-500 dark:text-gray-400">{d.agencyNom}</div>
                   </div>
                 </div>
 
-                <div className="mt-3 flex items-center justify-between rounded-xl bg-gray-50 dark:bg-slate-900/40 px-3 py-2 text-xs sm:hidden">
-                  <span className="font-semibold text-gray-700 dark:text-gray-200">
-                    {d.boardedPassengers} embarqués / {d.absentPassengers} absents
-                  </span>
-                  <span className="text-gray-500 dark:text-gray-400">{d.expectedPassengers} passagers</span>
+                <div className="mt-3 truncate text-xs font-semibold text-gray-600 dark:text-gray-300">
+                  {d.expectedPassengers} passagers · {d.boardedPassengers} embarqués · {d.absentPassengers} absent{d.absentPassengers > 1 ? "s" : ""}
                 </div>
 
-                <div className="mt-3 hidden sm:grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-lg bg-gray-50 dark:bg-slate-900/30 border border-gray-100 dark:border-slate-700 px-2 py-1">
-                    <div className="text-[10px] text-gray-500 dark:text-gray-400">Passagers</div>
-                    <div className="font-semibold">{d.expectedPassengers}</div>
-                  </div>
-
-                  <div className="rounded-lg bg-gray-50 dark:bg-slate-900/30 border border-gray-100 dark:border-slate-700 px-2 py-1">
-                    <div className="text-[10px] text-gray-500 dark:text-gray-400">Embarqués</div>
-                    <div className="font-semibold">{d.boardedPassengers}</div>
-                  </div>
-
-                  <div className="rounded-lg bg-gray-50 dark:bg-slate-900/30 border border-gray-100 dark:border-slate-700 px-2 py-1">
-                    <div className="text-[10px] text-gray-500 dark:text-gray-400">Absents</div>
-                    <div className="font-semibold">{d.absentPassengers}</div>
-                  </div>
-
-                  {d.remainingSeats != null && (
-                    <div className="rounded-lg bg-gray-50 dark:bg-slate-900/30 border border-gray-100 dark:border-slate-700 px-2 py-1">
-                      <div className="text-[10px] text-gray-500 dark:text-gray-400">Places restantes</div>
-                      <div className="font-semibold">{d.remainingSeats}</div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-3 flex items-center justify-end">
+                <div className="mt-auto pt-3">
                   <button
                     type="button"
                     onClick={() =>
-                      navigate("/agence/boarding/scan", {
+                      navigate("/agence/boarding/scan?view=scan", {
                         state: {
                           agencyId: d.agencyId,
                           date: d.date,
-                          trajet: `${d.departure} → ${d.arrival}`,
                           heure: d.heure,
                           departure: d.departure,
                           arrival: d.arrival,
+                          trajet: `${d.departure} → ${d.arrival}`,
+                          trajetId: d.tripId,
+                          tripId: d.tripId,
+                          weeklyTripId: d.tripId,
+                          tripInstanceId: d.tripInstanceId,
+                          assignmentId: d.assignmentId ?? null,
+                          vehicleId: d.vehicleId || undefined,
                           assignmentStatus: d.assignmentStatus,
                         },
                       })
                     }
-                    className="w-full sm:w-auto px-4 py-2.5 sm:py-2 rounded-xl sm:rounded-lg text-sm font-bold sm:font-semibold"
+                    className="w-full rounded-lg px-4 py-2 text-sm font-bold"
                     style={{ background: primaryColor, color: "white" }}
                   >
-                    Ouvrir l&apos;embarquement
+                    Ouvrir
                   </button>
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
-        </SectionCard>
+        </section>
       )}
+      </div>
+
+      <nav className="no-print sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-gray-200 dark:border-slate-700 bg-white/95 dark:bg-slate-950/95 px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.12)]">
+        <div className="grid grid-cols-4 items-center gap-1.5 max-w-md mx-auto">
+          <button
+            type="button"
+            className="flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl bg-red-50 text-[11px] font-bold text-red-700 dark:bg-red-950/30 dark:text-red-200"
+            aria-current="page"
+          >
+            <BusFront className="h-5 w-5" aria-hidden />
+            <span>Départs</span>
+          </button>
+          <button
+            type="button"
+            disabled
+            className="flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-bold text-gray-400 dark:text-gray-500"
+            aria-disabled="true"
+            title="Ouvrez un départ pour accéder au scan"
+          >
+            <Camera className="h-5 w-5" aria-hidden />
+            <span>Scan</span>
+          </button>
+          <button
+            type="button"
+            disabled
+            className="flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-bold text-gray-400 dark:text-gray-500"
+            aria-disabled="true"
+            title="Ouvrez un départ pour accéder à la liste"
+          >
+            <List className="h-5 w-5" aria-hidden />
+            <span>Liste</span>
+          </button>
+          <button
+            type="button"
+            disabled
+            className="flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-bold text-gray-400 dark:text-gray-500"
+            aria-disabled="true"
+            title="Ouvrez un départ pour accéder aux rapports"
+          >
+            <BarChart3 className="h-5 w-5" aria-hidden />
+            <span>Rapports</span>
+          </button>
+        </div>
+      </nav>
     </StandardLayoutWrapper>
   );
 };

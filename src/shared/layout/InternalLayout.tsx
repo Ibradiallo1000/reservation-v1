@@ -66,6 +66,12 @@ export interface InternalLayoutProps {
   children?: React.ReactNode;
   /** Optional class for main content area (e.g. agency-content-transition) */
   mainClassName?: string;
+  /** Hide horizontal tabs on mobile when a module provides its own bottom navigation */
+  hideTabsOnMobile?: boolean;
+  /** Optional theme key for a module-specific light/dark preference */
+  themeStorageKey?: string;
+  /** Use only light/dark instead of the global light/dark/system cycle */
+  binaryThemeToggle?: boolean;
 }
 
 /* ================================================================
@@ -104,6 +110,9 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
   banner,
   children,
   mainClassName,
+  hideTabsOnMobile = false,
+  themeStorageKey,
+  binaryThemeToggle = false,
 }) => {
   const primary = primaryColor || DESIGN.defaultTheme.primary;
   const secondary = secondaryColor || primary;
@@ -129,6 +138,9 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
       onLogout={onLogout}
       banner={banner}
       mainClassName={mainClassName}
+      hideTabsOnMobile={hideTabsOnMobile}
+      themeStorageKey={themeStorageKey}
+      binaryThemeToggle={binaryThemeToggle}
     >
       {children}
     </SidebarLayout>
@@ -148,6 +160,9 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
       onLogout={onLogout}
       banner={banner}
       mainClassName={mainClassName}
+      hideTabsOnMobile={hideTabsOnMobile}
+      themeStorageKey={themeStorageKey}
+      binaryThemeToggle={binaryThemeToggle}
     >
       {children}
     </TabsLayout>
@@ -173,6 +188,9 @@ interface LayoutVariantProps {
   banner?: React.ReactNode;
   children?: React.ReactNode;
   mainClassName?: string;
+  hideTabsOnMobile?: boolean;
+  themeStorageKey?: string;
+  binaryThemeToggle?: boolean;
 }
 
 /* ================================================================
@@ -188,15 +206,20 @@ function isSectionOrChildActive(pathname: string, section: { path: string; child
   });
 }
 
+function isNavPathActive(currentPath: string, targetPath: string, end?: boolean): boolean {
+  if (end) return currentPath === targetPath;
+  return currentPath === targetPath || (!targetPath.includes("?") && currentPath.startsWith(targetPath + "/"));
+}
+
 type ThemeMode = "light" | "dark" | "system";
 const THEME_STORAGE_KEY = "teliya:theme";
 
-function useTheme() {
+function useTheme(storageKey = THEME_STORAGE_KEY, binaryToggle = false) {
   const [theme, setThemeState] = useState<ThemeMode>(() => {
     try {
-      return (localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode) || "system";
+      return (localStorage.getItem(storageKey) as ThemeMode) || (binaryToggle ? "light" : "system");
     } catch {
-      return "system";
+      return binaryToggle ? "light" : "system";
     }
   });
   const prefersDark =
@@ -206,9 +229,10 @@ function useTheme() {
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
     try {
-      localStorage.setItem(THEME_STORAGE_KEY, theme);
+      localStorage.setItem(storageKey, theme);
+      window.dispatchEvent(new CustomEvent("teliya:theme-change", { detail: { key: storageKey, theme } }));
     } catch {}
-  }, [theme, isDark]);
+  }, [theme, isDark, storageKey]);
 
   useEffect(() => {
     const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -219,8 +243,35 @@ function useTheme() {
     return () => mq?.removeEventListener?.("change", handler);
   }, [theme]);
 
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== storageKey) return;
+      const nextTheme = event.newValue as ThemeMode | null;
+      if (nextTheme === "light" || nextTheme === "dark" || (!binaryToggle && nextTheme === "system")) {
+        setThemeState(nextTheme);
+      }
+    };
+    const onThemeChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ key?: string; theme?: ThemeMode }>).detail;
+      if (detail?.key !== storageKey) return;
+      if (detail.theme === "light" || detail.theme === "dark" || (!binaryToggle && detail.theme === "system")) {
+        setThemeState(detail.theme);
+      }
+    };
+
+    window.addEventListener?.("storage", onStorage);
+    window.addEventListener?.("teliya:theme-change", onThemeChange);
+    return () => {
+      window.removeEventListener?.("storage", onStorage);
+      window.removeEventListener?.("teliya:theme-change", onThemeChange);
+    };
+  }, [binaryToggle, storageKey]);
+
   const cycleTheme = () => {
-    setThemeState((t) => (t === "system" ? "dark" : t === "dark" ? "light" : "system"));
+    setThemeState((t) => {
+      if (binaryToggle) return t === "dark" ? "light" : "dark";
+      return t === "system" ? "dark" : t === "dark" ? "light" : "system";
+    });
   };
 
   return { theme, isDark, cycleTheme };
@@ -242,10 +293,12 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
   banner,
   children,
   mainClassName,
+  themeStorageKey,
+  binaryThemeToggle = false,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { isDark, cycleTheme } = useTheme();
+  const { isDark, cycleTheme } = useTheme(themeStorageKey, binaryThemeToggle);
   const location = useLocation();
   const pathname = location.pathname;
 
@@ -596,8 +649,13 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
   banner,
   children,
   mainClassName,
+  hideTabsOnMobile = false,
+  themeStorageKey,
+  binaryThemeToggle = false,
 }) => {
-  const { isDark, cycleTheme } = useTheme();
+  const location = useLocation();
+  const currentPath = `${location.pathname}${location.search}`;
+  const { isDark, cycleTheme } = useTheme(themeStorageKey, binaryThemeToggle);
   const chromeStyle = useMemo(
     () => buildAgencyChromeStyleVars(primary, secondary, isDark),
     [primary, secondary, isDark]
@@ -685,17 +743,22 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
 
         {/* Tab navigation */}
         <div
-          className="border-t border-gray-200/60 dark:border-slate-600/50"
+          className={cn(
+            "border-t border-gray-200/60 dark:border-slate-600/50",
+            hideTabsOnMobile && "hidden sm:block"
+          )}
           style={{ backgroundImage: "var(--agency-gradient-subheader)" }}
         >
           <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 md:px-6 py-2")}>
             <div className="flex flex-nowrap gap-2 overflow-x-auto overflow-y-hidden whitespace-nowrap pb-1 -mb-1 scrollbar-thin">
-              {sections.map(({ label, icon: Icon, path, badge, end }) => (
+              {sections.map(({ label, icon: Icon, path, badge, end }) => {
+                const active = isNavPathActive(currentPath, path, end);
+                return (
                 <NavLink
                   key={path}
                   to={path}
                   end={end}
-                  className={({ isActive: active }) =>
+                  className={() =>
                     cn(
                       "inline-flex shrink-0 items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition",
                       active
@@ -703,7 +766,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
                         : "text-gray-600 dark:text-slate-300 bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-600",
                     )
                   }
-                  style={({ isActive: active }) =>
+                  style={() =>
                     active
                       ? { background: `linear-gradient(135deg, ${primary}, ${secondary})` }
                       : undefined
@@ -717,7 +780,8 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
                     </span>
                   )}
                 </NavLink>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

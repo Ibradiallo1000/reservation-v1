@@ -11,46 +11,76 @@ import {
   BOARDING_SESSION_IN_USE_MSG,
   getVehicleCapacity,
   startBoardingSessionLock,
-  tripAssignmentDocId,
   type TripAssignmentDoc,
 } from "@/modules/agence/planning/tripAssignmentService";
 import { getOrCreateBoardingClientInstanceId, persistBoardingSlotSnapshot } from "@/modules/agence/embarquement/boardingSlotSnapshot";
 
+type BoardingScanRouteState = {
+  agencyId?: string;
+  date?: string;
+  heure?: string;
+  tripId?: string;
+  trajetId?: string;
+  weeklyTripId?: string;
+  tripInstanceId?: string;
+  departure?: string;
+  arrival?: string;
+  trajet?: string;
+  assignmentId?: string | null;
+  vehicleId?: string;
+  assignmentStatus?: "planned" | "validated";
+};
+
+const BOARDING_LAST_CONTEXT_KEY = "teliya:boarding-last-context";
+
+function readLastBoardingContext(): BoardingScanRouteState | null {
+  try {
+    const raw = window.sessionStorage.getItem(BOARDING_LAST_CONTEXT_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as BoardingScanRouteState;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastBoardingContext(state: BoardingScanRouteState | undefined): void {
+  if (!state?.agencyId || !state.date || !state.heure) return;
+  try {
+    window.sessionStorage.setItem(BOARDING_LAST_CONTEXT_KEY, JSON.stringify(state));
+  } catch {}
+}
+
 const BoardingScanPage: React.FC = () => {
   const { user } = useAuth() as { user: { companyId?: string; uid?: string } };
   const navigate = useNavigate();
-  const location = useLocation() as {
-    state?: {
-      agencyId?: string;
-      date?: string;
-      heure?: string;
-      tripId?: string;
-      departure?: string;
-      arrival?: string;
-      trajet?: string;
-      assignmentId?: string;
-      vehicleId?: string;
-    };
-  };
+  const location = useLocation() as { state?: BoardingScanRouteState };
+  const routeState = location.state;
+  const storedState = React.useMemo(() => readLastBoardingContext(), []);
+  const boardingState = routeState?.agencyId && routeState.date && routeState.heure ? routeState : storedState ?? routeState;
   const [vehicleCapacity, setVehicleCapacity] = useState<number | null>(null);
   const [resolved, setResolved] = useState(false);
   const [blocked, setBlocked] = useState<string | null>(null);
 
   const companyId = user?.companyId ?? null;
   const uid = user?.uid ?? null;
-  const agencyId = location.state?.agencyId ?? null;
-  const date = location.state?.date ?? null;
-  const heure = location.state?.heure ?? null;
-  const tripId = location.state?.tripId ?? undefined;
-  const assignmentId = location.state?.assignmentId ?? null;
-  const vehicleId = location.state?.vehicleId ?? null;
-  const departure = location.state?.departure ?? "";
-  const arrival = location.state?.arrival ?? "";
+  const agencyId = boardingState?.agencyId ?? null;
+  const date = boardingState?.date ?? null;
+  const heure = boardingState?.heure ?? null;
+  const tripId = boardingState?.tripId ?? undefined;
+  const assignmentId = boardingState?.assignmentId ?? null;
+  const vehicleId = boardingState?.vehicleId ?? null;
+  const departure = boardingState?.departure ?? "";
+  const arrival = boardingState?.arrival ?? "";
+  const trajet = boardingState?.trajet ?? "";
   const deniedLockAssignments = React.useRef<Set<string>>(new Set());
   const isPermissionDenied = (msg: string) => {
     const m = String(msg ?? "").toLowerCase();
     return m.includes("missing or insufficient permissions") || m.includes("permission_denied");
   };
+
+  useEffect(() => {
+    saveLastBoardingContext(routeState);
+  }, [routeState]);
 
   useEffect(() => {
     if (!companyId || !agencyId || !date || !heure) {
@@ -59,11 +89,17 @@ const BoardingScanPage: React.FC = () => {
       setResolved(true);
       return;
     }
-    const resolvedAssignmentId =
-      assignmentId || (tripId ? tripAssignmentDocId(tripId, date, heure) : null);
+    const resolvedAssignmentId = assignmentId ? String(assignmentId).trim() : null;
+    const hasRouteContext = Boolean((departure && arrival) || trajet);
 
     if (!resolvedAssignmentId) {
-      // Phase 1 : l’absence de véhicule assigné ne doit pas bloquer l’écran liste + scan.
+      if (!hasRouteContext) {
+        setBlocked("Affectation introuvable.");
+        setVehicleCapacity(null);
+        setResolved(true);
+        return;
+      }
+      // Un départ issu du planning hebdomadaire peut être embarqué sans affectation véhicule.
       setVehicleCapacity(null);
       setResolved(true);
       return;
@@ -164,7 +200,7 @@ const BoardingScanPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [companyId, agencyId, date, heure, tripId, assignmentId, uid, departure, arrival]);
+  }, [companyId, agencyId, date, heure, tripId, assignmentId, uid, departure, arrival, trajet]);
 
   if (!resolved) {
     return (
@@ -194,7 +230,7 @@ const BoardingScanPage: React.FC = () => {
   }
 
   const assignmentStatus =
-    (location.state as { assignmentStatus?: "planned" | "validated" } | undefined)?.assignmentStatus ?? "validated";
+    boardingState?.assignmentStatus ?? "validated";
 
   return (
     <AgenceEmbarquementPage

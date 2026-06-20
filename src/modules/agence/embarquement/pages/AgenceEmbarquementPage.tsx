@@ -8,19 +8,23 @@ import {
   doc,
   getDoc,
   getDocs,
+  getCountFromServer,
   runTransaction,
   serverTimestamp,
   Timestamp,
   writeBatch,
   updateDoc,
   limit as fsLimit,
+  startAfter,
+  type DocumentData,
+  type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import DatePicker from "react-datepicker";
 import { fr } from "date-fns/locale";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { createFleetMovementPayload, buildVehicleTransitionToInTransit } from "@/modules/agence/fleet/fleetStateMachine";
 import { canTransition } from "@/modules/agence/fleet/types";
@@ -95,7 +99,7 @@ import {
   type DepartureWorkflowDoc,
 } from "@/modules/agence/embarquement/services/departureWorkflowService";
 import { StandardLayoutWrapper } from "@/ui";
-import { BarChart3, Camera, List, CheckCircle, AlertTriangle } from "lucide-react";
+import { BarChart3, Camera, List, CheckCircle, AlertTriangle, BusFront } from "lucide-react";
 import {
   addToBoardingQueue,
   getUnsyncedBoardingQueue,
@@ -114,6 +118,7 @@ const SCAN_SAME_CODE_MIN_INTERVAL_MS = 400;
 const SCAN_SAME_RESERVATION_MIN_INTERVAL_MS = 350;
 /** Verrou UX après succès : ignore les callbacks QR répétés pendant le feedback. */
 const SCAN_SUCCESS_COOLDOWN_MS = 1500;
+const PASSENGER_PAGE_SIZE = 10;
 
 const DatePickerButton = React.forwardRef<HTMLButtonElement, { value?: string; onClick?: () => void }>(
   ({ value, onClick }, ref) => (
@@ -186,6 +191,21 @@ function getEffectiveBoardingStatus(r: { boardingStatus?: string; statutEmbarque
   if (s === "embarqué" || s === "embarque") return "boarded";
   if (s === "absent") return "no_show";
   return "pending";
+}
+
+function displayTripStatus(status?: string | null): string {
+  const normalized = String(status ?? "OPEN").trim().toUpperCase();
+  if (normalized === "CLOSED") return "Clôturé";
+  if (normalized === "DEPARTED") return "Départ confirmé";
+  return "Ouvert";
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "");
 }
 
 function mapReservationDoc(docSnap: { id: string; data: () => Record<string, any> }): Reservation {
@@ -504,12 +524,22 @@ interface AgenceEmbarquementPageProps {
   /** Statut tripAssignment affiché en badge (flux scan). Sinon déduit de la sélection locale. */
   boardingAssignmentStatus?: "planned" | "validated";
 }
+
+type BoardingView = "departs" | "scan" | "liste" | "rapports";
+
+function getBoardingViewFromSearch(search: string): Exclude<BoardingView, "departs"> | null {
+  const view = new URLSearchParams(search).get("view");
+  return view === "scan" || view === "liste" || view === "rapports" ? view : null;
+}
+
 const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
   vehicleCapacity = null,
   boardingAssignmentStatus: boardingAssignmentStatusProp,
 }) => {
   const { user, company } = useAuth() as any;
+  const navigate = useNavigate();
   const location = useLocation() as {
+    search: string;
     state?: {
       trajet?: string;
       date?: string;
@@ -603,6 +633,9 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
 
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMoreReservations, setIsLoadingMoreReservations] = useState(false);
+  const [reservationTotalCount, setReservationTotalCount] = useState(0);
+  const [hasMoreReservations, setHasMoreReservations] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [tripStatutMetier, setTripStatutMetier] = useState<TripInstanceStatutMetier | null>(null);
   const canEditBoardingPassengers = Boolean(
@@ -615,7 +648,7 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
 
   // Scan caméra
   const [scanOn, setScanOn] = useState(false);
-  const [mobileView, setMobileView] = useState<"scan" | "liste" | "rapports">("scan");
+  const [mobileView, setMobileView] = useState<BoardingView>("departs");
   const [vehicleInfoOpenMobile, setVehicleInfoOpenMobile] = useState(false);
   const [passengerListOpenMobile, setPassengerListOpenMobile] = useState(false);
   // Refactor UI Phase 1 (visible uniquement côté UI): prioriser liste+impression desktop/tablette, scan mobile.
@@ -632,16 +665,32 @@ const AgenceEmbarquementPage: React.FC<AgenceEmbarquementPageProps> = ({
     return () => mql.removeEventListener?.("change", onChange);
   }, []);
   useEffect(() => {
-    // Mobile: scan prioritaire.
-    // Desktop: liste prioritaire.
+    const viewFromUrl = getBoardingViewFromSearch(location.search);
+    if (viewFromUrl) {
+      setMobileView(viewFromUrl);
+      return;
+    }
+
+    // Mobile: scan prioritaire. Desktop: liste prioritaire.
     setMobileView(isMobile ? "scan" : "liste");
-  }, [isMobile]);
+  }, [isMobile, location.search]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const lastAlertRef = useRef<number>(0);
   /** Liste temps réel : lecture synchrone dans les callbacks scan sans recréer le décodeur à chaque snapshot. */
   const reservationsRef = useRef<Reservation[]>([]);
   reservationsRef.current = reservations;
+  const reservationPaginationRef = useRef<{
+    routeCursor: QueryDocumentSnapshot<DocumentData> | null;
+    tripCursor: QueryDocumentSnapshot<DocumentData> | null;
+    routeDone: boolean;
+    tripDone: boolean;
+  }>({
+    routeCursor: null,
+    tripCursor: null,
+    routeDone: false,
+    tripDone: false,
+  });
   const scanSameCodeRef = useRef<{ code: string; at: number } | null>(null);
   const scanSameResIdRef = useRef<Map<string, number>>(new Map());
   const scanCooldownUntilRef = useRef(0);
@@ -1438,66 +1487,174 @@ useEffect(() => {
     void load();
   }, [companyId, selectedAgencyId, selectedDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ---------- Écoute temps réel réservations (inclut EMBARQUÉ/ABSENT) ---------- */
-  /* When scanOn is true, skip listener to improve scan performance (< 500ms goal). */
+  const sortReservationsForBoarding = useCallback((items: Reservation[]) => {
+    return [...items].sort((a, b) => {
+      const aRep = !!(a.canal === "report" || (a as any).sourceReservationId);
+      const bRep = !!(b.canal === "report" || (b as any).sourceReservationId);
+      if (aRep !== bRep) return aRep ? -1 : 1;
+      return (a.nomClient || "").localeCompare(b.nomClient || "");
+    });
+  }, []);
+
+  const loadReservationPage = useCallback(
+    async (mode: "reset" | "more") => {
+      if (scanOn) return;
+      if (!companyId || !selectedAgencyId || !selectedTrip?.departure || !selectedTrip.arrival || !selectedTrip.heure) {
+        setReservations([]);
+        setReservationTotalCount(0);
+        setHasMoreReservations(false);
+        return;
+      }
+
+      const isReset = mode === "reset";
+      if (isReset) {
+        setIsLoading(true);
+        setReservations([]);
+        setReservationTotalCount(0);
+        setHasMoreReservations(false);
+        reservationPaginationRef.current = {
+          routeCursor: null,
+          tripCursor: null,
+          routeDone: false,
+          tripDone: false,
+        };
+      } else {
+        setIsLoadingMoreReservations(true);
+      }
+
+      const pagination = reservationPaginationRef.current;
+      const base = collection(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations`);
+      const statusValues = [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"] as any;
+
+      try {
+        if (isReset) {
+          const routeCountQuery = query(
+            base,
+            where("date", "==", selectedDate),
+            where("depart", "==", selectedTrip.departure),
+            where("arrivee", "==", selectedTrip.arrival),
+            where("heure", "==", selectedTrip.heure),
+            where("statut", "in", statusValues)
+          );
+          const tripCountQuery = selectedTrip.id
+            ? query(
+                base,
+                where("date", "==", selectedDate),
+                where("trajetId", "==", selectedTrip.id),
+                where("heure", "==", selectedTrip.heure),
+                where("statut", "in", statusValues)
+              )
+            : null;
+
+          const [routeCount, tripCount] = await Promise.all([
+            getCountFromServer(routeCountQuery).then((snap) => snap.data().count).catch(() => 0),
+            tripCountQuery ? getCountFromServer(tripCountQuery).then((snap) => snap.data().count).catch(() => 0) : 0,
+          ]);
+          setReservationTotalCount(Math.max(routeCount, tripCount));
+        }
+
+        const existing = new Map<string, Reservation>();
+        if (!isReset) {
+          for (const r of reservationsRef.current) existing.set(getReservationDocId(r), r);
+        }
+
+        const fetched: Reservation[] = [];
+        let remaining = PASSENGER_PAGE_SIZE;
+
+        if (!pagination.routeDone && remaining > 0) {
+          const qRoute = pagination.routeCursor
+            ? query(
+                base,
+                where("date", "==", selectedDate),
+                where("depart", "==", selectedTrip.departure),
+                where("arrivee", "==", selectedTrip.arrival),
+                where("heure", "==", selectedTrip.heure),
+                where("statut", "in", statusValues),
+                startAfter(pagination.routeCursor),
+                fsLimit(PASSENGER_PAGE_SIZE)
+              )
+            : query(
+                base,
+                where("date", "==", selectedDate),
+                where("depart", "==", selectedTrip.departure),
+                where("arrivee", "==", selectedTrip.arrival),
+                where("heure", "==", selectedTrip.heure),
+                where("statut", "in", statusValues),
+                fsLimit(PASSENGER_PAGE_SIZE)
+              );
+          const snap = await getDocs(qRoute);
+          pagination.routeCursor = snap.docs.at(-1) ?? pagination.routeCursor;
+          pagination.routeDone = snap.docs.length < PASSENGER_PAGE_SIZE;
+          for (const d of snap.docs) {
+            const r = mapReservationDoc(d);
+            const docId = getReservationDocId(r);
+            if (String(r.statut ?? "").toLowerCase() === INVALID_RESERVATION_STATUT || existing.has(docId)) continue;
+            existing.set(docId, r);
+            fetched.push(r);
+            remaining -= 1;
+            if (remaining <= 0) break;
+          }
+        }
+
+        if (selectedTrip.id && !pagination.tripDone && remaining > 0) {
+          const qTrip = pagination.tripCursor
+            ? query(
+                base,
+                where("date", "==", selectedDate),
+                where("trajetId", "==", selectedTrip.id),
+                where("heure", "==", selectedTrip.heure),
+                where("statut", "in", statusValues),
+                startAfter(pagination.tripCursor),
+                fsLimit(PASSENGER_PAGE_SIZE)
+              )
+            : query(
+                base,
+                where("date", "==", selectedDate),
+                where("trajetId", "==", selectedTrip.id),
+                where("heure", "==", selectedTrip.heure),
+                where("statut", "in", statusValues),
+                fsLimit(PASSENGER_PAGE_SIZE)
+              );
+          const snap = await getDocs(qTrip);
+          pagination.tripCursor = snap.docs.at(-1) ?? pagination.tripCursor;
+          pagination.tripDone = snap.docs.length < PASSENGER_PAGE_SIZE;
+          for (const d of snap.docs) {
+            const r = mapReservationDoc(d);
+            const docId = getReservationDocId(r);
+            if (String(r.statut ?? "").toLowerCase() === INVALID_RESERVATION_STATUT || existing.has(docId)) continue;
+            existing.set(docId, r);
+            fetched.push(r);
+            remaining -= 1;
+            if (remaining <= 0) break;
+          }
+        }
+
+        const nextList = sortReservationsForBoarding(Array.from(existing.values()));
+        setReservations(nextList);
+        setHasMoreReservations(!(pagination.routeDone && (!selectedTrip.id || pagination.tripDone)) && fetched.length > 0);
+      } finally {
+        setIsLoading(false);
+        setIsLoadingMoreReservations(false);
+      }
+    },
+    [
+      companyId,
+      scanOn,
+      selectedAgencyId,
+      selectedDate,
+      selectedTrip?.arrival,
+      selectedTrip?.departure,
+      selectedTrip?.heure,
+      selectedTrip?.id,
+      sortReservationsForBoarding,
+    ]
+  );
+
+  /* ---------- Lecture paginée réservations (inclut EMBARQUÉ/ABSENT) ---------- */
+  /* When scanOn is true, skip list loading to improve scan performance (< 500ms goal). */
   useEffect(() => {
-    if (scanOn) return;
-    if (!companyId || !selectedAgencyId) { setReservations([]); return; }
-    if (!selectedTrip || !selectedTrip.departure || !selectedTrip.arrival || !selectedTrip.heure) {
-      setReservations([]); return;
-    }
-
-    setIsLoading(true);
-    setReservations([]);
-
-    const base = collection(db, `companies/${companyId}/agences/${selectedAgencyId}/reservations`);
-    const unsubs: Array<() => void> = [];
-    const bag = new Map<string, Reservation>();
-
-    const commit = () => {
-      const dedup = new Map<string, Reservation>();
-      for (const r of bag.values()) dedup.set(getReservationDocId(r), r);
-      const list = Array.from(dedup.values()).sort((a, b) => {
-        const aRep = !!(a.canal === "report" || (a as any).sourceReservationId);
-        const bRep = !!(b.canal === "report" || (b as any).sourceReservationId);
-        if (aRep !== bRep) return aRep ? -1 : 1; // reports d'abord
-        return (a.nomClient || "").localeCompare(b.nomClient || "");
-      });
-      setReservations(list.filter((r) => String(r.statut ?? "").toLowerCase() !== INVALID_RESERVATION_STATUT));
-      setIsLoading(false);
-    };
-
-    const qAll = query(
-      base,
-      where("date", "==", selectedDate),
-      where("depart", "==", selectedTrip.departure),
-      where("arrivee", "==", selectedTrip.arrival),
-      where("heure", "==", selectedTrip.heure),
-      where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"] as any),
-      fsLimit(200)
-    );
-    unsubs.push(onSnapshot(qAll, (snap) => {
-      snap.docs.forEach((d) => bag.set(d.id, mapReservationDoc(d)));
-      commit();
-    }, () => setIsLoading(false)));
-
-    if (selectedTrip.id) {
-      const qById = query(
-        base,
-      where("date", "==", selectedDate),
-      where("trajetId", "==", selectedTrip.id),
-      where("heure", "==", selectedTrip.heure),
-      where("statut", "in", [...RESERVATION_STATUT_QUERY_BOARDABLE, "validé"] as any),
-      fsLimit(200)
-      );
-      unsubs.push(onSnapshot(qById, (snap) => {
-        snap.docs.forEach((d) => bag.set(d.id, mapReservationDoc(d)));
-        commit();
-      }, () => setIsLoading(false)));
-    }
-
-    return () => unsubs.forEach((u) => u());
-  }, [companyId, selectedAgencyId, selectedTrip, selectedDate, scanOn]);
+    void loadReservationPage("reset");
+  }, [loadReservationPage]);
 
   /* ---------- Mise à jour Embarqué / Absent (verrou + concordance) ---------- */
   const patchLocalReservationBoardingStatus = useCallback(
@@ -3474,14 +3631,20 @@ useEffect(() => {
 
   /* ---------- Filtre & Totaux ---------- */
   const filtered = useMemo(() => {
-    const t = searchTerm.toLowerCase().trim();
+    const t = normalizeSearchText(searchTerm.trim());
     if (!t) return reservations;
     return reservations.filter(
-      (r) =>
-        (r.nomClient || "").toLowerCase().includes(t) ||
-        (r.telephone || "").includes(searchTerm)
+      (r) => {
+        const name = normalizeSearchText(r.nomClient || "");
+        const phone = normalizeSearchText(r.telephone || "");
+        const reference = normalizeSearchText(r.referenceCode || r.id || "");
+
+        return name.includes(t) || phone.includes(t) || reference.includes(t);
+      }
     );
   }, [reservations, searchTerm]);
+  const loadedReservationsCount = reservations.length;
+  const passengerTotalDisplay = Math.max(reservationTotalCount, loadedReservationsCount);
   const assignmentStatusBadge = activeBoardingAssignment?.status ?? fallbackBoardingAssignment?.status ?? null;
 
   const markAllEmbarked = useCallback(async () => {
@@ -4047,7 +4210,7 @@ useEffect(() => {
                 </div>
                 {departureTripInstanceId && (
                   <div className="mt-0.5 inline-flex rounded-md border border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-gray-500 dark:text-gray-300">
-                    Départ : {departureWorkflow?.tripStatus ?? "OPEN"}
+                    Départ : {displayTripStatus(departureWorkflow?.tripStatus)}
                   </div>
                 )}
               </div>
@@ -4153,11 +4316,7 @@ useEffect(() => {
                 alt=""
                 className="h-10 w-10 rounded-full border border-gray-200 object-cover dark:border-slate-700"
               />
-            ) : (
-              <div className="grid h-10 w-10 place-items-center rounded-full border border-gray-200 bg-gray-100 text-sm font-extrabold text-gray-700 dark:border-slate-700 dark:bg-slate-900 dark:text-gray-100">
-                {printCompanyName.slice(0, 1).toUpperCase()}
-              </div>
-            )}
+            ) : null}
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-extrabold text-gray-950 dark:text-white">
                 {printCompanyName}
@@ -4170,12 +4329,12 @@ useEffect(() => {
               </div>
             </div>
             <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-extrabold text-slate-700 dark:bg-slate-700 dark:text-slate-100">
-              {isDepartureDeparted ? "DEPARTED" : departureWorkflow?.tripStatus ?? "OPEN"}
+              {displayTripStatus(departureWorkflow?.tripStatus)}
             </span>
           </div>
         </div>
 
-        <div className="no-print hidden sm:flex flex-nowrap overflow-x-auto gap-2">
+        <div className="no-print hidden flex-nowrap overflow-x-auto gap-2">
           <button
             type="button"
             onClick={() => setMobileView("scan")}
@@ -4202,7 +4361,7 @@ useEffect(() => {
           </button>
         </div>
 
-        <div className="no-print flex flex-nowrap items-center gap-2 overflow-x-auto">
+        <div className={`no-print ${mobileView === "departs" ? "flex" : "hidden"} sm:flex flex-nowrap items-center gap-2 overflow-x-auto`}>
           {agencies.length > 1 && !userAgencyId && (
             <select
               className="shrink-0 text-xs border border-gray-200 dark:border-slate-600 rounded-lg px-2 py-1.5 bg-white dark:bg-slate-800 max-w-[55vw]"
@@ -4221,7 +4380,7 @@ useEffect(() => {
 
         {((!hideTripPickerStrip || !selectedAgencyId || departureRows.length === 0) ||
           (selectedTrip && !hasOperationalAssignment)) && (
-          <div className="no-print bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-600 p-2">
+          <div className={`no-print ${mobileView === "departs" ? "block" : "hidden"} sm:block bg-white dark:bg-slate-800 rounded-2xl sm:rounded-lg border border-gray-200 dark:border-slate-600 p-2`}>
             {(!hideTripPickerStrip || !selectedAgencyId || departureRows.length === 0) && (
               <div className="flex flex-nowrap overflow-x-auto gap-2">
                 {!selectedAgencyId ? (
@@ -4241,7 +4400,7 @@ useEffect(() => {
           </div>
         )}
 
-        <div className={`no-print ${mobileView === "rapports" ? "block" : "hidden"} sm:block rounded-2xl sm:rounded-lg border border-gray-200 dark:border-slate-600 px-3 sm:px-2 py-3 sm:py-2 bg-white sm:bg-gray-50 dark:bg-slate-800`}>
+        <div className={`no-print ${mobileView === "rapports" ? "block" : "hidden"} rounded-2xl sm:rounded-lg border border-gray-200 dark:border-slate-600 px-3 sm:px-2 py-3 sm:py-2 bg-white sm:bg-gray-50 dark:bg-slate-800`}>
           <div className="flex flex-col gap-2">
             <button
               type="button"
@@ -4345,7 +4504,35 @@ useEffect(() => {
           )}
         </div>
 
-        <div className={`no-print ${mobileView === "rapports" ? "flex" : "hidden"} sm:flex flex-nowrap overflow-x-auto gap-1.5 text-[11px] font-medium`}>
+        <div className={`no-print ${mobileView === "rapports" ? "grid" : "hidden"} sm:hidden grid-cols-2 gap-2`}>
+          <div className="rounded-2xl border border-gray-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
+            <div className="text-xs text-gray-500 dark:text-gray-300">Réservations</div>
+            <div className="text-lg font-extrabold text-gray-950 dark:text-white">{totals.totalRes}</div>
+          </div>
+          <div className="rounded-2xl border border-gray-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
+            <div className="text-xs text-gray-500 dark:text-gray-300">Places</div>
+            <div className="text-lg font-extrabold text-gray-950 dark:text-white">{totals.totalSeats}</div>
+          </div>
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 dark:border-emerald-800 dark:bg-emerald-950/30">
+            <div className="text-xs text-emerald-700 dark:text-emerald-200">Embarqués</div>
+            <div className="text-lg font-extrabold text-emerald-900 dark:text-emerald-100">{totals.seatsEmbarques}</div>
+          </div>
+          <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 dark:border-red-800 dark:bg-red-950/30">
+            <div className="text-xs text-red-700 dark:text-red-200">Absents</div>
+            <div className="text-lg font-extrabold text-red-900 dark:text-red-100">{totals.seatsAbsents}</div>
+          </div>
+          <div className="col-span-2 rounded-2xl border border-gray-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
+            <div className="text-xs text-gray-500 dark:text-gray-300">Statut départ</div>
+            <div className="text-sm font-extrabold text-gray-950 dark:text-white">
+              {displayTripStatus(departureWorkflow?.tripStatus)}
+            </div>
+            {reportFeedback && (
+              <div className="mt-1 text-xs font-semibold text-indigo-700 dark:text-indigo-200">{reportFeedback}</div>
+            )}
+          </div>
+        </div>
+
+        <div className="no-print hidden sm:flex flex-nowrap overflow-x-auto gap-1.5 text-[11px] font-medium">
           <span className="shrink-0 px-2 py-1 rounded bg-blue-600 text-white whitespace-nowrap">
             R {totals.totalRes}
           </span>
@@ -4372,44 +4559,51 @@ useEffect(() => {
                 <div className="text-base font-bold text-red-900 dark:text-red-100">{totals.seatsAbsents}</div>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setScanOn((v) => !v)}
-              className={`w-full inline-flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-base font-extrabold min-h-[56px] whitespace-nowrap shadow-sm ${
-                scanOn ? "bg-emerald-600 text-white" : "text-white"
-              }`}
-              style={!scanOn ? { background: primary } : undefined}
-              disabled={!selectedTrip || !selectedAgencyId || isDepartureDeparted}
-            >
-              <Camera className="h-5 w-5" aria-hidden />
-              {scanOn ? "Scan en cours..." : "Scanner un billet"}
-            </button>
-            {scanOn && (
-              <video
-                ref={videoRef}
-                className="w-full aspect-video bg-black rounded-lg overflow-hidden"
-                muted
-                playsInline
-                autoPlay
-              />
+            {isDepartureDeparted ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-center text-sm font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">
+                Départ confirmé — scan désactivé
+              </div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setScanOn((v) => !v)}
+                  className={`w-full inline-flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-base font-extrabold min-h-[56px] whitespace-nowrap shadow-sm ${
+                    scanOn ? "bg-emerald-600 text-white" : "text-white"
+                  }`}
+                  style={!scanOn ? { background: primary } : undefined}
+                  disabled={!selectedTrip || !selectedAgencyId}
+                >
+                  <Camera className="h-5 w-5" aria-hidden />
+                  {scanOn ? "Scan en cours..." : "Scanner un billet"}
+                </button>
+                {scanOn && (
+                  <video
+                    ref={videoRef}
+                    className="w-full aspect-video bg-black rounded-lg overflow-hidden"
+                    muted
+                    playsInline
+                    autoPlay
+                  />
+                )}
+                <form onSubmit={submitManual} className="flex flex-nowrap gap-2 rounded-2xl border border-gray-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-800">
+                  <input
+                    value={scanCode}
+                    onChange={(e) => setScanCode(e.target.value)}
+                    placeholder="Entrer un code billet"
+                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 dark:border-slate-600 rounded-xl text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
+                  />
+                  <button
+                    type="submit"
+                    className="shrink-0 px-3 py-2 rounded-lg text-white text-sm"
+                    style={{ background: primary }}
+                    disabled={(!selectedAgencyId && !userAgencyId) || !canOperateBoardingPassengers}
+                  >
+                    Valider
+                  </button>
+                </form>
+              </>
             )}
-            <form onSubmit={submitManual} className="flex flex-nowrap gap-2 rounded-2xl border border-gray-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-800">
-              <input
-                value={scanCode}
-                onChange={(e) => setScanCode(e.target.value)}
-                placeholder="Entrer un code billet"
-                disabled={isDepartureDeparted}
-                className="flex-1 min-w-0 px-3 py-2 border border-gray-200 dark:border-slate-600 rounded-xl text-sm bg-white dark:bg-slate-900 text-gray-900 dark:text-white"
-              />
-              <button
-                type="submit"
-                className="shrink-0 px-3 py-2 rounded-lg text-white text-sm"
-                style={{ background: primary }}
-                disabled={(!selectedAgencyId && !userAgencyId) || !canOperateBoardingPassengers}
-              >
-                Valider
-              </button>
-            </form>
           </div>
         )}
 
@@ -4504,7 +4698,7 @@ useEffect(() => {
                   return (
                     <article
                       key={getReservationDocId(r)}
-                      className="rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 shadow-sm"
+                      className="rounded-2xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2.5 shadow-sm"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
@@ -4525,28 +4719,28 @@ useEffect(() => {
                         </span>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                        <div className="rounded-md bg-gray-50 dark:bg-slate-900 px-2 py-1.5">
-                          <div className="text-gray-500 dark:text-gray-400">Référence</div>
+                      <div className="mt-2 grid grid-cols-3 gap-1.5 text-[11px]">
+                        <div className="rounded-lg bg-gray-50 dark:bg-slate-900 px-2 py-1">
+                          <div className="text-gray-500 dark:text-gray-400">Réf.</div>
                           <div className="truncate font-semibold text-gray-900 dark:text-white">{r.referenceCode || r.id}</div>
                         </div>
-                        <div className="rounded-md bg-gray-50 dark:bg-slate-900 px-2 py-1.5">
+                        <div className="rounded-lg bg-gray-50 dark:bg-slate-900 px-2 py-1">
                           <div className="text-gray-500 dark:text-gray-400">Canal</div>
-                          <div className="font-semibold text-gray-900 dark:text-white">{formatReservationCanal(r.canal)}</div>
+                          <div className="truncate font-semibold text-gray-900 dark:text-white">{formatReservationCanal(r.canal)}</div>
                         </div>
-                        <div className="rounded-md bg-gray-50 dark:bg-slate-900 px-2 py-1.5">
+                        <div className="rounded-lg bg-gray-50 dark:bg-slate-900 px-2 py-1">
                           <div className="text-gray-500 dark:text-gray-400">Places</div>
                           <div className="font-semibold text-gray-900 dark:text-white">{seats}</div>
                         </div>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div className="mt-2 grid grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={() => {
                             updateStatut(getReservationDocId(r), embarked ? "en_attente" : "embarqué");
                           }}
-                          className={`min-h-[44px] rounded-lg border px-3 py-2 text-sm font-bold ${
+                          className={`min-h-[38px] rounded-xl border px-3 py-1.5 text-sm font-bold ${
                             embarked
                               ? "border-emerald-500 bg-emerald-600 text-white"
                               : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100"
@@ -4560,7 +4754,7 @@ useEffect(() => {
                           onClick={() => {
                             updateStatut(getReservationDocId(r), absent ? "en_attente" : "absent");
                           }}
-                          className={`min-h-[44px] rounded-lg border px-3 py-2 text-sm font-bold ${
+                          className={`min-h-[38px] rounded-xl border px-3 py-1.5 text-sm font-bold ${
                             absent
                               ? "border-red-500 bg-red-600 text-white"
                               : "border-red-300 bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-100"
@@ -4667,10 +4861,26 @@ useEffect(() => {
                 </tbody>
               </table>
             </div>
+            <div className={`${passengerListOpenMobile ? "flex" : "hidden"} sm:flex flex-col gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between`}>
+              <span className="text-xs font-semibold text-gray-600 dark:text-gray-200">
+                {loadedReservationsCount} sur {passengerTotalDisplay} passagers affichés
+              </span>
+              {hasMoreReservations && (
+                <button
+                  type="button"
+                  onClick={() => void loadReservationPage("more")}
+                  className="inline-flex min-h-[36px] items-center justify-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-bold text-gray-800 shadow-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:hover:bg-slate-700"
+                  disabled={isLoading || isLoadingMoreReservations}
+                >
+                  {isLoadingMoreReservations ? "Chargement..." : "Voir plus"}
+                </button>
+              )}
+            </div>
           </div>
         )}
 
-        <div className={`no-print ${mobileView === "rapports" ? "block" : "hidden"} sm:block rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 p-2`}>
+        {canLaunchTripAfterAgencyValidation && (
+          <div className={`no-print ${mobileView === "rapports" ? "block" : "hidden"} rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 p-2`}>
             <button
               type="button"
               onClick={() => void handleBusParti()}
@@ -4690,13 +4900,12 @@ useEffect(() => {
                 ? "Enregistrement..."
                 : originDepartureDone
                   ? "Trajet lancé"
-                  : !canLaunchTripAfterAgencyValidation
-                    ? "Info: validation chef agence non requise en phase 1"
-                    : tripStatutMetier !== "validation_agence_requise"
+                  : tripStatutMetier !== "validation_agence_requise"
                       ? "Terminer embarquement puis valider agence"
                       : "Valider et lancer le trajet"}
             </button>
           </div>
+        )}
 
         {reportModalOpen && (
           <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4">
@@ -4752,25 +4961,25 @@ useEffect(() => {
           </div>
         )}
 
-        <nav className="no-print sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-gray-200 dark:border-slate-700 bg-white/95 dark:bg-slate-950/95 px-4 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.12)]">
-          <div className="grid grid-cols-3 items-center gap-2 max-w-md mx-auto">
+        <nav className="no-print sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-gray-200 dark:border-slate-700 bg-white/95 dark:bg-slate-950/95 px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.12)]">
+          <div className="grid grid-cols-4 items-center gap-1.5 max-w-md mx-auto">
             <button
               type="button"
-              onClick={() => setMobileView("liste")}
-              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-xs font-bold ${
-                mobileView === "liste"
+              onClick={() => navigate("/agence/boarding")}
+              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-bold ${
+                mobileView === "departs"
                   ? "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-200"
                   : "text-gray-600 dark:text-gray-300"
               }`}
-              aria-current={mobileView === "liste" ? "page" : undefined}
+              aria-current={mobileView === "departs" ? "page" : undefined}
             >
-              <List className="h-5 w-5" aria-hidden />
-              <span>Liste</span>
+              <BusFront className="h-5 w-5" aria-hidden />
+              <span>Départs</span>
             </button>
             <button
               type="button"
               onClick={() => setMobileView("scan")}
-              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-xs font-bold ${
+              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-bold ${
                 mobileView === "scan"
                   ? "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-200"
                   : "text-gray-600 dark:text-gray-300"
@@ -4782,8 +4991,21 @@ useEffect(() => {
             </button>
             <button
               type="button"
+              onClick={() => setMobileView("liste")}
+              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-bold ${
+                mobileView === "liste"
+                  ? "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-200"
+                  : "text-gray-600 dark:text-gray-300"
+              }`}
+              aria-current={mobileView === "liste" ? "page" : undefined}
+            >
+              <List className="h-5 w-5" aria-hidden />
+              <span>Liste</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setMobileView("rapports")}
-              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-xs font-bold ${
+              className={`flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-bold ${
                 mobileView === "rapports"
                   ? "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-200"
                   : "text-gray-600 dark:text-gray-300"
