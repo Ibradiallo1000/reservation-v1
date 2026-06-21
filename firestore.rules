@@ -2533,34 +2533,45 @@ match /shiftReports/{reportId} {
       }
 
       match /financialTransactionIdempotency/{key} {
-        allow get: if isAuth()
-          && userAgencyBelongsToCompany(companyId)
-          && (
-            hasUserRole('agency_accountant')
-            || hasUserRole('comptable')
-            || hasUserRole('Comptable')
-          )
-          && key.matches('remittance_courier_session_.+');
-        allow get: if canAccessSensitiveCompanyFinance(companyId)
-          || canWriteAgencyScopedFinance(companyId)
-          || (isCourierAgent() && userAgencyBelongsToCompany(companyId))
-          || agencyAccountantCanListCompanyScopedAccounting(companyId);
-        allow create: if courierCashFinancialIdempotencyOk(companyId)
-          || canAccessSensitiveCompanyFinance(companyId)
-          || (
-            agencyAccountantCanListCompanyScopedAccounting(companyId)
-            && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
-            && request.resource.data.get('transactionId', '').size() > 0
-            && request.resource.data.get('createdAt') is timestamp
-          )
-          || (
-            canWriteAgencyScopedFinance(companyId)
-            && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
-            && request.resource.data.get('transactionId', '').size() > 0
-            && request.resource.data.get('createdAt') is timestamp
-          );
-        allow update, delete: if false;
-      }
+  // Comptable agence - lecture remittance uniquement
+  allow get: if isAuth()
+    && userAgencyBelongsToCompany(companyId)
+    && isComptable()
+    && key.matches('remittance_courier_session_.+');
+  
+  // Agent courrier - lecture de ses propres clés
+  allow get: if isCourierAgent()
+    && userAgencyBelongsToCompany(companyId);
+  
+  // Finance / comptable - lecture large
+  allow get: if canAccessSensitiveCompanyFinance(companyId)
+    || canWriteAgencyScopedFinance(companyId)
+    || agencyAccountantCanListCompanyScopedAccounting(companyId);
+  
+  // Création - toutes les conditions autorisées
+  allow create: if courierCashFinancialIdempotencyOk(companyId)
+    || canAccessSensitiveCompanyFinance(companyId)
+    || (
+      agencyAccountantCanListCompanyScopedAccounting(companyId)
+      && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
+      && request.resource.data.get('transactionId', '').size() > 0
+      && request.resource.data.get('createdAt') is timestamp
+    )
+    || (
+      canWriteAgencyScopedFinance(companyId)
+      && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
+      && request.resource.data.get('transactionId', '').size() > 0
+      && request.resource.data.get('createdAt') is timestamp
+    )
+    || (
+      isCourierAgent()
+      && userAgencyBelongsToCompany(companyId)
+      && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
+      && request.resource.data.get('transactionId', '').size() > 0
+      && request.resource.data.get('createdAt') is timestamp
+    );
+  allow update, delete: if false;
+}
 
       match /accounts/{accountId} {
         allow get: if isAuth()
@@ -2578,8 +2589,12 @@ match /shiftReports/{reportId} {
         allow get: if canAgencyAccountantReadOwnLiquidityAccount(companyId, accountId);
         allow get: if canAgencyAccountantReadOwnRemittanceLedgerAccount(companyId, accountId);
         allow get: if isCourierAgent()
-          && userAgencyBelongsToCompany(companyId)
-          && courierCashLedgerAccountIdOk(accountId);
+  && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('companyId', '') == companyId
+  && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('agencyId', '') != ''
+  && (
+    accountId == 'company_clearing'
+    || accountId == 'agency_' + get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('agencyId', '') + '_pending_cash'
+  );
         allow get: if canReadOwnAgencyCashAccount(companyId, accountId)
           || canReadOwnAgencyLedgerAccount(companyId)
           || (

@@ -219,7 +219,7 @@ function resolveLedgerPair(params: {
 
   if (txType === "remittance") {
     throw new Error(
-      "[ledger] type remittance : réservé à applyRemittancePendingToAgencyCashInTransaction (pas d’appel direct à createFinancialTransaction)."
+      "[ledger] type remittance : réservé à applyRemittancePendingToAgencyCashInTransaction (pas d'appel direct à createFinancialTransaction)."
     );
   }
 
@@ -455,13 +455,11 @@ export async function applyRemittancePendingToAgencyCashInTransaction(
     transactionId: newRef.id,
     createdAt: serverTimestamp(),
   });
-
-  console.info(`Balance updated from remittance: +${amt} (${context})`);
 }
 
 /**
  * Annule une remise espèces (ex. session courrier renvoyée au comptable) : crédit pending, débit caisse physique.
- * Idempotent via clé `reversal_remittance_*`. Exige que la remise d’origine existe (doc idempotence `remittance_*`).
+ * Idempotent via clé `reversal_remittance_*`. Exige que la remise d'origine existe (doc idempotence `remittance_*`).
  */
 export async function reverseRemittancePendingToAgencyCashInTransaction(
   tx: Transaction,
@@ -586,8 +584,6 @@ export async function reverseRemittancePendingToAgencyCashInTransaction(
     transactionId: newRef.id,
     createdAt: serverTimestamp(),
   });
-
-  console.info(`Balance updated from remittance reversal: -${amt} cash (${context})`);
 }
 
 /** Paramètres alignés sur `createFinancialTransaction` (écriture ledger + journal dans une transaction Firestore existante). */
@@ -656,16 +652,22 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
   const currency = params.currency ?? "XOF";
 
   const idemRef = idempotencyRef(companyId, uniqueReferenceKey);
-  console.log('[FINANCIAL_TX_IDEMPOTENCY]', uniqueReferenceKey);
-  console.log('[FINANCIAL_TX_READ]', idemRef.path);
-  const idemSnap = await tx.get(idemRef);
-
-  if (idemSnap.exists()) {
-    const existingId = String((idemSnap.data() as { transactionId?: string }).transactionId ?? "");
-    return { transactionId: existingId, skippedDuplicate: true };
+let idemSnap;
+try {
+  idemSnap = await tx.get(idemRef);
+} catch (error: any) {
+  // Si permission denied, on ignore et on continue comme si le doc n'existe pas
+  if (error?.code === 'permission-denied' || error?.message?.includes('Missing or insufficient permissions')) {
+    idemSnap = { exists: () => false } as any;
+  } else {
+    throw error;
   }
+}
 
-
+if (idemSnap.exists()) {
+  const existingId = String((idemSnap.data() as { transactionId?: string }).transactionId ?? "");
+  return { transactionId: existingId, skippedDuplicate: true };
+}
   let debitId: string;
   let creditId: string;
   try {
@@ -697,16 +699,10 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
   const debitRef = ledgerAccountDocRef(companyId, debitId);
   const creditRef = ledgerAccountDocRef(companyId, creditId);
 
-  console.log('[FINANCIAL_TX_DEBIT_ID]', debitId);
-  console.log('[FINANCIAL_TX_CREDIT_ID]', creditId);
-  console.log('[FINANCIAL_TX_READ]', debitRef.path);
-  console.log('[FINANCIAL_TX_READ]', creditRef.path);
-
   const [debitSnap, creditSnap] = await Promise.all([
     tx.get(debitRef),
     tx.get(creditRef),
   ]);
-
 
   assertExistingLedgerAccountMatchesSpec(debitSnap, debitId, s0.type);
   assertExistingLedgerAccountMatchesSpec(creditSnap, creditId, s1.type);
@@ -837,7 +833,7 @@ export async function getFinancialTransactionById(
   return { id: snap.id, data: snap.data() as FinancialTransactionDoc };
 }
 
-/** Remboursements ledger liés à une écriture d’origine (referenceType financial_transaction). */
+/** Remboursements ledger liés à une écriture d'origine (referenceType financial_transaction). */
 export async function listRefundsForOriginalLedgerTransaction(
   companyId: string,
   originalTransactionId: string
