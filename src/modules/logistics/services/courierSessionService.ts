@@ -1,6 +1,17 @@
 /**
  * Courier session service — aligné guichet : PENDING → ACTIVE → CLOSED → VALIDATED_AGENCY → VALIDATED.
  * Totaux théoriques : exclusivement via financialTransactions (getCourierSessionLedgerTotal).
+ * 
+ * FLUX COMPTABLE COURRIER (ALIGNÉ SUR LE GUICHET) :
+ * 1. À la clôture de la session (closeCourierSession), on crée une écriture financialTransaction
+ *    de type "payment_received" qui alimente le compte d'attente (agency_pending_cash).
+ * 2. À la validation comptable (validateCourierSession), on appelle
+ *    applyRemittancePendingToAgencyCashInTransaction() qui :
+ *    - Débite agency_pending_cash (-montant)
+ *    - Crédite agency_cash (+montant)
+ *    - Crée une financialTransaction de type "remittance"
+ * 3. À l'annulation (returnCourierSessionToAgencyAccountant), on appelle
+ *    reverseRemittancePendingToAgencyCashInTransaction() qui annule symétriquement.
  */
 
 import {
@@ -14,6 +25,7 @@ import {
   serverTimestamp,
   getDoc,
   deleteField,
+  increment,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { CourierSession, CourierSessionStatus } from "../domain/courierSession.types";
@@ -33,10 +45,11 @@ import {
   updateAgencyLiveStateOnCourierSessionAgencyValidationReverted,
 } from "@/modules/agence/aggregates/agencyLiveState";
 import { getCourierSessionLedgerTotal } from "./courierSessionLedger";
-import { reverseRemittancePendingToAgencyCashInTransaction } from "@/modules/compagnie/treasury/financialTransactions";
-// (courier validation comptable) : ne pas consommer agency_*_pending_cash
-
-
+import {
+  applyRemittancePendingToAgencyCashInTransaction,
+  reverseRemittancePendingToAgencyCashInTransaction,
+  type RemittanceLedgerReference,
+} from "@/modules/compagnie/treasury/financialTransactions";
 import {
   PENDING_CASH_LEDGER_SYSTEM_VERSION,
   type PendingCashRemittanceStatus,
@@ -46,6 +59,10 @@ import {
   courierComptaEncaissementDocRef,
 } from "@/modules/agence/comptabilite/comptaEncaissementsService";
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
+import {
+  agencyPendingCashAccountDocId,
+  companyClearingAccountDocId,
+} from "@/modules/compagnie/treasury/ledgerAccounts";
 
 const OPEN_STATUSES: CourierSessionStatus[] = ["PENDING", "ACTIVE"];
 
@@ -157,7 +174,11 @@ export async function activateCourierSession(params: {
 
 /**
  * Agent closes session → CLOSED.
- * Aucun montant « attendu » persisté : le comptable compare à la somme ledger (financialTransactions).
+ * 
+ * NOUVEAU : À la clôture, on crée une écriture financialTransaction de type "payment_received"
+ * qui alimente le compte d'attente (agency_pending_cash). Ceci aligne le flux courrier
+ * sur le flux guichet et permet à applyRemittancePendingToAgencyCashInTransaction()
+ * de fonctionner correctement lors de la validation comptable.
  */
 export async function closeCourierSession(params: {
   companyId: string;
@@ -170,6 +191,12 @@ export async function closeCourierSession(params: {
   });
   const sessionRef = courierSessionRef(db, params.companyId, params.agencyId, params.sessionId);
   let courierAgentId = "";
+  let courierAgentCode = "";
+
+  // Récupérer la devise de l'agence
+  const agencySnap = await getDoc(doc(db, "companies", params.companyId, "agences", params.agencyId));
+  const agencyData = agencySnap.data() as { currency?: string } | undefined;
+  const agencyCurrency = String(agencyData?.currency ?? "XOF");
 
   await runTransaction(db, async (tx) => {
     const sSnap = await tx.get(sessionRef);
@@ -179,6 +206,76 @@ export async function closeCourierSession(params: {
       throw new Error("La session doit être ACTIVE pour être clôturée.");
     }
     courierAgentId = data.agentId;
+    courierAgentCode = data.agentCode || "";
+
+    // 1. CRÉER LA FINANCIAL TRANSACTION payment_received
+    // ALIMENTE agency_pending_cash (comme le guichet)
+    if (ledgerSessionTotal > 0) {
+      const pendingCashId = agencyPendingCashAccountDocId(params.agencyId);
+      const clearingId = companyClearingAccountDocId();
+
+      const financialTxRef = doc(
+        db,
+        "companies",
+        params.companyId,
+        "financialTransactions"
+      );
+
+      tx.set(financialTxRef, {
+        type: "payment_received",
+        source: "courrier",
+        amount: ledgerSessionTotal,
+        currency: agencyCurrency,
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        debitAccountId: clearingId,
+        creditAccountId: pendingCashId,
+        status: "confirmed",
+        performedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        referenceType: "courier_session",
+        referenceId: params.sessionId,
+        paymentChannel: "courrier",
+        paymentMethod: "cash",
+        description: `Clôture session courrier - Session ${params.sessionId}`,
+        metadata: {
+          sessionTotal: ledgerSessionTotal,
+          sourceType: "courrier",
+          operation: "session_close",
+        },
+      });
+
+      // Mettre à jour le compte pending_cash
+      const pendingRef = doc(
+        db,
+        "companies",
+        params.companyId,
+        "accounts",
+        pendingCashId
+      );
+      const pendingSnap = await tx.get(pendingRef);
+      if (!pendingSnap.exists()) {
+        tx.set(pendingRef, {
+          accountType: "virtual_clearing",
+          agencyId: params.agencyId,
+          companyId: params.companyId,
+          balance: ledgerSessionTotal,
+          currency: agencyCurrency,
+          includeInLiquidity: false,
+          label: `Attente remise courrier ${params.agencyId}`,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        tx.update(pendingRef, {
+          balance: increment(ledgerSessionTotal),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
+    // 2. Mettre à jour la session
     tx.update(sessionRef, {
       status: "CLOSED",
       closedAt: serverTimestamp(),
@@ -197,15 +294,26 @@ export async function closeCourierSession(params: {
     amount: ledgerSessionTotal,
     status: "EN_ATTENTE",
     createdBy: courierAgentId,
-    metadata: { channel: "courrier", ledgerSessionTotal },
+    metadata: {
+      channel: "courrier",
+      ledgerSessionTotal,
+      agentCode: courierAgentCode,
+    },
   });
 
   return { ledgerSessionTotal };
 }
 
 /**
- * Comptable agence : CLOSED → VALIDATED_AGENCY (remise caisse + compta, comme le guichet).
- * Le chef d'agence finalise avec {@link validateCourierSessionByHeadAccountant} → VALIDATED.
+ * Comptable agence : CLOSED → VALIDATED_AGENCY.
+ * 
+ * Utilise applyRemittancePendingToAgencyCashInTransaction() qui :
+ * - Débite agency_pending_cash
+ * - Crédite agency_cash (la caisse physique)
+ * - Crée une financialTransaction de type "remittance"
+ * - Est idempotent via la clé remittance_courier_session_{sessionId}
+ * 
+ * Le solde agency_cash augmente donc correctement à ce moment.
  */
 export async function validateCourierSession(params: {
   companyId: string;
@@ -255,15 +363,36 @@ export async function validateCourierSession(params: {
       ? Math.max(0, ledgerSessionTotal - params.validatedAmount)
       : 0;
 
-    /**
-     * Flux courrier : ne pas consommer agency_*_pending_cash (le flux courrier ne l'alimente pas).
-     * On poste directement vers agency_*_cash (idempotent) pour éviter toute écriture pending.
-     */
-    // (courrier) ne pas consommer pending_cash : aucune écriture pending ici.
-    // Cette validation comptable poste le cash directement (voir apply* dans financialTransactions).
-    // Ici on ne crée volontairement aucun mouvement via applyRemittancePendingToAgencyCashInTransaction.
+    // 1. Écrire l'encaissement comptable (pour les stats / historique)
+    if (params.validatedAmount > 0) {
+      writeComptaEncaissementInTransaction(tx, params.companyId, params.agencyId, {
+        sessionId: params.sessionId,
+        montant: params.validatedAmount,
+        source: "courrier",
+      });
+    }
 
+    // 2. TRANSFÉRER VERS LA CAISSE PHYSIQUE
+    // Utilise le mécanisme officiel de remise (identique au guichet)
+    const amount = Number(params.validatedAmount);
+    if (amount > 0) {
+      const remittanceRef: RemittanceLedgerReference = {
+        referenceType: "courier_session",
+        referenceId: params.sessionId,
+      };
 
+      await applyRemittancePendingToAgencyCashInTransaction(
+        tx,
+        params.companyId,
+        params.agencyId,
+        amount,
+        agencyCurrency,
+        remittanceRef,
+        `Validation courrier - Session ${params.sessionId}`
+      );
+    }
+
+    // 3. Mettre à jour la session courrier
     tx.update(sessionRef, {
       status: "VALIDATED_AGENCY",
       validatedAt: serverTimestamp(),
@@ -279,13 +408,7 @@ export async function validateCourierSession(params: {
       updatedAt: serverTimestamp(),
     });
 
-    if (params.validatedAmount > 0) {
-      writeComptaEncaissementInTransaction(tx, params.companyId, params.agencyId, {
-        sessionId: params.sessionId,
-        montant: params.validatedAmount,
-        source: "courrier",
-      });
-    }
+    // 4. Mise à jour des stats et de l'état live
     updateDailyStatsOnCourierSessionValidatedByAgency(
       tx,
       params.companyId,
@@ -297,6 +420,7 @@ export async function validateCourierSession(params: {
     updateAgencyLiveStateOnCourierSessionValidated(tx, params.companyId, params.agencyId);
   });
 
+  // Logs d'historique
   const v = params.validatedBy;
   logAgentHistoryEvent({
     companyId: params.companyId,
@@ -430,6 +554,9 @@ export async function validateCourierSessionByHeadAccountant(params: {
 /**
  * Chef d'agence : renvoie une session courrier au comptable (VALIDATED_AGENCY → CLOSED).
  * Annule remise caisse + ligne compta si un montant avait été validé ; inverse stats agence et compteur live.
+ * 
+ * Utilise reverseRemittancePendingToAgencyCashInTransaction() qui est symétrique
+ * de applyRemittancePendingToAgencyCashInTransaction() utilisée dans validateCourierSession.
  */
 export async function returnCourierSessionToAgencyAccountant(params: {
   companyId: string;
@@ -477,6 +604,7 @@ export async function returnCourierSessionToAgencyAccountant(params: {
     const comptaRef = courierComptaEncaissementDocRef(params.companyId, params.agencyId, params.sessionId);
     const comptaSnap = validatedAmount > 0 ? await tx.get(comptaRef) : null;
 
+    // 1. ANNULER LE MOUVEMENT CAISSE (symétrique de la validation)
     if (validatedAmount > 0) {
       await reverseRemittancePendingToAgencyCashInTransaction(
         tx,
@@ -492,6 +620,7 @@ export async function returnCourierSessionToAgencyAccountant(params: {
       }
     }
 
+    // 2. Annuler les stats et l'état live
     revertDailyStatsOnCourierSessionAgencyValidation(
       tx,
       params.companyId,
@@ -502,6 +631,7 @@ export async function returnCourierSessionToAgencyAccountant(params: {
     );
     updateAgencyLiveStateOnCourierSessionAgencyValidationReverted(tx, params.companyId, params.agencyId);
 
+    // 3. Remettre la session en CLOSED
     tx.update(sessionRef, {
       status: "CLOSED",
       updatedAt: serverTimestamp(),

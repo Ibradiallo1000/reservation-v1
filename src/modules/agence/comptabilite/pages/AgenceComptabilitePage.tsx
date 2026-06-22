@@ -518,6 +518,21 @@ const AgenceComptabilitePage: React.FC = () => {
   const [loadingCashAudits, setLoadingCashAudits] = useState(false);
 
   /* ============================================================================
+     SECTION : ÉTATS REACT - TABLEAU DE BORD JOURNALIER (NOUVEAU)
+     Description : Données dédiées au dashboard journalier
+     ============================================================================ */
+  
+  const [dailyCashData, setDailyCashData] = useState({
+    ticketRevenue: 0,
+    courierRevenue: 0,
+    totalCashIn: 0,
+    totalCashOut: 0,
+    netCash: 0,
+    date: '',
+  });
+  const [loadingDailyDashboard, setLoadingDailyDashboard] = useState(false);
+
+  /* ============================================================================
      SECTION : ÉTATS REACT - RÉCONCILIATION
      Description : Données pour la réconciliation des ventes vs encaissements
      ============================================================================ */
@@ -1860,6 +1875,145 @@ const AgenceComptabilitePage: React.FC = () => {
       setLoadingReconciliation(false);
     }
   }, [user?.companyId, user?.agencyId, reconciliationDate, agencyTz]);
+
+  /* ============================================================================
+     SECTION : CHARGEMENT DES DONNÉES DU TABLEAU DE BORD JOURNALIER (NOUVEAU)
+     Description : Chargement des données journalières pour le dashboard
+     ============================================================================ */
+  
+  const loadDailyDashboardData = useCallback(async () => {
+    console.log('[AgenceCompta] Chargement des données du tableau de bord journalier');
+    
+    if (!user?.companyId || !user?.agencyId) {
+      console.warn('[AgenceCompta] Données manquantes pour le dashboard journalier');
+      return;
+    }
+
+    setLoadingDailyDashboard(true);
+
+    try {
+      const todayKey = getTodayForTimezone(agencyTz);
+      const todayStr = new Date(todayKey).toISOString().split('T')[0];
+      
+      // 1. Recettes billetterie du jour (via getAgencyStats)
+      const stats = await getAgencyStats(user.companyId, user.agencyId, todayKey, todayKey, agencyTz);
+      const ticketRevenue = stats.totalRevenue || 0;
+
+      // 2. Recettes colis du jour (via getPaymentsByDateRange)
+      const from = getStartOfDayForDate(todayKey, agencyTz);
+      const to = getEndOfDayForDate(todayKey, agencyTz);
+      const payments = await getPaymentsByDateRange(user.companyId, from, to);
+      let courierRevenue = 0;
+      for (const p of payments) {
+        if (p.agencyId === user.agencyId && p.channel === 'courrier' && p.status === 'validated') {
+          courierRevenue += Number(p.amount) || 0;
+        }
+      }
+
+      // 3. Entrées du jour (encaissements validés) - via comptaEncaissements
+      let dailyCashIn = 0;
+      try {
+        const encaissements = await listComptaEncaissementsInRange(
+          user.companyId,
+          user.agencyId,
+          from,
+          to,
+          500
+        );
+        for (const e of encaissements) {
+          dailyCashIn += Math.max(0, Number(e.montant ?? 0));
+        }
+      } catch (encErr) {
+        console.warn('[AgenceCompta] Erreur chargement encaissements journaliers:', encErr);
+        // Fallback: utiliser ticketRevenue + courierRevenue
+        dailyCashIn = ticketRevenue + courierRevenue;
+      }
+
+      // 4. Sorties du jour (via financialTransactions)
+      let dailyCashOut = 0;
+      try {
+        const txRef = collection(db, `companies/${user.companyId}/financialTransactions`);
+        const qTx = query(
+          txRef,
+          where("companyId", "==", user.companyId),
+          where("agencyId", "==", user.agencyId),
+          where("createdAt", ">=", Timestamp.fromDate(from)),
+          where("createdAt", "<", Timestamp.fromDate(to))
+        );
+        const snap = await getDocs(qTx);
+        for (const doc of snap.docs) {
+          const tx = doc.data() as Record<string, unknown>;
+          const type = String(tx.type ?? "").toLowerCase();
+          const source = String(tx.source ?? "").toLowerCase();
+          const isOut =
+            type === "expense" ||
+            type === "payment_sent" ||
+            type === "transfer" ||
+            type === "transfer_to_bank" ||
+            type === "adjustment" ||
+            source === "cashout";
+          if (isOut) {
+            dailyCashOut += Math.max(0, Number(tx.amount ?? 0));
+          }
+        }
+      } catch (txErr) {
+        console.warn('[AgenceCompta] Erreur chargement sorties journalières:', txErr);
+        dailyCashOut = 0;
+      }
+
+      // 5. Net du jour
+      const netCash = dailyCashIn - dailyCashOut;
+
+      setDailyCashData({
+        ticketRevenue,
+        courierRevenue,
+        totalCashIn: dailyCashIn,
+        totalCashOut: dailyCashOut,
+        netCash,
+        date: todayStr,
+      });
+
+      console.log('[AgenceCompta] Dashboard journalier chargé:', {
+        ticketRevenue,
+        courierRevenue,
+        totalCashIn: dailyCashIn,
+        totalCashOut: dailyCashOut,
+        netCash,
+        date: todayStr,
+      });
+
+    } catch (error) {
+      console.error('[AgenceCompta] Erreur chargement dashboard journalier:', error);
+      toast.error('Impossible de charger les données du tableau de bord');
+    } finally {
+      setLoadingDailyDashboard(false);
+    }
+  }, [user?.companyId, user?.agencyId, agencyTz]);
+
+  // Chargement initial du dashboard et rafraîchissement périodique
+  useEffect(() => {
+    if (phaseView === 'dashboard') {
+      void loadDailyDashboardData();
+    }
+  }, [phaseView, loadDailyDashboardData]);
+
+  // Rafraîchissement du dashboard après validation d'une réception
+  useEffect(() => {
+    const handleRefresh = () => {
+      if (phaseView === 'dashboard') {
+        void loadDailyDashboardData();
+      }
+    };
+    // Écouter l'événement de rafraîchissement
+    window.addEventListener('agency-cash-refresh', handleRefresh);
+    return () => {
+      window.removeEventListener('agency-cash-refresh', handleRefresh);
+    };
+  }, [phaseView, loadDailyDashboardData]);
+
+  /* ============================================================================
+     SECTION : RÉCONCILIATION - MISE À JOUR APRÈS CHANGEMENT DE TAB
+     ============================================================================ */
   
   useEffect(() => {
     if (tab === 'audit') {
@@ -2121,12 +2275,61 @@ const AgenceComptabilitePage: React.FC = () => {
               activeShiftsCount={activeShifts.length + activeCourierSessions.length}
               pendingPostsCount={pendingShifts.length + pendingCourierSessions.length}
               pendingReceiptsCount={receptionsPendingTotal}
-              dayCashIn={ledgerPeriodCash?.totalCashIn ?? totIn}
+              dayCashIn={dailyCashData.totalCashIn}
               agencyStatsToday={agencyStatsToday}
               money={money}
               theme={theme}
               onNavigate={(target) => setPhaseView(target)}
             />
+
+            
+                {/* BLOC RÉSUMÉ CAISSE JOURNALIER - COMPTABLE UNIQUEMENT */}
+    <SectionCard 
+      title="Résumé caisse du jour" 
+      icon={BarChart3}
+      right={
+        <div className="flex items-center gap-2 text-sm text-gray-500">
+          <span>📅 {dailyCashData.date ? new Date(dailyCashData.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Aujourd\'hui'}</span>
+          {loadingDailyDashboard && <RefreshCw className="h-4 w-4 animate-spin" />}
+        </div>
+      }
+    >
+      <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-2 text-sm text-blue-800">
+        <span className="font-medium">ℹ️ Ce résumé affiche uniquement les montants validés par le comptable aujourd'hui.</span>
+      </div>
+      {loadingDailyDashboard ? (
+        <div className="flex items-center justify-center py-8">
+          <div className="text-center">
+            <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-2 text-gray-400" />
+            <div className="text-sm text-gray-500">Chargement des données du jour...</div>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <MetricCard
+            label="Encaissements validés du jour"
+            value={money(dailyCashData.totalCashIn)}
+            icon={Wallet}
+            valueColorVar={theme?.primary}
+            hint="Total des encaissements validés comptablement aujourd'hui"
+          />
+          <MetricCard
+            label="Sorties du jour"
+            value={money(dailyCashData.totalCashOut)}
+            icon={AlertTriangle}
+            valueColorVar="#b91c1c"
+            hint="Dépenses et sorties de caisse aujourd'hui"
+          />
+          <MetricCard
+            label="Solde net du jour"
+            value={money(dailyCashData.netCash)}
+            icon={TrendingUp}
+            valueColorVar={dailyCashData.netCash >= 0 ? theme?.primary : '#b91c1c'}
+            hint="Encaissements validés - Sorties du jour"
+          />
+        </div>
+      )}
+    </SectionCard>
 
             {(pendingShifts.length + pendingCourierSessions.length > 0 || receptionsPendingTotal > 0) && (
               <SectionCard title="Alertes prioritaires" icon={Bell}>
@@ -3039,39 +3242,6 @@ const AgenceComptabilitePage: React.FC = () => {
             totOut={totOut}
             money={money}
           />
-        )}
-
-        {phaseView === 'dashboard' && (
-          <SectionCard title="Résumé caisse du jour" icon={BarChart3}>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <MetricCard
-                label="Ventes billets"
-                value={agencyStatsToday !== null ? money(agencyStatsToday.totalRevenue) : '—'}
-                icon={Ticket}
-                valueColorVar={theme?.primary}
-                hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
-              />
-              <MetricCard
-                label="Ventes courrier"
-                value={money(reconciliationData.courrier.montant)}
-                icon={Package}
-                valueColorVar={theme?.primary}
-                hint={AGENCY_KPI_TIME.WORKFLOW_PAIEMENT}
-              />
-              <MetricCard
-                label="Entrées"
-                value={money(ledgerPeriodCash?.totalCashIn ?? totIn)}
-                icon={Wallet}
-                valueColorVar={theme?.primary}
-              />
-              <MetricCard
-                label="Sorties"
-                value={money(ledgerPeriodCash?.totalCashOut ?? totOut)}
-                icon={AlertTriangle}
-                valueColorVar="#b91c1c"
-              />
-            </div>
-          </SectionCard>
         )}
 
         {/* ============================================================================
