@@ -219,7 +219,7 @@ function resolveLedgerPair(params: {
 
   if (txType === "remittance") {
     throw new Error(
-      "[ledger] type remittance : réservé à applyRemittancePendingToAgencyCashInTransaction (pas d’appel direct à createFinancialTransaction)."
+      "[ledger] type remittance : réservé à applyRemittancePendingToAgencyCashInTransaction (pas d'appel direct à createFinancialTransaction)."
     );
   }
 
@@ -455,13 +455,11 @@ export async function applyRemittancePendingToAgencyCashInTransaction(
     transactionId: newRef.id,
     createdAt: serverTimestamp(),
   });
-
-  console.info(`Balance updated from remittance: +${amt} (${context})`);
 }
 
 /**
  * Annule une remise espèces (ex. session courrier renvoyée au comptable) : crédit pending, débit caisse physique.
- * Idempotent via clé `reversal_remittance_*`. Exige que la remise d’origine existe (doc idempotence `remittance_*`).
+ * Idempotent via clé `reversal_remittance_*`. Exige que la remise d'origine existe (doc idempotence `remittance_*`).
  */
 export async function reverseRemittancePendingToAgencyCashInTransaction(
   tx: Transaction,
@@ -586,8 +584,6 @@ export async function reverseRemittancePendingToAgencyCashInTransaction(
     transactionId: newRef.id,
     createdAt: serverTimestamp(),
   });
-
-  console.info(`Balance updated from remittance reversal: -${amt} cash (${context})`);
 }
 
 /** Paramètres alignés sur `createFinancialTransaction` (écriture ledger + journal dans une transaction Firestore existante). */
@@ -644,8 +640,8 @@ function assertCreateFinancialTransactionParams(params: ApplyFinancialTransactio
 }
 
 /**
- * ✅ VERSION CORRIGÉE - Applique une écriture ledger + ligne `financialTransactions` dans une transaction Firestore déjà ouverte
- * avec gestion des erreurs de permission pour operator_digital
+ * Applique une écriture ledger + ligne `financialTransactions` dans une transaction Firestore déjà ouverte
+ * (ex. paiement dépense atomique avec mise à jour métier).
  */
 export async function applyFinancialTransactionInExistingFirestoreTransaction(
   tx: Transaction,
@@ -655,42 +651,23 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
   const companyId = params.companyId;
   const currency = params.currency ?? "XOF";
 
-  // ============================================================
-  // 1. IDEMPOTENCE - Gestion des erreurs de permission
-  // ============================================================
   const idemRef = idempotencyRef(companyId, uniqueReferenceKey);
-  console.log('[FINANCIAL_TX_IDEMPOTENCY]', uniqueReferenceKey);
-  console.log('[FINANCIAL_TX_READ]', idemRef.path);
-  
-  let idemSnap;
-  let idempotencyExists = false;
-
-  try {
-    idemSnap = await tx.get(idemRef);
-    idempotencyExists = idemSnap.exists();
-  } catch (error: any) {
-    // ✅ Gestion des erreurs de permission pour operator_digital
-    if (error?.code === 'permission-denied' || 
-        error?.message?.includes('Missing or insufficient permissions') ||
-        error?.message?.includes('PERMISSION_DENIED')) {
-      console.warn('[ledger] Permission denied reading idempotency doc, assuming not exists:', uniqueReferenceKey);
-      idemSnap = { exists: () => false } as any;
-      idempotencyExists = false;
-    } else {
-      console.error('[ledger] Error reading idempotency doc:', error);
-      throw error;
-    }
+let idemSnap;
+try {
+  idemSnap = await tx.get(idemRef);
+} catch (error: any) {
+  // Si permission denied, on ignore et on continue comme si le doc n'existe pas
+  if (error?.code === 'permission-denied' || error?.message?.includes('Missing or insufficient permissions')) {
+    idemSnap = { exists: () => false } as any;
+  } else {
+    throw error;
   }
+}
 
-  if (idempotencyExists) {
-    const existingId = String((idemSnap.data() as { transactionId?: string }).transactionId ?? "");
-    console.log('[ledger] Idempotency hit, skipping duplicate:', uniqueReferenceKey);
-    return { transactionId: existingId, skippedDuplicate: true };
-  }
-
-  // ============================================================
-  // 2. RÉSOLUTION DE LA PAIRE LEDGER
-  // ============================================================
+if (idemSnap.exists()) {
+  const existingId = String((idemSnap.data() as { transactionId?: string }).transactionId ?? "");
+  return { transactionId: existingId, skippedDuplicate: true };
+}
   let debitId: string;
   let creditId: string;
   try {
@@ -722,96 +699,16 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
   const debitRef = ledgerAccountDocRef(companyId, debitId);
   const creditRef = ledgerAccountDocRef(companyId, creditId);
 
-  console.log('[FINANCIAL_TX_DEBIT_ID]', debitId);
-  console.log('[FINANCIAL_TX_CREDIT_ID]', creditId);
-  console.log('[FINANCIAL_TX_READ]', debitRef.path);
-  console.log('[FINANCIAL_TX_READ]', creditRef.path);
+  const [debitSnap, creditSnap] = await Promise.all([
+    tx.get(debitRef),
+    tx.get(creditRef),
+  ]);
 
-  // ============================================================
-  // 3. LECTURE DES COMPTES LEDGER - Gestion des erreurs de permission
-  // ============================================================
-  let debitSnap;
-  let creditSnap;
+  assertExistingLedgerAccountMatchesSpec(debitSnap, debitId, s0.type);
+  assertExistingLedgerAccountMatchesSpec(creditSnap, creditId, s1.type);
 
-  try {
-    [debitSnap, creditSnap] = await Promise.all([
-      tx.get(debitRef),
-      tx.get(creditRef),
-    ]);
-  } catch (error: any) {
-    // ✅ Gestion des erreurs de permission pour operator_digital
-    if (error?.code === 'permission-denied' || 
-        error?.message?.includes('Missing or insufficient permissions') ||
-        error?.message?.includes('PERMISSION_DENIED')) {
-      console.warn('[ledger] Permission denied reading ledger accounts, attempting to create them:', debitId, creditId);
-      debitSnap = { exists: () => false } as any;
-      creditSnap = { exists: () => false } as any;
-    } else {
-      console.error('[ledger] Error reading ledger accounts:', error);
-      throw error;
-    }
-  }
-
-  // ============================================================
-  // 4. VÉRIFICATION DES COMPTES - Tolérance aux erreurs
-  // ============================================================
-  let debitExists = false;
-  let creditExists = false;
-
-  try {
-    debitExists = debitSnap.exists();
-  } catch (e) {
-    debitExists = false;
-  }
-
-  try {
-    creditExists = creditSnap.exists();
-  } catch (e) {
-    creditExists = false;
-  }
-
-  if (debitExists) {
-    try {
-      assertExistingLedgerAccountMatchesSpec(debitSnap, debitId, s0.type);
-    } catch (e) {
-      console.warn('[ledger] Type mismatch, recreating account:', debitId, e);
-      debitExists = false;
-    }
-  }
-
-  if (creditExists) {
-    try {
-      assertExistingLedgerAccountMatchesSpec(creditSnap, creditId, s1.type);
-    } catch (e) {
-      console.warn('[ledger] Type mismatch, recreating account:', creditId, e);
-      creditExists = false;
-    }
-  }
-
-  // ============================================================
-  // 5. LECTURE DES SOLDES
-  // ============================================================
-  let debitBal = 0;
-  let creditBal = 0;
-
-  if (debitExists) {
-    try {
-      debitBal = Number((debitSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
-    } catch (e) {
-      debitBal = 0;
-      debitExists = false;
-    }
-  }
-
-  if (creditExists) {
-    try {
-      creditBal = Number((creditSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
-    } catch (e) {
-      creditBal = 0;
-      creditExists = false;
-    }
-  }
-
+  const debitBal = Number((debitSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
+  const creditBal = Number((creditSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
   const debitAfter = debitBal - ledgerAmount;
   const creditAfter = creditBal + ledgerAmount;
 
@@ -819,84 +716,40 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
     throw new Error(`[ledger] Solde insuffisant sur le compte débit ${debitId} (${debitBal} < ${ledgerAmount})`);
   }
 
-  // ============================================================
-  // 6. MISE À JOUR DES COMPTES - Fallback robuste
-  // ============================================================
-  try {
-    if (debitExists) {
-      tx.update(debitRef, { balance: increment(-ledgerAmount), updatedAt: serverTimestamp() });
-    } else {
-      tx.set(debitRef, {
-        ...initialLedgerAccountPayload({
-          id: debitId,
-          companyId,
-          agencyId: s0.agencyId,
-          type: s0.type,
-          label: s0.label,
-          currency,
-          includeInLiquidity: s0.includeInLiquidity,
-        }),
-        balance: debitAfter,
-      });
-    }
-
-    if (creditExists) {
-      tx.update(creditRef, { balance: increment(ledgerAmount), updatedAt: serverTimestamp() });
-    } else {
-      tx.set(creditRef, {
-        ...initialLedgerAccountPayload({
-          id: creditId,
-          companyId,
-          agencyId: s1.agencyId,
-          type: s1.type,
-          label: s1.label,
-          currency,
-          includeInLiquidity: s1.includeInLiquidity,
-        }),
-        balance: creditAfter,
-      });
-    }
-  } catch (error: any) {
-    // ✅ FALLBACK : Si les permissions échouent, forcer la création avec merge
-    if (error?.code === 'permission-denied' || 
-        error?.message?.includes('Missing or insufficient permissions')) {
-      console.warn('[ledger] Permission denied updating accounts, forcing creation with merge:', debitId, creditId);
-      
-      // Créer le compte débit avec merge
-      tx.set(debitRef, {
+  if (debitSnap.exists()) {
+    tx.update(debitRef, { balance: increment(-ledgerAmount), updatedAt: serverTimestamp() });
+  } else {
+    tx.set(debitRef, {
+      ...initialLedgerAccountPayload({
         id: debitId,
-        companyId: companyId,
-        agencyId: s0.agencyId ?? null,
+        companyId,
+        agencyId: s0.agencyId,
         type: s0.type,
         label: s0.label,
-        balance: debitAfter,
-        currency: currency,
-        includeInLiquidity: s0.includeInLiquidity ?? false,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
-      
-      // Créer le compte crédit avec merge
-      tx.set(creditRef, {
-        id: creditId,
-        companyId: companyId,
-        agencyId: s1.agencyId ?? null,
-        type: s1.type,
-        label: s1.label,
-        balance: creditAfter,
-        currency: currency,
-        includeInLiquidity: s1.includeInLiquidity ?? false,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
-    } else {
-      throw error;
-    }
+        currency,
+        includeInLiquidity: s0.includeInLiquidity,
+      }),
+      balance: debitAfter,
+    });
   }
 
-  // ============================================================
-  // 7. CRÉATION DE LA TRANSACTION FINANCIÈRE
-  // ============================================================
+  if (creditSnap.exists()) {
+    tx.update(creditRef, { balance: increment(ledgerAmount), updatedAt: serverTimestamp() });
+  } else {
+    tx.set(creditRef, {
+      ...initialLedgerAccountPayload({
+        id: creditId,
+        companyId,
+        agencyId: s1.agencyId,
+        type: s1.type,
+        label: s1.label,
+        currency,
+        includeInLiquidity: s1.includeInLiquidity,
+      }),
+      balance: creditAfter,
+    });
+  }
+
   const newRef = doc(financialTransactionsRef(companyId));
   const kpiChannel = isGuichetChannel(params.paymentChannel, params.source) ? "guichet" : "online";
   const paymentMethod = resolveFinancialPaymentMethod({
@@ -910,7 +763,6 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
   const paymentProviderStored =
     params.paymentProvider ?? (typeof params.metadata?.provider === "string" ? params.metadata.provider : null);
   const storedAmount = txTypeNorm === "refund" ? -ledgerAmount : ledgerAmount;
-  
   const payload: FinancialTransactionDoc = {
     type: txTypeNorm,
     source,
@@ -935,32 +787,12 @@ export async function applyFinancialTransactionInExistingFirestoreTransaction(
     paymentMethod,
     paymentProvider: paymentProviderStored,
   };
-  
-  try {
-    tx.set(newRef, payload);
-  } catch (error: any) {
-    console.error('[ledger] Failed to create financial transaction:', error);
-    throw error;
-  }
-
-  // ============================================================
-  // 8. CRÉATION DE L'IDEMPOTENCE - Tolérance aux erreurs
-  // ============================================================
-  try {
-    const idemWriteRef = idempotencyRef(companyId, uniqueReferenceKey);
-    tx.set(idemWriteRef, {
-      transactionId: newRef.id,
-      createdAt: serverTimestamp(),
-    });
-  } catch (error: any) {
-    if (error?.code === 'permission-denied' || 
-        error?.message?.includes('Missing or insufficient permissions')) {
-      console.warn('[ledger] Permission denied writing idempotency doc, continuing:', uniqueReferenceKey);
-    } else {
-      throw error;
-    }
-  }
-
+  tx.set(newRef, payload);
+  const idemWriteRef = idempotencyRef(companyId, uniqueReferenceKey);
+  tx.set(idemWriteRef, {
+    transactionId: newRef.id,
+    createdAt: serverTimestamp(),
+  });
   return { transactionId: newRef.id, skippedDuplicate: false };
 }
 
@@ -1001,7 +833,7 @@ export async function getFinancialTransactionById(
   return { id: snap.id, data: snap.data() as FinancialTransactionDoc };
 }
 
-/** Remboursements ledger liés à une écriture d’origine (referenceType financial_transaction). */
+/** Remboursements ledger liés à une écriture d'origine (referenceType financial_transaction). */
 export async function listRefundsForOriginalLedgerTransaction(
   companyId: string,
   originalTransactionId: string

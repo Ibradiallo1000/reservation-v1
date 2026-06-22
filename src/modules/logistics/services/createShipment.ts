@@ -17,7 +17,6 @@ import { afterLogisticsShipmentChanged } from "./afterLogisticsShipmentChanged";
 import { logAgentHistoryEvent } from "@/modules/agence/services/agentHistoryService";
 import { writeCourierActivityInTransaction } from "@/modules/compagnie/activity/activityLogsService";
 import { createPayment, getPaymentByReservationId } from "@/services/paymentService";
-import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
 import {
   assertAndIncrementOperationInTransaction,
   loadOperationPlanSettings,
@@ -99,12 +98,6 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
     params.tripInstanceId != null && String(params.tripInstanceId).trim() !== "";
   const pickupCode = String(params.pickupCode ?? generatePickupCode()).trim();
 
-  console.log("🚀 START parcel creation", {
-    companyId: params.companyId,
-    agencyId: params.originAgencyId,
-    data: params,
-  });
-
   try {
     await runTransaction(db, async (tx) => {
     const companyRef = doc(db, "companies", params.companyId);
@@ -185,7 +178,6 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
       trackingToken,
       pickupCode,
     });
-    console.log("✅ PARCEL CREATED");
 
     const eventsCol = eventsRef(db, params.companyId);
     const eventDoc = doc(eventsCol);
@@ -230,14 +222,6 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
     metadata: params.sessionId ? { courierSessionId: params.sessionId } : undefined,
   });
 
-  if (!hasTripInstance) {
-    console.info("[createShipment] Shipment created without tripInstanceId (transportStatus=PENDING_ASSIGNMENT)", {
-      shipmentId,
-      companyId: params.companyId,
-      originAgencyId: params.originAgencyId,
-    });
-  }
-
   // Encaissement comptoir courrier : paiement espèces considéré encaissé immédiatement.
   // Pas de workflow pending -> validated, qui appartient aux paiements à valider.
   if (params.paymentStatus === "PAID_ORIGIN") {
@@ -269,29 +253,10 @@ export async function createShipment(params: CreateShipmentParams): Promise<Crea
         throw new Error("Paiement courrier existant incohérent.");
       }
 
-      if (paymentId) {
-        await createFinancialTransaction({
-          companyId: params.companyId,
-          type: "payment_received",
-          source: "courrier",
-          paymentChannel: "courrier",
-          paymentMethod: pm,
-          paymentProvider: pm === "mobile_money" ? "wave" : "cash",
-          amount,
-          currency: "XOF",
-          agencyId: params.originAgencyId,
-          reservationId: shipmentId,
-          performedAt: Timestamp.now(),
-          referenceType: "payment",
-          referenceId: paymentId,
-          metadata: {
-            provider: pm === "mobile_money" ? "wave" : "cash",
-            paymentMethod: pm,
-            shipmentId,
-            ...(params.sessionId ? { courierSessionId: params.sessionId } : {}),
-          },
-        });
-      }
+      // Décision métier : l’agent courrier ne poste pas directement en comptabilité.
+      // Le paiement opérationnel est créé ici, puis la comptabilité officielle
+      // doit être alimentée lors de la validation de remise par le comptable.
+      void paymentId;
 
       logAgentHistoryEvent({
         companyId: params.companyId,
