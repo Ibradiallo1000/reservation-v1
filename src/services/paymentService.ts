@@ -160,11 +160,31 @@ export async function confirmPayment(
     payload,
     payloadKeys: Object.keys(payload),
   });
+
+  // ============================================================
+  // RÉCUPÉRATION DE L'IDENTITÉ DE L'OPÉRATEUR
+  // ============================================================
+  let validatorRole = "";
+  let validatorCompanyId = "";
+
   try {
     const [userDoc, token] = await Promise.all([
       getDoc(doc(db, "users", userId)),
       auth.currentUser.getIdTokenResult(false),
     ]);
+
+    validatorRole = String(
+      userDoc.exists()
+        ? userDoc.get("role") ?? token.claims.role ?? ""
+        : token.claims.role ?? ""
+    );
+
+    validatorCompanyId = String(
+      userDoc.exists()
+        ? userDoc.get("companyId") ?? userDoc.get("compagnieId") ?? token.claims.companyId ?? token.claims.compagnieId ?? ""
+        : token.claims.companyId ?? token.claims.compagnieId ?? ""
+    );
+
     console.warn("[CONFIRM_PAYMENT_OPERATOR_IDENTITY]", {
       uid: userId,
       userDocRole: userDoc.exists() ? userDoc.get("role") : null,
@@ -218,30 +238,49 @@ export async function confirmPayment(
     validatedBy: userId,
   };
 
-  try {
-    await createFinancialTransaction({
+  // ============================================================
+  // SKIP FINANCIAL TRANSACTION POUR operator_digital
+  // ============================================================
+  if (validatorRole === "operator_digital") {
+    console.warn("[paymentService] operator_digital: skipping financial transaction creation", {
       companyId,
-      type: "payment_received",
-      source: updated.channel,
-      paymentChannel: updated.channel,
-      paymentMethod: explicitPaymentMethodFromPayment({
-        channel: updated.channel,
-        provider: updated.provider,
-      }),
-      paymentProvider: updated.provider,
-      amount: updated.amount,
-      currency: updated.currency,
-      agencyId: updated.agencyId,
+      paymentId,
       reservationId: updated.reservationId,
-      performedAt: now,
-      referenceType: "payment",
-      referenceId: paymentId,
-      metadata: { provider: updated.provider },
+      agencyId: updated.agencyId,
+      amount: updated.amount,
+      provider: updated.provider,
     });
-  } catch (err) {
-    console.warn("[paymentService] createFinancialTransaction failed (payment validated):", err);
+  } else {
+    try {
+      await createFinancialTransaction({
+        companyId,
+        type: "payment_received",
+        source: updated.channel,
+        paymentChannel: updated.channel,
+        paymentMethod: explicitPaymentMethodFromPayment({
+          channel: updated.channel,
+          provider: updated.provider,
+        }),
+        paymentProvider: updated.provider,
+        amount: updated.amount,
+        currency: updated.currency,
+        agencyId: updated.agencyId,
+        reservationId: updated.reservationId,
+        performedAt: now,
+        referenceType: "payment",
+        referenceId: paymentId,
+        metadata: { provider: updated.provider },
+      });
+    } catch (err) {
+      console.warn("[paymentService] createFinancialTransaction failed (payment validated) — non-blocking:", err);
+    }
   }
-  await logPaymentAction({ companyId, paymentId, action: "confirm", userId });
+
+  try {
+    await logPaymentAction({ companyId, paymentId, action: "confirm", userId });
+  } catch (err) {
+    console.warn("[paymentService] logPaymentAction(confirm) failed — non-blocking:", err);
+  }
 
   return updated;
 }
@@ -257,16 +296,40 @@ export async function rejectPayment(
 ): Promise<void> {
   const ref = paymentRef(companyId, paymentId);
   const snap = await getDoc(ref);
+
   if (!snap.exists()) throw new Error("Payment introuvable.");
+
   const data = snap.data() as Record<string, unknown>;
-  if ((data.status as string) !== "pending") throw new Error("Seuls les paiements en attente peuvent être rejetés.");
+  const currentStatus = String(data.status ?? "");
+
+  if (currentStatus === "rejected") {
+    console.warn("[paymentService] rejectPayment skipped: already rejected", {
+      companyId,
+      paymentId,
+    });
+    return;
+  }
+
+  if (currentStatus !== "pending") {
+    throw new Error("Seuls les paiements en attente peuvent être rejetés.");
+  }
 
   await updateDoc(ref, {
     status: "rejected",
     rejectionReason: reason ?? null,
     updatedAt: serverTimestamp(),
   });
-  await logPaymentAction({ companyId, paymentId, action: "reject", userId });
+
+  try {
+    await logPaymentAction({ companyId, paymentId, action: "reject", userId });
+  } catch (err) {
+    console.warn("[paymentService] logPaymentAction(reject) failed — non-blocking:", {
+      companyId,
+      paymentId,
+      userId,
+      error: err,
+    });
+  }
 }
 
 /**

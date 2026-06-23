@@ -58,12 +58,30 @@ const TicketOnline: React.FC<TicketOnlineProps> = ({
   const isValidQR = isTicketValidForQR(statut);
 
   const getStatusLabel = () => {
-    const s = (statut || "").toLowerCase();
-    if (s === "confirme" || s === "paye") return t("ticketStatusPaymentValidated");
-    if (s === "preuve_recue") return t("ticketStatusAwaitingValidation");
-    if (s === "en_attente_paiement" || s === "en_attente") return t("ticketStatusAwaitingPayment");
+  const s = (statut || "").toLowerCase().trim();
+
+  if (s === "confirme" || s === "paye" || s === "payé") {
+    return t("ticketStatusPaymentValidated");
+  }
+
+  if (s === "refuse" || s === "refused" || s === "refusé") {
+    return "Paiement refusé";
+  }
+
+  if (s === "preuve_recue" || s === "verification") {
+    return t("ticketStatusAwaitingValidation");
+  }
+
+  if (s === "annule" || s === "annulé" || s === "cancelled") {
+    return "Réservation annulée";
+  }
+
+  if (s === "en_attente_paiement" || s === "en_attente" || s === "pending") {
     return t("ticketStatusAwaitingPayment");
-  };
+  }
+
+  return t("ticketStatusAwaitingPayment");
+};
 
   const handleDownloadPDF = useCallback(async () => {
     const element = document.getElementById("ticket-content");

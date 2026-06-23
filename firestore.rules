@@ -115,7 +115,7 @@ service cloud.firestore {
     function isEscaleOperator() {
       return isAuth() && (hasUserRole('escale_agent') || hasUserRole('escale_manager'));
     }
-    /* Chef d'agence ou chef d'escale : peuvent gérer l'équipe de leur agence. */
+    /* Chef d'agence ou chef d'escale : peuvent gerer l'equipe de leur agence. */
     function canManageAgencyTeam(agencyId) {
       return isAuth() && (hasUserRole('admin_compagnie') || hasUserRole('admin_platforme')
         || ((hasUserRole('chefAgence') || hasUserRole('chefagence')) && getUserAgencyId() == agencyId)
@@ -125,27 +125,32 @@ service cloud.firestore {
     function isResponsableLogistique() {
       return isAuth() && (hasUserRole('responsable_logistique') || hasUserRole('chef_garage'));
     }
-    /* Phase B — transition de statut réservation (guichetier, chef_agence, comptable, embarquement, validation en ligne). Valeurs canoniques uniquement. */
+    /* Phase B — transition de statut reservation (guichetier, chef_agence, comptable, embarquement, validation en ligne). Valeurs canoniques uniquement. */
     function validReservationStatutTransition() {
       let oldS = resource.data.get('statut', '');
       let newS = request.resource.data.get('statut', '');
-      return (isGuichetier() && (oldS == 'confirme' || oldS == 'paye' || oldS == 'payé') && newS == 'annulation_en_attente')
-        || (isGuichetier() && (oldS == 'paye' || oldS == 'payé') && newS == 'finance_side_effects_failed')
+      return (isGuichetier() && (oldS == 'confirme' || oldS == 'paye' || oldS == 'paye') && newS == 'annulation_en_attente')
+        || (isGuichetier() && (oldS == 'paye' || oldS == 'paye') && newS == 'finance_side_effects_failed')
         || (isAgencyManager() && oldS == 'annulation_en_attente' && newS == 'annule')
         || (isComptable() && oldS == 'annule' && newS == 'rembourse')
         || (isBoardingOfficer() && (
           oldS == 'confirme' ||
-          oldS == 'confirmé' ||
+          oldS == 'confirme' ||
           oldS == 'paye' ||
-          oldS == 'payé' ||
+          oldS == 'paye' ||
           oldS == 'valide' ||
-          oldS == 'validé' ||
+          oldS == 'valide' ||
           oldS == 'preuve_recue'
         ) && (
           newS == 'embarque' ||
-          newS == 'embarqué'
+          newS == 'embarque'
         ))
         || ((hasUserRole('admin_compagnie') || hasUserRole('company_accountant') || isAgencyManager() || isComptable() || hasUserRole('operator_digital')) && (oldS == 'preuve_recue' || oldS == 'verification') && (newS == 'confirme' || newS == 'refuse'));
+    }
+    function isOperatorDigitalForCompany(companyId) {
+      return isAuth()
+        && hasUserRole('operator_digital')
+        && userCompanyId() == companyId;
     }
     function operatorDigitalCanCommitOnlineReservation(companyId, agencyId) {
       let changed = request.resource.data.diff(resource.data).affectedKeys();
@@ -154,7 +159,7 @@ service cloud.firestore {
       let pending = resource.data.get('status', '') in ['preuve_recue', 'verification']
         || resource.data.get('statut', '') in ['preuve_recue', 'verification'];
       return isAuth()
-        && hasUserRole('operator_digital')
+        && isOperatorDigitalForCompany(companyId)
         && resource.data.get('companyId', '') == companyId
         && resource.data.get('agencyId', '') == agencyId
         && online
@@ -186,62 +191,78 @@ service cloud.firestore {
           'updatedAt'
         ])
         && changed.hasOnly([
-          'status',
-          'statut',
-          'paymentStatus',
-          'payment',
-          'ticketValidatedAt',
-          'validatedBy',
-          'auditLog',
-          'seatHoldOnly',
-          'seatsHeld',
-          'seatsCommittedAt',
-          'ticketRevenueCountedInDailyStats',
-          'updatedAt'
-        ]);
+  'status',
+  'statut',
+  'paymentStatus',
+  'payment',
+  'reservation',
+  'boardingStatus',
+  'statutEmbarquement',
+  'checkInTime',
+  'controleurId',
+  'ticketValidatedAt',
+  'validatedBy',
+  'auditLog',
+  'seatHoldOnly',
+  'seatsHeld',
+  'seatsCommittedAt',
+  'ticketRevenueCountedInDailyStats',
+  'updatedAt'
+])
     }
-    function operatorDigitalCanRejectOnlineReservation(companyId, agencyId) {
-      let changed = request.resource.data.diff(resource.data).affectedKeys();
-      let online = resource.data.get('canal', '') in ['en_ligne', 'online']
-        || resource.data.get('paymentChannel', '') in ['en_ligne', 'online'];
-      let pending = resource.data.get('status', '') in ['preuve_recue', 'verification']
-        || resource.data.get('statut', '') in ['preuve_recue', 'verification'];
-      return isAuth()
-        && hasUserRole('operator_digital')
-        && resource.data.get('companyId', '') == companyId
-        && resource.data.get('agencyId', '') == agencyId
-        && online
-        && pending
-        && request.resource.data.get('status', '') == 'refuse'
-        && request.resource.data.get('statut', '') == 'refuse'
-        && request.resource.data.get('refusedBy', '') == request.auth.uid
-        && request.resource.data.get('refusedAt', null) == request.time
-        && request.resource.data.get('updatedAt', null) == request.time
-        && changed.hasAll([
-          'status',
-          'statut',
-          'refusalReason',
-          'refusedBy',
-          'refusedAt',
-          'auditLog',
-          'updatedAt'
-        ])
-        && changed.hasOnly([
-          'status',
-          'statut',
-          'refusalReason',
-          'refusedBy',
-          'refusedAt',
-          'auditLog',
-          'updatedAt'
-        ]);
-    }
+function operatorDigitalCanRejectOnlineReservation(companyId, agencyId) {
+  let changed = request.resource.data.diff(resource.data).affectedKeys();
+  let online = resource.data.get('canal', '') in ['en_ligne', 'online']
+    || resource.data.get('paymentChannel', '') in ['en_ligne', 'online'];
+  let pending = resource.data.get('status', '') in ['preuve_recue', 'verification']
+    || resource.data.get('statut', '') in ['preuve_recue', 'verification'];
+
+  return isAuth()
+    && isOperatorDigitalForCompany(companyId)
+    && resource.data.get('companyId', '') == companyId
+    && resource.data.get('agencyId', '') == agencyId
+    && online
+    && pending
+    && request.resource.data.get('status', '') in ['refuse', 'refused']
+    && request.resource.data.get('statut', '') in ['refuse', 'refused']
+    && request.resource.data.get('updatedAt', null) == request.time
+    && (
+      request.resource.data.get('refusedBy', '') == request.auth.uid
+      || request.resource.data.get('rejectedBy', '') == request.auth.uid
+    )
+    && (
+      request.resource.data.get('refusedAt', null) == request.time
+      || request.resource.data.get('rejectedAt', null) == request.time
+    )
+    && changed.hasOnly([
+  'status',
+  'statut',
+  'paymentStatus',
+  'payment',
+  'reservation',
+  'refusalReason',
+  'rejectionReason',
+  'refusedBy',
+  'refusedAt',
+  'rejectedBy',
+  'rejectedAt',
+  'boardingStatus',
+  'statutEmbarquement',
+  'checkInTime',
+  'controleurId',
+  'seatHoldOnly',
+  'seatsHeld',
+  'seatsCommittedAt',
+  'auditLog',
+  'updatedAt'
+]);
+   }
     function operatorDigitalCanFinalizeOnlineReservation(companyId, agencyId) {
       let changed = request.resource.data.diff(resource.data).affectedKeys();
       let online = resource.data.get('canal', '') in ['en_ligne', 'online']
         || resource.data.get('paymentChannel', '') in ['en_ligne', 'online'];
       return isAuth()
-        && hasUserRole('operator_digital')
+        && isOperatorDigitalForCompany(companyId)
         && resource.data.get('companyId', '') == companyId
         && resource.data.get('agencyId', '') == agencyId
         && online
@@ -268,7 +289,7 @@ service cloud.firestore {
           'updatedAt'
         ]);
     }
-    /* Phase B — contrôleur embarquement : ne peut modifier que statut, statutEmbarquement, controleurId, checkInTime, auditLog, updatedAt */
+    /* Phase B — controleur embarquement : ne peut modifier que statut, statutEmbarquement, controleurId, checkInTime, auditLog, updatedAt */
     function boardingOfficerAllowedKeysOnly() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         "statut", "statutEmbarquement", "boardingStatus", "journeyStatus", "controleurId", "checkInTime", "auditLog", "updatedAt"
@@ -292,18 +313,18 @@ service cloud.firestore {
         || (
           (
             oldStatut == 'confirme'
-            || oldStatut == 'confirmé'
+            || oldStatut == 'confirme'
             || oldStatut == 'paye'
-            || oldStatut == 'payé'
+            || oldStatut == 'paye'
             || oldStatut == 'valide'
-            || oldStatut == 'validé'
+            || oldStatut == 'valide'
             || oldStatut == 'preuve_recue'
             || oldStatut == 'embarque'
-            || oldStatut == 'embarqué'
+            || oldStatut == 'embarque'
           )
           && (
             newStatut == 'embarque'
-            || newStatut == 'embarqué'
+            || newStatut == 'embarque'
           )
         );
     }
@@ -319,7 +340,7 @@ service cloud.firestore {
       let changed = request.resource.data.diff(resource.data).affectedKeys();
       let statutEmbarquement = request.resource.data.get('statutEmbarquement', '');
       return !changed.hasAny(['statutEmbarquement'])
-        || statutEmbarquement == 'embarqué'
+        || statutEmbarquement == 'embarque'
         || statutEmbarquement == 'embarque'
         || statutEmbarquement == 'en_attente'
         || statutEmbarquement == 'absent';
@@ -365,7 +386,7 @@ service cloud.firestore {
       ]
       && request.resource.data.get('statutEmbarquement', resource.data.get('statutEmbarquement', '')) in [
         'en_attente',
-        'embarqué',
+        'embarque',
         'embarque',
         'absent'
       ];
@@ -417,16 +438,16 @@ service cloud.firestore {
     }
 
     /**
-     * Agence rattachée à la compagnie (guichet / escale / chef) — évite les 403 quand
-     * users/{uid}.companyId est absent ou désynchronisé mais agencyId est correct.
+     * Agence rattachee a la compagnie (guichet / escale / chef) — evite les 403 quand
+     * users/{uid}.companyId est absent ou desynchronise mais agencyId est correct.
      */
     function userAgencyBelongsToCompany(companyId) {
       return isAuth() && getUserAgencyId() != ''
         && exists(/databases/$(database)/documents/companies/$(companyId)/agences/$(getUserAgencyId()));
     }
     /**
-     * Si paymentChannel est renseigné : en ligne sans poste/vendeur ; guichet avec agentId + sessionId.
-     * Les documents sans paymentChannel restent acceptés (données historiques).
+     * Si paymentChannel est renseigne : en ligne sans poste/vendeur ; guichet avec agentId + sessionId.
+     * Les documents sans paymentChannel restent acceptes (donnees historiques).
      */
     function reservationCreatePaymentChannelShapeOk() {
       let pc = request.resource.data.get('paymentChannel', '');
@@ -451,7 +472,7 @@ service cloud.firestore {
           && request.resource.data.get('idempotencyKey', '').size() > 0
         );
     }
-    /** Écriture trésorerie / paiements guichet : même agence que le payload. */
+    /** Ecriture tresorerie / paiements guichet : meme agence que le payload. */
     function publicOnlineReservationCreate(companyId, agencyId) {
       let canal = request.resource.data.get('canal', '');
       let status = request.resource.data.get('status', '');
@@ -559,8 +580,8 @@ service cloud.firestore {
         && isHeadOfficeFinanceRole();
     }
     /**
-     * Comptable agence : création idempotente du compte miroir company_bank_* (ensureCompanyBankAccount),
-     * nécessaire pour lister la banque dans « versement caisse → banque ». Pas d’écriture ledger arbitraire.
+     * Comptable agence : creation idempotente du compte miroir company_bank_* (ensureCompanyBankAccount),
+     * necessaire pour lister la banque dans versement caisse → banque. Pas d'ecriture ledger arbitraire.
      */
     function agencyAccountantCanCreateCompanyBankMirror(companyId, accountId) {
       return isComptable()
@@ -1014,7 +1035,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
         'currentAgencyId', 'destinationAgencyId', 'lastKnownAgencyId', 'isReturnToOrigin', 'updatedAt'
       ]);
     }
-    /** operationalStatus réservé au garage (changement technique) ou ignoré si pas touché. */
+    /** operationalStatus reserve au garage (changement technique) ou ignore si pas touche. */
     function vehicleOperationalStatusWriteOk() {
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['operationalStatus'])
         || request.resource.data.diff(resource.data).affectedKeys().hasAny(['technicalStatus']);
@@ -1028,7 +1049,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
         && request.resource.data.agencyId == resource.data.agencyId
         && request.resource.data.status == resource.data.status;
     }
-    /** Embarquement : chef / équipe / escale sur l’agence du créneau ; admins société ou plateforme (souvent sans agencyId) comme pour liveStatus. */
+    /** Embarquement : chef / equipe / escale sur l'agence du creneau ; admins societe ou plateforme (souvent sans agencyId) comme pour liveStatus. */
     function canWriteTripAssignmentBoardingSession(companyId, agencyId) {
       return isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
         hasUserRole('admin_compagnie')
@@ -1093,8 +1114,8 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
     }
 
     /**
-     * Réservation en ligne en attente de preuve (upload preuve / transaction sièges).
-     * Flux actuel : statut legacy "en_attente" OU champ SaaS status "en_attente" + hold ; alias : "en_attente_paiement".
+     * Reservation en ligne en attente de preuve (upload preuve / transaction sieges).
+     * Flux actuel : statut legacy en_attente OU champ SaaS status en_attente + hold ; alias : en_attente_paiement.
      */
     function reservationAwaitingOnlinePaymentProof() {
       let s = resource.data.get('statut', '');
@@ -1115,7 +1136,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
     }
 
     /* =====================
-       DONNÉES PUBLIQUES
+       DONNEES PUBLIQUES
     ===================== */
     match /villes/{id} {
       allow get, list: if true;
@@ -1123,7 +1144,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
 
     match /paymentMethods/{id} {
       // Catalogue public.
-      // Note: pour préserver les anciennes règles, on garde get/list publics.
+      // Note: pour preserver les anciennes regles, on garde get/list publics.
       allow get, list: if true;
 
       // CRUD : plateforme uniquement.
@@ -1133,7 +1154,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
 
 
 
-    /* Résolution publique des réservations par token uniquement. Doc id = publicToken ; accès par get(id) uniquement (pas de list). */
+    /* Resolution publique des reservations par token uniquement. Doc id = publicToken ; acces par get(id) uniquement (pas de list). */
     match /publicReservations/{docId} {
       allow get, create, update: if true;
       allow list, delete: if false;
@@ -1248,7 +1269,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
         allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
       }
 
-      /* Journal d’activité commercial (CA terrain) : append-only, hors ledger. */
+      /* Journal d'activite commercial (CA terrain) : append-only, hors ledger. */
       match /activityLogs/{logId} {
         allow get, list: if isAuth() && (
           userCompanyId() == companyId
@@ -1258,7 +1279,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
             && resource.data.get('agencyId', '') == getUserAgencyId()
           )
         );
-        /* Même logique que guichetSaleLocks / dailyStats : companyId doc OU agence rattachée à la compagnie (évite 403 si companyId token désynchronisé). */
+        /* Meme logique que guichetSaleLocks / dailyStats : companyId doc OU agence rattachee a la compagnie (evite 403 si companyId token desynchronise). */
         allow create: if isAuth()
           && request.resource.data.companyId == companyId
           && (
@@ -1280,7 +1301,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
         allow update, delete: if false;
       }
 
-      /* Routes réseau. Lecture publique pour calcul places (résa en ligne) ; écriture = compagnie / admin. */
+      /* Routes reseau. Lecture publique pour calcul places (resa en ligne) ; ecriture = compagnie / admin. */
       match /routes/{routeId} {
         allow get, list: if true;
         allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (getUserRole() == 'admin_compagnie' || getUserRole() == 'admin_platforme' || (isResponsableLogistique() && userCompanyId() == companyId));
@@ -1298,7 +1319,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
         allow delete: if false;
       }
 
-      /* Agrégats planification (totalPlannedVehicles, totalTrips) — recalcul côté client après mutations. */
+      /* Agregats planification (totalPlannedVehicles, totalTrips) — recalcul cote client apres mutations. */
       match /planningStats/{docId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
@@ -1313,7 +1334,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
         allow delete: if false;
       }
 
-      /* Compteurs incrémentaux par véhicule (planification) — transactions client create/update/delete. */
+      /* Compteurs incrementaux par vehicule (planification) — transactions client create/update/delete. */
       match /planningVehicleTripCount/{vehicleId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow create, update, delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
@@ -1337,7 +1358,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           && request.resource.data.get('departureTime', '') != ''
           && request.resource.data.get('departureCity', '') != ''
           && request.resource.data.get('arrivalCity', '') != '';
-        /* Réservation définitive de sièges : utilisateurs internes authentifiés uniquement. */
+        /* Reservation definitive de sieges : utilisateurs internes authentifies uniquement. */
         allow update: if (
             isAuth()
             && (
@@ -1367,7 +1388,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
             )
           );
         allow delete: if false;
-        /* Progression bus par escale (arrivée/départ). Lecture: public. Écriture: embarquement (départ origine), chef agence, escales, admin. */
+        /* Progression bus par escale (arrivee/depart). Lecture: public. Ecriture: embarquement (depart origine), chef agence, escales, admin. */
         match /progress/{stopOrder} {
           allow get, list: if true;
           allow create, update: if isAuth() && (
@@ -1390,7 +1411,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
         }
       }
 
-      /* Suivi temps réel inter-agences : tripExecutions */
+      /* Suivi temps reel inter-agences : tripExecutions */
       function userAgencyCity() {
         let userPath = /databases/$(database)/documents/companies/$(companyId)/agences/$(getUserAgencyId());
         let userData = exists(userPath) ? get(userPath).data : null;
@@ -1404,14 +1425,14 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
       }
 
       match /tripExecutions/{executionId} {
-        /* Lecture : chaque agence ne voit que les destinations qui correspondent à sa ville. */
+        /* Lecture : chaque agence ne voit que les destinations qui correspondent a sa ville. */
         allow get, list: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
           getUserRole() == 'admin_platforme'
           || getUserRole() == 'admin_compagnie'
           || resource.data.get('destinationCity', '') == userAgencyCity()
         );
 
-        /* Écriture : uniquement par les rôles qui mettent à jour le cycle (embarquement/escale/fleet/logistique). */
+        /* Ecriture : uniquement par les roles qui mettent a jour le cycle (embarquement/escale/fleet/logistique). */
         allow create, update: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
           isBoardingOfficer()
           || isAgencyManager()
@@ -1422,7 +1443,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           || getUserRole() == 'admin_platforme'
           || getUserRole() == 'admin_compagnie'
         );
-        /* Exception ciblée chefEmbarquement: update borné à quelques champs opérationnels. */
+        /* Exception ciblee chefEmbarquement: update borne a quelques champs operationnels. */
         allow update: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId))
           && (hasUserRole('chefEmbarquement') || hasUserRole('chefembarquement'))
           && request.resource.data.diff(resource.data).changedKeys().hasOnly([
@@ -1439,7 +1460,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           let reservationId = request.resource.data.get('reservationId', '');
           let reservationPath = /databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/reservations/$(reservationId);
           return isAuth()
-            && hasUserRole('operator_digital')
+            && isOperatorDigitalForCompany(companyId)
             && request.resource.data.get('sourceType', '') == 'online'
             && request.resource.data.get('createdBy', '') == request.auth.uid
             && request.resource.data.get('status', '') == 'paid'
@@ -1506,7 +1527,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           userCompanyId() == companyId
           || getUserRole() == 'admin_platforme'
           || (
-            hasUserRole('operator_digital')
+            isOperatorDigitalForCompany(companyId)
             && sessionId.matches('^virtual_online_.*')
             && request.resource.data.get('companyId', '') == companyId
             && request.resource.data.get('agencyId', '') != ''
@@ -1524,7 +1545,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           userCompanyId() == companyId
           || getUserRole() == 'admin_platforme'
           || (
-            hasUserRole('operator_digital')
+            isOperatorDigitalForCompany(companyId)
             && sessionId.matches('^virtual_online_.*')
             && resource.data.get('companyId', '') == companyId
             && request.resource.data.get('companyId', '') == companyId
@@ -1599,7 +1620,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           );
         }
 
-        /* Verrou créneau planification (concurrence) — holderUid = request.auth.uid, TTL côté client. */
+        /* Verrou creneau planification (concurrence) — holderUid = request.auth.uid, TTL cote client. */
         match /planningLocks/{lockId} {
           allow get, list: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
             (getUserAgencyId() == agencyId && (
@@ -1639,7 +1660,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
             && resource.data.get('holderUid', '') == request.auth.uid;
         }
 
-        /* Index miroir créneau véhicule (atomicité planification). */
+        /* Index miroir creneau vehicule (atomicite planification). */
         match /tripAssignmentVehicleSlots/{slotId} {
           allow get, list: if isAuth() && userCompanyId() == companyId && (
             (getUserAgencyId() == agencyId && (
@@ -1691,7 +1712,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           );
         }
 
-        /* Affectations trajet + date + heure → véhicule (planifié par chef/superviseur, validé par logistique). */
+        /* Affectations trajet + date + heure → vehicule (planifie par chef/superviseur, valide par logistique). */
         match /tripAssignments/{assignmentId} {
           allow get, list: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && (
             (getUserAgencyId() == agencyId && (
@@ -1885,7 +1906,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           allow delete: if false;
         }
 
-        /* Verrou idempotence vente guichet (créé dans la même transaction que la réservation). */
+        /* Verrou idempotence vente guichet (cree dans la meme transaction que la reservation). */
         match /guichetSaleLocks/{lockId} {
           allow get: if isAuth() && userAgencyBelongsToCompany(companyId) && getUserAgencyId() == agencyId;
           allow create: if isAuth() && userAgencyBelongsToCompany(companyId) && getUserAgencyId() == agencyId
@@ -1904,7 +1925,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
 
         match /reservations/{reservationId} {
 
-          /* 🔓 Création publique. Lecture réservée aux utilisateurs compagnie ; accès billet public = via publicReservations (doc id = publicToken) uniquement. */
+          /* Creation publique. Lecture reservee aux utilisateurs compagnie ; acces billet public = via publicReservations (doc id = publicToken) uniquement. */
           allow create: if (
             request.auth == null
             || publicOnlineReservationCreate(companyId, agencyId)
@@ -1916,7 +1937,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
             )
           )
             && reservationCreatePaymentChannelShapeOk();
-          /* get : compagnie / agence rattachée / admin_platforme ; ou public pour résa en_ligne (upload preuve, reçu, mon-billet). list : jamais en public. */
+          /* get : compagnie / agence rattachee / admin_platforme ; ou public pour resa en_ligne (upload preuve, recu, mon-billet). list : jamais en public. */
           allow get: if (isAuth() && (
               userCompanyId() == companyId
               || getUserRole() == 'admin_platforme'
@@ -1924,7 +1945,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
               || (getUserRole() == 'operator_digital' && userCompanyId() == companyId)
             ))
             || (isAuth()
-              && hasUserRole('operator_digital')
+              && isOperatorDigitalForCompany(companyId)
               && resource.data.get('companyId', '') == companyId
               && resource.data.get('agencyId', '') == agencyId
               && (
@@ -1955,8 +1976,8 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           );
 
           /* =============================
-             UPDATE 1 — APRÈS CRÉATION
-             (publicToken / publicUrl ; updatedAt optionnel pour conformité)
+             UPDATE 1 — APRES CREATION
+             (publicToken / publicUrl ; updatedAt optionnel pour conformite)
           ============================= */
           allow update: if (
             request.auth == null &&
@@ -1969,7 +1990,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           );
 
           /* =============================
-             UPDATE 2 — SOUMISSION PREUVE (public ou utilisateur connecté)
+             UPDATE 2 — SOUMISSION PREUVE (public ou utilisateur connecte)
              Passage en_attente_paiement → preuve_recue. UploadPreuvePage.
           ============================= */
           allow update: if (
@@ -1988,8 +2009,8 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           allow update: if operatorDigitalCanRejectOnlineReservation(companyId, agencyId);
           allow update: if operatorDigitalCanFinalizeOnlineReservation(companyId, agencyId);
 
-          /* ✅ Embarquement mobile: autoriser update ciblé même si shift validé.
-             Nécessaire pour scan terrain (boardingStatus/journeyStatus + audit). */
+          /* Embarquement mobile: autoriser update cible meme si shift valide.
+             Necessaire pour scan terrain (boardingStatus/journeyStatus + audit). */
           allow update: if request.auth != null
             && request.auth.uid == "jckg193rHpbysYShk5ZcUDDSSyF3"
             && companyId == "e1zx7bz0Pl1IPVPt2ne4"
@@ -2002,10 +2023,10 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
             ]);
           allow update: if canBoardingOfficerOperateReservation(companyId, agencyId);
 
-          /* 🔐 Phase B — Utilisateurs internes : transition de statut autorisée par rôle ;
-             contrôleur embarquement : champs restreints.
-             operator_digital : peut valider/refuser même si shiftId est présent/validé, mais
-             pour les updates "non-statut" on limite les clés autorisées (cash/paiement). */
+          /* Phase B — Utilisateurs internes : transition de statut autorisee par role ;
+             controleur embarquement : champs restreints.
+             operator_digital : peut valider/refuser meme si shiftId est present/valide, mais
+             pour les updates non-statut on limite les cles autorisees (cash/paiement). */
           allow update, delete: if isAuth() && (
             userCompanyId() == companyId
             || userAgencyBelongsToCompany(companyId)
@@ -2014,7 +2035,7 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
             (
               getUserRole() == 'operator_digital' ||
               /* Validation finale chef/compta : autoriser le marquage validatedAt/updatedAt
-                 même si le shift est déjà VALIDATED (sans changement de statut réservation). */
+                 meme si le shift est deja VALIDATED (sans changement de statut reservation). */
               (
                 !request.resource.data.diff(resource.data).affectedKeys().hasAny(['statut']) &&
                 request.resource.data.diff(resource.data).affectedKeys().hasOnly(['validatedAt', 'updatedAt']) &&
@@ -2106,8 +2127,7 @@ match /shiftReports/{reportId} {
     || getUserRole() == 'admin_platforme'
     || (
       userAgencyBelongsToCompany(companyId)
-      && getUserAgencyId() == agencyId
-      && (
+      && getUserAgencyId() == agencyId      && (
         isGuichetier()
         || getUserRole() == 'agentCourrier'
         || isComptable()
@@ -2186,14 +2206,14 @@ match /shiftReports/{reportId} {
           allow update, delete: if false;
         }
 
-        /* Phase 4.5 — idempotence compteur live (un doc par affectation + réservation). Création seule, pas de MAJ. */
+        /* Phase 4.5 — idempotence compteur live (un doc par affectation + reservation). Creation seule, pas de MAJ. */
         match /boardingEmbarkDedup/{dedupId} {
           allow get, list: if isAuth() && (
             userCompanyId() == companyId
             || userAgencyBelongsToCompany(companyId)
             || getUserRole() == 'admin_platforme'
           );
-          /* Même périmètre que liveStatus (escale + boarding) et que boardingLogs/boardingLocks (chef / contrôleur). */
+          /* Meme perimetre que liveStatus (escale + boarding) et que boardingLogs/boardingLocks (chef / controleur). */
           allow create: if isAuth() && (
               ((isBoardingOfficer() || isAgencyManager()) && (
                 userCompanyId() == companyId
@@ -2209,7 +2229,7 @@ match /shiftReports/{reportId} {
           allow update, delete: if false;
         }
 
-        /** Journal centralisé des actions agents (lecture : supervision ; écriture : opérationnels). */
+        /** Journal centralise des actions agents (lecture : supervision ; ecriture : operationnels). */
         match /agentHistory/{eventId} {
           allow get, list: if isAuth() && (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId)) && getUserAgencyId() == agencyId && (
             isComptable() || isAgencyManager()
@@ -2316,7 +2336,7 @@ match /shiftReports/{reportId} {
           allow update, delete: if false;
         }
 
-        /* Écritures comptables encaissement (une par validation de session guichet / courrier). */
+        /* Ecritures comptables encaissement (une par validation de session guichet / courrier). */
         match /comptaEncaissements/{entryId} {
           allow get, list: if isAuth() && (
             userCompanyId() == companyId
@@ -2329,14 +2349,14 @@ match /shiftReports/{reportId} {
           allow create: if (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
             || comptaEncaissementCreateOk(companyId, agencyId);
           allow update: if false;
-          /* Suppression réservée au renvoi courrier chef → comptable (doc `courier_*` uniquement). */
+          /* Suppression reservee au renvoi courrier chef → comptable (doc courier_* uniquement). */
           allow delete: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
             getUserRole() == 'admin_platforme' ||
             isAgencyManager()
           ) && entryId.matches('courier_.+');
         }
 
-        /* Agency cash movements (comptabilité). Authenticated read/write. */
+        /* Agency cash movements (comptabilite). Authenticated read/write. */
         match /cashMovements/{movementId} {
           allow get, list: if isAuth() && (
             userCompanyId() == companyId
@@ -2526,7 +2546,14 @@ match /shiftReports/{reportId} {
           || agencyAccountantCanListCompanyScopedAccounting(companyId);
         allow create: if courierCashFinancialTxCreateOk(companyId)
           || canAccessSensitiveCompanyFinance(companyId)
-          || (canWriteAgencyScopedFinance(companyId) && financialTxAgencyStaffPayload(companyId));
+          || (canWriteAgencyScopedFinance(companyId) && financialTxAgencyStaffPayload(companyId))
+          || (
+            isOperatorDigitalForCompany(companyId)
+            && request.resource.data.get('companyId', '') == companyId
+            && request.resource.data.get('type', '') == 'payment_received'
+            && request.resource.data.get('amount', 0) > 0
+            && request.resource.data.get('amount', 0) < 100000000
+          );
         allow update: if canAccessSensitiveCompanyFinance(companyId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'metadata']);
         allow delete: if false;
@@ -2544,7 +2571,8 @@ match /shiftReports/{reportId} {
         allow get: if canAccessSensitiveCompanyFinance(companyId)
           || canWriteAgencyScopedFinance(companyId)
           || (isCourierAgent() && userAgencyBelongsToCompany(companyId))
-          || agencyAccountantCanListCompanyScopedAccounting(companyId);
+          || agencyAccountantCanListCompanyScopedAccounting(companyId)
+          || isOperatorDigitalForCompany(companyId);
         allow create: if courierCashFinancialIdempotencyOk(companyId)
           || canAccessSensitiveCompanyFinance(companyId)
           || (
@@ -2555,6 +2583,12 @@ match /shiftReports/{reportId} {
           )
           || (
             canWriteAgencyScopedFinance(companyId)
+            && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
+            && request.resource.data.get('transactionId', '').size() > 0
+            && request.resource.data.get('createdAt') is timestamp
+          )
+          || (
+            isOperatorDigitalForCompany(companyId)
             && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
             && request.resource.data.get('transactionId', '').size() > 0
             && request.resource.data.get('createdAt') is timestamp
@@ -2747,14 +2781,14 @@ match /shiftReports/{reportId} {
         allow delete: if false;
       }
 
-      /* Erreurs système / incohérences critiques (écriture côté client pour journalisation ; pas de mise à jour). */
+      /* Erreurs systeme / incoherences critiques (ecriture cote client pour journalisation ; pas de mise a jour). */
       match /systemErrors/{errorId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow update, delete: if false;
       }
 
-      /* Vue matérialisée trajet → véhicule (mise à jour dans la même transaction que vehicles). */
+      /* Vue materialisee trajet → vehicule (mise a jour dans la meme transaction que vehicles). */
       match /vehicleLiveState/{liveId} {
         allow get, list: if canReadCompanyData(companyId)
           || (isBoardingOfficer() && userAgencyBelongsToCompany(companyId))
@@ -2780,7 +2814,7 @@ match /shiftReports/{reportId} {
         allow create: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           canModifyFleet() || isResponsableLogistique()
         ) && vehicleStatusVehiculeShapeOk();
-        /* Pas d’écriture operationStatus / currentTripId / operationStatus côté client (hors maintenance explicite via champs techniques). */
+        /* Pas d'ecriture operationStatus / currentTripId / operationStatus cote client (hors maintenance explicite via champs techniques). */
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme') && (
           canModifyFleet() ||
           isResponsableLogistique() ||
@@ -2905,7 +2939,7 @@ match /shiftReports/{reportId} {
           let paymentId = request.resource.data.get('paymentId', '');
           let paymentPath = /databases/$(database)/documents/companies/$(companyId)/payments/$(paymentId);
           return isAuth()
-            && hasUserRole('operator_digital')
+            && isOperatorDigitalForCompany(companyId)
             && paymentId is string
             && paymentId != ''
             && request.resource.data.get('userId', '') == request.auth.uid
@@ -2961,13 +2995,13 @@ match /shiftReports/{reportId} {
       }
 
       /**
-       * Paiements unifiés (guichet + online) — companies/{companyId}/payments
-       * - Lecture / mise à jour : même tenant (userCompanyId) ou admin plateforme.
-       * - Création visiteur (avec ou sans auth) : pending + channel online + companyId cohérent
-       *   (évite l’échec si l’utilisateur est connecté avec un autre tenant que la compagnie du billet).
+       * Paiements unifies (guichet + online) — companies/{companyId}/payments
+       * - Lecture / mise a jour : meme tenant (userCompanyId) ou admin plateforme.
+       * - Creation visiteur (avec ou sans auth) : pending + channel online + companyId coherent
+       *   (evite l'echec si l'utilisateur est connecte avec un autre tenant que la compagnie du billet).
        */
       match /payments/{paymentId} {
-        /** Visiteur (auth ou anonyme) : création pending+online pour la caisse digitale. */
+        /** Visiteur (auth ou anonyme) : creation pending+online pour la caisse digitale. */
         function visitorOnlinePendingPaymentCreate() {
           return request.resource.data.get('status', '') == 'pending'
             && request.resource.data.get('channel', '') == 'online'
@@ -2978,7 +3012,7 @@ match /shiftReports/{reportId} {
             && request.resource.data.get('amount', 0) < 100000000
             && request.resource.data.get('currency', 'XOF') == 'XOF';
         }
-        /* get : staff ; visiteur = doc online dont l’id == reservationId (ou doc absent pour getDoc idempotent). */
+        /* get : staff ; visiteur = doc online dont l'id == reservationId (ou doc absent pour getDoc idempotent). */
         allow get: if resource == null
           || (isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme'))
           || (resource.data.get('companyId', '') == companyId
@@ -3000,7 +3034,7 @@ match /shiftReports/{reportId} {
             && request.resource.data.get('status', 'pending') != 'validated'
           );
         /* setDoc sur doc existant = update : idempotence (double envoi preuve / course). */
-        /* Mise à jour staff : même tenant (companyId profil / token) ou rôles siège / opérateur digital rattaché à la compagnie. */
+        /* Mise a jour staff : meme tenant (companyId profil / token) ou roles siege / operateur digital rattache a la compagnie. */
         allow update: if canValidateGuichetPayment(companyId);
         allow update: if (isAuth() && (
             userCompanyId() == companyId
@@ -3043,15 +3077,15 @@ match /shiftReports/{reportId} {
       }
 
       /**
-       * Bibliothèque d’images (métadonnées après upload Cloudinary).
-       * Avant : aucune règle explicite → refus par défaut (permission-denied sur listen / addDoc).
+       * Bibliotheque d'images (metadonnees apres upload Cloudinary).
+       * Avant : aucune regle explicite → refus par defaut (permission-denied sur listen / addDoc).
        */
       match /imagesBibliotheque/{imageId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || hasUserRole('admin_platforme'));
         allow create: if isAuth() && (userCompanyId() == companyId || hasUserRole('admin_platforme')) && (
           hasUserRole('admin_compagnie') ||
           hasUserRole('admin_platforme') ||
-          hasUserRole('operator_digital') ||
+          isOperatorDigitalForCompany(companyId) ||
           hasUserRole('company_ceo')
         )
           && request.resource.data.keys().hasAll(['url', 'type', 'createdAt'])
@@ -3069,7 +3103,7 @@ match /shiftReports/{reportId} {
 
     /* =====================
        COLLECTION GROUP
-       (requis pour getCountFromServer / agrégation sur la landing)
+       (requis pour getCountFromServer / aggregation sur la landing)
     ===================== */
     match /{path=**}/weeklyTrips/{tripId} {
       allow get, list: if true;
@@ -3079,7 +3113,7 @@ match /shiftReports/{reportId} {
       allow get, list: if true;
     }
 
-      /* Collection group reservations : lecture pour admin, même compagnie (companyId/compagnieId), ou même agence (guichetier, chefAgence, etc.). */
+      /* Collection group reservations : lecture pour admin, meme compagnie (companyId/compagnieId), ou meme agence (guichetier, chefAgence, etc.). */
     match /{path=**}/reservations/{reservationId} {
       allow get: if (
         isAuth() && (
@@ -3124,7 +3158,7 @@ match /shiftReports/{reportId} {
       );
     }
 
-    /* Suivi colis public : lecture pour tous ; écriture par utilisateurs de la même compagnie (sync depuis l’app). */
+    /* Suivi colis public : lecture pour tous ; ecriture par utilisateurs de la meme compagnie (sync depuis l'app). */
     match /publicShipmentTrack/{trackId} {
       allow get, list: if true;
       allow create: if isAuth() && userCompanyId() == request.resource.data.companyId;
@@ -3163,7 +3197,7 @@ match /shiftReports/{reportId} {
     }
 
     /* =====================
-       DONNÉES INTERNES
+       DONNEES INTERNES
     ===================== */
     match /users/{userId} {
       allow get: if request.auth != null && request.auth.uid == userId;
@@ -3186,7 +3220,7 @@ match /shiftReports/{reportId} {
     /* =====================
        COUNTERS (company-level, e.g. trip instance refs)
        - Auth: same-tenant only.
-       - Public: get + create/update with only lastSeq/updatedAt (résa en ligne generateWebReferenceCode).
+       - Public: get + create/update with only lastSeq/updatedAt (resa en ligne generateWebReferenceCode).
     ===================== */
     match /companies/{companyId}/counters/byTrip/trips/{tripInstanceId} {
       allow get: if true;

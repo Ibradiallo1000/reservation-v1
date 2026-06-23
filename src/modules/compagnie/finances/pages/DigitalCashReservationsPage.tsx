@@ -51,7 +51,7 @@ import { MetricCard, SectionCard, StatusBadge, type StatusVariant, StandardLayou
 import { upsertCustomerFromReservation } from '@/modules/compagnie/crm/customerService';
 import { decrementReservedSeats } from '@/modules/compagnie/tripInstances/tripInstanceService';
 import { ensurePendingOnlinePaymentFromReservation, getPaymentByReservationId } from '@/services/paymentService';
-import { validatePendingOnlinePaymentAndSyncReservation } from '@/services/onlinePaymentOperatorService';
+import { validatePendingOnlinePaymentAndSyncReservation, rejectPendingOnlinePaymentAndSyncReservation } from '@/services/onlinePaymentOperatorService';
 
 /** Son Shopify (alarme / preuve reçue) : public/splash/son.mp3 */
 const NOTIFICATION_SOUND_URL = '/splash/son.mp3';
@@ -691,7 +691,6 @@ const ReservationsEnLigne: React.FC = () => {
           const raw = doc.data() as Record<string, unknown>;
           const agencyId = String(raw.agencyId ?? doc.ref.parent.parent?.id ?? '');
           
-          // CORRECTION : S'assurer que les réservations confirmées sont bien incluses
           allOtherReservations.push(buildDigitalReservationRow({
             id: doc.id,
             agencyId,
@@ -955,8 +954,6 @@ const ReservationsEnLigne: React.FC = () => {
       // Réinitialiser la notification pour cette réservation
       resetNotification(`${reservation.agencyId}_${reservation.id}`);
       
-      // UI simplifiée : on ne recharge plus l'historique (seule la liste "preuve_recue" est affichée)
-      
       toast.success('Réservation confirmée', {
         description: `Le billet est maintenant disponible pour ${reservation.customer.name || 'ce client'}`,
       });
@@ -1007,17 +1004,69 @@ const ReservationsEnLigne: React.FC = () => {
         toast.error('Erreur', { description: 'Cette réservation ne peut plus être refusée' });
         return;
       }
-      await updateDoc(reservationRef, {
-        status: 'annulé',
-        refusedBy: user.uid ?? '',
-        refusedAt: serverTimestamp(),
-        refusalReason: 'Refus opérateur digital',
-        "payment.status": "rejected",
-        "payment.rejectedAt": serverTimestamp(),
-        "payment.rejectedBy": user.uid ?? "",
-        updatedAt: serverTimestamp(),
-      });
 
+      // ============================================================
+      // 🔥 CORRECTION CRITIQUE : Utiliser le service métier
+      // au lieu de updateDoc direct avec status: 'annulé'
+      // ============================================================
+      
+      // 1. Récupérer le montant et le moyen de paiement
+      const montant = r.payment.amount;
+      const paymentMethodLabel = r.payment.method ?? '';
+      
+      // 2. S'assurer qu'un payment existe
+      let ensured;
+      try {
+        ensured = await ensurePendingOnlinePaymentFromReservation({
+          companyId: user.companyId,
+          agencyId: reservation.agencyId,
+          reservationId: reservation.id,
+          montant,
+          paymentMethodLabel,
+        });
+      } catch (e) {
+        console.error('handleRefuse: ensurePendingOnlinePaymentFromReservation failed', e);
+        throw e;
+      }
+      if (!ensured.ok) {
+        toast.error('Erreur', {
+          description: ensured.error ?? 'Impossible de préparer le paiement en ligne pour cette réservation.',
+        });
+        return;
+      }
+
+      // 3. Récupérer le payment
+      let payment;
+      try {
+        payment = await getPaymentByReservationId(user.companyId, reservation.id);
+      } catch (e) {
+        console.error('handleRefuse: getPaymentByReservationId failed', e);
+        throw e;
+      }
+      if (!payment) {
+        toast.error('Erreur', {
+          description: 'Aucun paiement trouvé pour cette réservation.',
+        });
+        return;
+      }
+
+      // 4. Utiliser le service de refus (même flux que la validation)
+      try {
+        await rejectPendingOnlinePaymentAndSyncReservation(
+          payment,
+          user.companyId,
+          {
+            uid: user.uid ?? '',
+            role: (user as { role?: string | string[] }).role,
+          },
+          'Refus opérateur digital'
+        );
+      } catch (e) {
+        console.error('handleRefuse: rejectPendingOnlinePaymentAndSyncReservation failed', e);
+        throw e;
+      }
+
+      // 5. Décrémenter les sièges si nécessaire
       const tripInstanceId = data.tripInstanceId ?? null;
       const seats = (data.seatsGo ?? 0) + (data.seatsReturn ?? 0);
       if (tripInstanceId && seats > 0) {
@@ -1052,8 +1101,6 @@ const ReservationsEnLigne: React.FC = () => {
       
       // Réinitialiser la notification pour cette réservation
       resetNotification(`${reservation.agencyId}_${reservation.id}`);
-      
-      // UI simplifiée : on ne recharge plus l'historique (seule la liste "preuve_recue" est affichée)
       
       toast.info('Réservation refusée', {
         description: `La réservation de ${reservation.customer.name || 'ce client'} a été refusée`,
@@ -1750,752 +1797,752 @@ const ReservationsEnLigne: React.FC = () => {
           <SectionCard
             title="Réservations à traiter"
             help={<span className="text-sm font-normal text-gray-500 dark:text-gray-300">Validation des paiements en ligne et paiements</span>}
-        right={
-          <button
-            onClick={handleRefresh}
+            right={
+              <button
+                onClick={handleRefresh}
                 className="p-2.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:text-white dark:hover:bg-gray-800 rounded-xl transition-colors"
-            title="Actualiser manuellement"
+                title="Actualiser manuellement"
+              >
+                <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+              </button>
+            }
           >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          </button>
-        }
-      >
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className={`h-3 w-3 rounded-full ${verificationReservations.length > 0 ? 'bg-amber-500 animate-pulse' : 'bg-gray-300'}`} />
-            <span className="text-sm text-gray-600">
-              {verificationReservations.length > 0
-                ? `${verificationReservations.length} en attente de validation`
-                : 'Tout est à jour'}
-            </span>
-          </div>
-          <span className="text-sm text-gray-400">• Mise à jour en temps réel</span>
-        </div>
-      </SectionCard>
-
-      {/* ================= FILTRES RAPIDES ================= */}
-      <SectionCard title="Recherche et filtres">
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-          <div className="sm:col-span-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 dark:text-gray-400" />
-              <input
-                type="text"
-                className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl bg-white dark:bg-gray-900 dark:border-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:border-transparent"
-                style={{ outlineColor: theme.primary }}
-                placeholder="Rechercher par nom, téléphone ou référence..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <div className={`h-3 w-3 rounded-full ${verificationReservations.length > 0 ? 'bg-amber-500 animate-pulse' : 'bg-gray-300'}`} />
+                <span className="text-sm text-gray-600">
+                  {verificationReservations.length > 0
+                    ? `${verificationReservations.length} en attente de validation`
+                    : 'Tout est à jour'}
+                </span>
+              </div>
+              <span className="text-sm text-gray-400">• Mise à jour en temps réel</span>
             </div>
-          </div>
-
-          <div>
-            <select
-              value={filterPeriod}
-              onChange={(e) => setFilterPeriod(e.target.value as FilterOptions['period'])}
-              className="w-full border border-gray-300 rounded-xl px-4 py-2.5 bg-white dark:bg-gray-900 dark:border-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:border-transparent"
-              style={{ outlineColor: theme.primary }}
-            >
-              <option value="today">Aujourd'hui</option>
-              <option value="week">Semaine</option>
-              <option value="all">Tout</option>
-            </select>
-          </div>
-
-          <div>
-            <select
-              value={filterAgencyId}
-              onChange={(e) => setFilterAgencyId(e.target.value)}
-              className="w-full border border-gray-300 rounded-xl px-4 py-2.5 bg-white dark:bg-gray-900 dark:border-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:border-transparent"
-              style={{ outlineColor: theme.primary }}
-              disabled={Object.keys(agencies).length === 0}
-            >
-              <option value="">Toutes les agences</option>
-              {Object.entries(agencies).map(([agencyId, agency]) => (
-                <option key={agencyId} value={agencyId}>
-                  {agency.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* ================= STATISTIQUES (PLIABLE) ================= */}
-      {showStats && (
-        <>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
-            <MetricCard label="En attente de validation" value={stats.verification.toString()} icon={AlertCircle} valueColorVar="#b45309" />
-            <MetricCard label="En attente" value={stats.enAttente.toString()} icon={Clock} valueColorVar="#1d4ed8" />
-            <MetricCard label="Confirmées" value={stats.confirme.toString()} icon={CheckCircle} valueColorVar="#047857" />
-            <MetricCard label="Refusées" value={stats.refuse.toString()} icon={XCircle} critical />
-            <MetricCard label="Annulées" value={stats.annule.toString()} icon={XCircle} />
-          </div>
-
-          {/* ================= PÉRIODE ACTIVE ================= */}
-          <SectionCard
-            title={`Période : ${filterPeriod === 'today' ? "Aujourd'hui" : filterPeriod === 'week' ? 'Semaine' : 'Tout'}`}
-            icon={Calendar}
-            right={<span className="text-sm text-gray-600">Total : {stats.total} réservations • {fmtMoney(stats.totalAmount)}</span>}
-          >
-            <div className="text-sm text-gray-500">Total : {stats.total} réservations • {fmtMoney(stats.totalAmount)}</div>
           </SectionCard>
 
-          {/* ================= TOP AGENCES ================= */}
-          {topAgencies.length > 0 && (
-            <SectionCard title="Top 5 Agences" help={<span className="text-sm font-normal text-gray-500">Par nombre de réservations</span>}>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-                {topAgencies.map((agency, index) => (
-                  <div key={agency.id} className="p-4 rounded-lg border border-gray-200 bg-gray-50/50">
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="h-10 w-10 rounded-lg bg-gray-200 flex items-center justify-center">
-                        <div className="text-sm font-bold text-gray-700">#{index + 1}</div>
-                      </div>
-                      <div className="min-w-0">
-                        <div className="font-medium text-gray-900 truncate">{agency.name}</div>
-                        <div className="text-xs text-gray-500 truncate">{agency.ville}</div>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-500">Réservations</span>
-                        <span className="font-bold text-gray-900">{agency.count}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-500">Montant</span>
-                        <span className="font-bold text-gray-900">{fmtMoney(agency.amount)}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+          {/* ================= FILTRES RAPIDES ================= */}
+          <SectionCard title="Recherche et filtres">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div className="sm:col-span-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 dark:text-gray-400" />
+                  <input
+                    type="text"
+                    className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl bg-white dark:bg-gray-900 dark:border-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ outlineColor: theme.primary }}
+                    placeholder="Rechercher par nom, téléphone ou référence..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
               </div>
-            </SectionCard>
-          )}
-        </>
-      )}
 
-      {/* ================= LISTE DES RÉSERVATIONS À VÉRIFIER + VALIDÉES À L'INSTANT ================= */}
-      {((recentlyValidatedReservations.length > 0) || verificationReservations.length > 0) && (!filterStatus || filterStatus === 'verification') && (
-        <SectionCard
-          title="En attente de validation"
-          icon={AlertCircle}
-          right={
-            <span className="flex items-center gap-2">
-              {recentlyValidatedReservations.length > 0 && (
-                <StatusBadge status="success">{recentlyValidatedReservations.length} billet(s) validé(s)</StatusBadge>
-              )}
-              <StatusBadge status="warning">{verificationReservations.length} en attente de validation</StatusBadge>
-            </span>
-          }
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            <AnimatePresence mode="popLayout">
-            {[
-              ...recentlyValidatedReservations,
-              ...filterReservationsByPeriod(verificationReservations, filterPeriod).filter(
-                r => !recentlyValidatedReservations.some(v => v.id === r.id && v.agencyId === r.agencyId)
-              ),
-            ]
-              .filter(r =>
-                !searchTerm ||
-                [
-                  r.customer.name,
-                  r.customer.phone,
-                  r.referenceCode,
-                  r.payment.reference,
-                  r.payment.wallet,
-                  r.proof.message
-                ]
-                  .join(' ')
-                  .toLowerCase()
-                  .includes(searchTerm.toLowerCase())
-              )
-              .map((reservation) => {
-                const isJustValidated = recentlyValidatedReservations.some(
-                  v => v.id === reservation.id && v.agencyId === reservation.agencyId
-                );
-                const billetUrl = getBilletUrl(reservation, (company as { slug?: string })?.slug);
-                const confirmationMessage = getBilletConfirmationMessage(
-                  reservation,
-                  billetUrl,
-                  (company as any)?.name || (company as any)?.nom || "Compagnie"
-                );
-                const phoneForWhatsApp = toWhatsAppPhone(reservation.customer.phone || '');
-                const whatsAppUrl = phoneForWhatsApp
-                  ? `https://wa.me/${phoneForWhatsApp}?text=${encodeURIComponent(confirmationMessage)}`
-                  : '';
-                const proofUrl = getProofUrl(reservation);
-                const proofText =
-                  reservation.payment.reference || reservation.payment.wallet || reservation.proof.message;
-                const cardKey = `${reservation.agencyId}_${reservation.id}`;
-                const isExpanded = Boolean(expandedCardKeys[cardKey]);
+              <div>
+                <select
+                  value={filterPeriod}
+                  onChange={(e) => setFilterPeriod(e.target.value as FilterOptions['period'])}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 bg-white dark:bg-gray-900 dark:border-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:border-transparent"
+                  style={{ outlineColor: theme.primary }}
+                >
+                  <option value="today">Aujourd'hui</option>
+                  <option value="week">Semaine</option>
+                  <option value="all">Tout</option>
+                </select>
+              </div>
 
-                if (isJustValidated) {
-                  return (
-                    <motion.div
-                      key={cardKey}
-                      layout
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 12 }}
-                      transition={{ duration: 0.18 }}
-                    >
-                      <div
-                        id={`reservation-${reservation.id}`}
-                        className="border border-green-200 rounded-xl overflow-hidden bg-white shadow-md dark:bg-gray-900"
-                      >
-                      {/* Bandeau vert : Billet validé */}
-                      <div className="flex items-center justify-center gap-2 py-3 px-4 bg-green-600 text-white">
-                        <CheckCircle className="h-5 w-5 shrink-0" aria-hidden />
-                        <span className="font-semibold">Billet validé</span>
-                        {reservation.referenceCode && (
-                          <span className="ml-auto text-xs font-mono text-green-100">#{reservation.referenceCode}</span>
-                        )}
+              <div>
+                <select
+                  value={filterAgencyId}
+                  onChange={(e) => setFilterAgencyId(e.target.value)}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 bg-white dark:bg-gray-900 dark:border-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:border-transparent"
+                  style={{ outlineColor: theme.primary }}
+                  disabled={Object.keys(agencies).length === 0}
+                >
+                  <option value="">Toutes les agences</option>
+                  {Object.entries(agencies).map(([agencyId, agency]) => (
+                    <option key={agencyId} value={agencyId}>
+                      {agency.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </SectionCard>
+
+          {/* ================= STATISTIQUES (PLIABLE) ================= */}
+          {showStats && (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
+                <MetricCard label="En attente de validation" value={stats.verification.toString()} icon={AlertCircle} valueColorVar="#b45309" />
+                <MetricCard label="En attente" value={stats.enAttente.toString()} icon={Clock} valueColorVar="#1d4ed8" />
+                <MetricCard label="Confirmées" value={stats.confirme.toString()} icon={CheckCircle} valueColorVar="#047857" />
+                <MetricCard label="Refusées" value={stats.refuse.toString()} icon={XCircle} critical />
+                <MetricCard label="Annulées" value={stats.annule.toString()} icon={XCircle} />
+              </div>
+
+              {/* ================= PÉRIODE ACTIVE ================= */}
+              <SectionCard
+                title={`Période : ${filterPeriod === 'today' ? "Aujourd'hui" : filterPeriod === 'week' ? 'Semaine' : 'Tout'}`}
+                icon={Calendar}
+                right={<span className="text-sm text-gray-600">Total : {stats.total} réservations • {fmtMoney(stats.totalAmount)}</span>}
+              >
+                <div className="text-sm text-gray-500">Total : {stats.total} réservations • {fmtMoney(stats.totalAmount)}</div>
+              </SectionCard>
+
+              {/* ================= TOP AGENCES ================= */}
+              {topAgencies.length > 0 && (
+                <SectionCard title="Top 5 Agences" help={<span className="text-sm font-normal text-gray-500">Par nombre de réservations</span>}>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                    {topAgencies.map((agency, index) => (
+                      <div key={agency.id} className="p-4 rounded-lg border border-gray-200 bg-gray-50/50">
+                        <div className="flex items-center gap-3 mb-3">
+                          <div className="h-10 w-10 rounded-lg bg-gray-200 flex items-center justify-center">
+                            <div className="text-sm font-bold text-gray-700">#{index + 1}</div>
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-medium text-gray-900 truncate">{agency.name}</div>
+                            <div className="text-xs text-gray-500 truncate">{agency.ville}</div>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between">
+                            <span className="text-sm text-gray-500">Réservations</span>
+                            <span className="font-bold text-gray-900">{agency.count}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-sm text-gray-500">Montant</span>
+                            <span className="font-bold text-gray-900">{fmtMoney(agency.amount)}</span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="p-3 space-y-2">
-                        {/* Client + téléphone (compact) */}
-                        <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 border border-gray-200 dark:border-gray-700">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="text-xs font-medium text-gray-500 dark:text-gray-300 truncate">Client</div>
-                              <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                                {reservation.customer.name || 'Sans nom'}
-                              </div>
-                              <div className="flex items-center gap-2 mt-1">
-                                <Smartphone className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
-                                <div className="text-sm font-extrabold text-gray-900 dark:text-white break-words">
-                                  {reservation.customer.phone || 'Non renseigné'}
+                    ))}
+                  </div>
+                </SectionCard>
+              )}
+            </>
+          )}
+
+          {/* ================= LISTE DES RÉSERVATIONS À VÉRIFIER + VALIDÉES À L'INSTANT ================= */}
+          {((recentlyValidatedReservations.length > 0) || verificationReservations.length > 0) && (!filterStatus || filterStatus === 'verification') && (
+            <SectionCard
+              title="En attente de validation"
+              icon={AlertCircle}
+              right={
+                <span className="flex items-center gap-2">
+                  {recentlyValidatedReservations.length > 0 && (
+                    <StatusBadge status="success">{recentlyValidatedReservations.length} billet(s) validé(s)</StatusBadge>
+                  )}
+                  <StatusBadge status="warning">{verificationReservations.length} en attente de validation</StatusBadge>
+                </span>
+              }
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                <AnimatePresence mode="popLayout">
+                {[
+                  ...recentlyValidatedReservations,
+                  ...filterReservationsByPeriod(verificationReservations, filterPeriod).filter(
+                    r => !recentlyValidatedReservations.some(v => v.id === r.id && v.agencyId === r.agencyId)
+                  ),
+                ]
+                  .filter(r =>
+                    !searchTerm ||
+                    [
+                      r.customer.name,
+                      r.customer.phone,
+                      r.referenceCode,
+                      r.payment.reference,
+                      r.payment.wallet,
+                      r.proof.message
+                    ]
+                      .join(' ')
+                      .toLowerCase()
+                      .includes(searchTerm.toLowerCase())
+                  )
+                  .map((reservation) => {
+                    const isJustValidated = recentlyValidatedReservations.some(
+                      v => v.id === reservation.id && v.agencyId === reservation.agencyId
+                    );
+                    const billetUrl = getBilletUrl(reservation, (company as { slug?: string })?.slug);
+                    const confirmationMessage = getBilletConfirmationMessage(
+                      reservation,
+                      billetUrl,
+                      (company as any)?.name || (company as any)?.nom || "Compagnie"
+                    );
+                    const phoneForWhatsApp = toWhatsAppPhone(reservation.customer.phone || '');
+                    const whatsAppUrl = phoneForWhatsApp
+                      ? `https://wa.me/${phoneForWhatsApp}?text=${encodeURIComponent(confirmationMessage)}`
+                      : '';
+                    const proofUrl = getProofUrl(reservation);
+                    const proofText =
+                      reservation.payment.reference || reservation.payment.wallet || reservation.proof.message;
+                    const cardKey = `${reservation.agencyId}_${reservation.id}`;
+                    const isExpanded = Boolean(expandedCardKeys[cardKey]);
+
+                    if (isJustValidated) {
+                      return (
+                        <motion.div
+                          key={cardKey}
+                          layout
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 12 }}
+                          transition={{ duration: 0.18 }}
+                        >
+                          <div
+                            id={`reservation-${reservation.id}`}
+                            className="border border-green-200 rounded-xl overflow-hidden bg-white shadow-md dark:bg-gray-900"
+                          >
+                          {/* Bandeau vert : Billet validé */}
+                          <div className="flex items-center justify-center gap-2 py-3 px-4 bg-green-600 text-white">
+                            <CheckCircle className="h-5 w-5 shrink-0" aria-hidden />
+                            <span className="font-semibold">Billet validé</span>
+                            {reservation.referenceCode && (
+                              <span className="ml-auto text-xs font-mono text-green-100">#{reservation.referenceCode}</span>
+                            )}
+                          </div>
+                          <div className="p-3 space-y-2">
+                            {/* Client + téléphone (compact) */}
+                            <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 border border-gray-200 dark:border-gray-700">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-xs font-medium text-gray-500 dark:text-gray-300 truncate">Client</div>
+                                  <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                                    {reservation.customer.name || 'Sans nom'}
+                                  </div>
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <Smartphone className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
+                                    <div className="text-sm font-extrabold text-gray-900 dark:text-white break-words">
+                                      {reservation.customer.phone || 'Non renseigné'}
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
                             </div>
-                          </div>
-                        </div>
 
-                        {/* Montant + Trajet */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-500 dark:text-gray-300">Montant</span>
-                            <span className="text-sm font-bold text-gray-900 dark:text-white">
-                              {fmtMoney(reservation.payment.amount)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm text-gray-500 dark:text-gray-300">Trajet</span>
-                            <span className="text-sm font-medium text-gray-900 dark:text-white text-right truncate">
-                              {reservation.trip.departure || 'N/A'} → {reservation.trip.arrival || 'N/A'}
-                            </span>
-                          </div>
-                        </div>
+                            {/* Montant + Trajet */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm text-gray-500 dark:text-gray-300">Montant</span>
+                                <span className="text-sm font-bold text-gray-900 dark:text-white">
+                                  {fmtMoney(reservation.payment.amount)}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm text-gray-500 dark:text-gray-300">Trajet</span>
+                                <span className="text-sm font-medium text-gray-900 dark:text-white text-right truncate">
+                                  {reservation.trip.departure || 'N/A'} → {reservation.trip.arrival || 'N/A'}
+                                </span>
+                              </div>
+                            </div>
 
-                        {/* Indicateur preuve + expand */}
-                        <div className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-3">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <FileText className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
-                            <span className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">Preuve</span>
-                            {proofText ? (
-                              <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{proofText}</span>
-                            ) : (
-                              <span className="text-xs text-gray-500 dark:text-gray-400">—</span>
-                            )}
-                          </div>
-                          <Button
-                            variant="secondary"
-                            className="h-9 px-3 flex items-center justify-center gap-2 border-blue-200 dark:border-blue-300 text-blue-700 dark:text-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/30"
-                            onClick={() => toggleExpandedCard(cardKey)}
-                          >
-                            <FileText className="h-4 w-4" />
-                            {isExpanded ? 'Réduire' : 'Voir preuve'}
-                          </Button>
-                        </div>
-
-                        {/* Expanded: preuve complète + actions */}
-                        {isExpanded && (
-                          <div className="space-y-2">
-                            {proofUrl && (
-                              <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2">
-                                {isImageProofUrl(proofUrl) ? (
-                                  <img
-                                    src={proofUrl}
-                                    alt="Preuve de paiement"
-                                    className="w-full h-auto max-h-48 object-contain rounded-lg"
-                                  />
+                            {/* Indicateur preuve + expand */}
+                            <div className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-3">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <FileText className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
+                                <span className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">Preuve</span>
+                                {proofText ? (
+                                  <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{proofText}</span>
                                 ) : (
-                                  <a
-                                    href={proofUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85"
-                                  >
-                                    <FileText className="h-4 w-4" />
-                                    Ouvrir preuve
-                                  </a>
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">—</span>
                                 )}
                               </div>
-                            )}
-
-                            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-3">
-                              <div className="text-xs font-medium text-gray-500 dark:text-gray-300 mb-1">Message / Référence</div>
-                              <div className="text-sm text-gray-800 dark:text-gray-100 break-words">
-                                {proofText || '—'}
-                              </div>
-                            </div>
-
-                            {reservation.referenceCode && (
-                              <div className="text-xs font-mono text-gray-600 dark:text-gray-300">
-                                Référence: #{reservation.referenceCode}
-                              </div>
-                            )}
-
-                            <div className="text-xs text-gray-400 dark:text-gray-400">
-                              Reçu le: {fmtDate(reservation.createdAt)}
-                            </div>
-
-                            {/* Actions "validé" conservées, mais déployées */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                              <Button
-                                variant="primary"
-                                className="w-full flex items-center justify-center gap-2"
-                                onClick={() => billetUrl && window.open(billetUrl, '_blank')}
-                              >
-                                <Download className="h-4 w-4" />
-                                Télécharger PDF
-                              </Button>
-
                               <Button
                                 variant="secondary"
-                                className="w-full flex items-center justify-center gap-2 border-green-300 dark:border-green-400 text-green-800 dark:text-green-200 hover:bg-green-50 dark:hover:bg-green-950/30"
-                                onClick={() => {
-                                  if (whatsAppUrl) {
-                                    window.open(whatsAppUrl, '_blank');
-                                    toast.success('WhatsApp ouvert avec le message prêt');
-                                  }
-                                }}
-                                disabled={!phoneForWhatsApp}
+                                className="h-9 px-3 flex items-center justify-center gap-2 border-blue-200 dark:border-blue-300 text-blue-700 dark:text-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                                onClick={() => toggleExpandedCard(cardKey)}
                               >
-                                <MessageCircle className="h-4 w-4" />
-                                WhatsApp
+                                <FileText className="h-4 w-4" />
+                                {isExpanded ? 'Réduire' : 'Voir preuve'}
                               </Button>
                             </div>
 
-                            <Button
-                              variant="secondary"
-                              className="w-full flex items-center justify-center gap-2"
-                              onClick={async () => {
-                                try {
-                                  await navigator.clipboard.writeText(confirmationMessage);
-                                  toast.success('Message copié dans le presse-papiers');
-                                } catch {
-                                  toast.error('Erreur', { description: 'Impossible de copier le message dans le presse-papiers.' });
-                                }
-                              }}
-                            >
-                              <Copy className="h-4 w-4" />
-                              Copier message
-                            </Button>
+                            {/* Expanded: preuve complète + actions */}
+                            {isExpanded && (
+                              <div className="space-y-2">
+                                {proofUrl && (
+                                  <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2">
+                                    {isImageProofUrl(proofUrl) ? (
+                                      <img
+                                        src={proofUrl}
+                                        alt="Preuve de paiement"
+                                        className="w-full h-auto max-h-48 object-contain rounded-lg"
+                                      />
+                                    ) : (
+                                      <a
+                                        href={proofUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85"
+                                      >
+                                        <FileText className="h-4 w-4" />
+                                        Ouvrir preuve
+                                      </a>
+                                    )}
+                                  </div>
+                                )}
 
-                            {/* Lien "Voir billet" (toujours disponible) */}
-                            <a
-                              href={billetUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85 disabled:pointer-events-none disabled:opacity-50"
-                            >
-                              <Eye className="h-4 w-4" />
-                              Voir billet
-                            </a>
-                          </div>
-                        )}
-                      </div>
+                                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-3">
+                                  <div className="text-xs font-medium text-gray-500 dark:text-gray-300 mb-1">Message / Référence</div>
+                                  <div className="text-sm text-gray-800 dark:text-gray-100 break-words">
+                                    {proofText || '—'}
+                                  </div>
+                                </div>
 
-                      {/* Actions (compactes) */}
-                      <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-                        <div className="grid grid-cols-2 gap-2">
-                          <a
-                            href={billetUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85 disabled:pointer-events-none disabled:opacity-50"
-                          >
-                            <Eye className="h-4 w-4" />
-                            Billet
-                          </a>
-                          <Button
-                            variant="secondary"
-                            className="w-full flex items-center justify-center gap-2"
-                            onClick={() => toggleExpandedCard(cardKey)}
-                          >
-                            <FileText className="h-4 w-4" />
-                            Détails
-                          </Button>
-                        </div>
-                      </div>
-                      </div>
-                    </motion.div>
-                  );
-                }
+                                {reservation.referenceCode && (
+                                  <div className="text-xs font-mono text-gray-600 dark:text-gray-300">
+                                    Référence: #{reservation.referenceCode}
+                                  </div>
+                                )}
 
-                const statusConfig = getStatusConfig(reservation.reservation.status);
-                const isProcessing = processingId === reservation.id;
-                const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
+                                <div className="text-xs text-gray-400 dark:text-gray-400">
+                                  Reçu le: {fmtDate(reservation.createdAt)}
+                                </div>
 
-                return (
-                  <motion.div
-                    key={cardKey}
-                    layout
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 12 }}
-                    transition={{ duration: 0.18 }}
-                  >
-                    <div
-                      id={`reservation-${reservation.id}`}
-                      className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-all duration-300 bg-white dark:bg-gray-900"
-                    >
-                    {/* Header avec agence */}
-                    <div className="p-4 border-b border-gray-200 bg-gray-50/50 dark:border-gray-700 dark:bg-gray-900/30">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className="h-6 w-6 rounded-md bg-gray-200 dark:bg-gray-800 flex items-center justify-center">
-                            <Building2 className="h-3 w-3 text-gray-600 dark:text-gray-300" />
-                          </div>
-                          <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                            {agencyInfo?.name || 'Agence inconnue'}
-                          </span>
-                        </div>
-                        <StatusBadge status="warning">À vérifier</StatusBadge>
-                      </div>
-                      
-                      {reservation.referenceCode && (
-                        <div className="text-xs font-mono text-gray-600 dark:text-gray-300">
-                          #{reservation.referenceCode}
-                        </div>
-                      )}
-                    </div>
-                    
-                    {/* Détails compacts — mobile-first (focus preuve) */}
-                    <div className="p-3 space-y-2">
-                      {/* Agence: titre (badge) + statut déjà en header ; ici on affiche client/tél */}
-                      <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="text-xs font-medium text-gray-500 dark:text-gray-300 truncate">
-                              Client
-                            </div>
-                            <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                              {reservation.customer.name || 'Sans nom'}
-                            </div>
-                            <div className="flex items-center gap-2 mt-1">
-                              <Smartphone className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
-                              <div className="text-sm font-extrabold text-gray-900 dark:text-white break-words">
-                                {reservation.customer.phone || 'Non renseigné'}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
+                                {/* Actions "validé" conservées, mais déployées */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  <Button
+                                    variant="primary"
+                                    className="w-full flex items-center justify-center gap-2"
+                                    onClick={() => billetUrl && window.open(billetUrl, '_blank')}
+                                  >
+                                    <Download className="h-4 w-4" />
+                                    Télécharger PDF
+                                  </Button>
 
-                      {/* Montant + Trajet */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-500 dark:text-gray-300">Montant</span>
-                          <span className="text-sm font-bold text-gray-900 dark:text-white">
-                            {fmtMoney(reservation.payment.amount)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-500 dark:text-gray-300">Trajet</span>
-                          <span className="text-sm font-medium text-gray-900 dark:text-white text-right truncate">
-                            {reservation.trip.departure || 'N/A'} → {reservation.trip.arrival || 'N/A'}
-                          </span>
-                        </div>
-                      </div>
+                                  <Button
+                                    variant="secondary"
+                                    className="w-full flex items-center justify-center gap-2 border-green-300 dark:border-green-400 text-green-800 dark:text-green-200 hover:bg-green-50 dark:hover:bg-green-950/30"
+                                    onClick={() => {
+                                      if (whatsAppUrl) {
+                                        window.open(whatsAppUrl, '_blank');
+                                        toast.success('WhatsApp ouvert avec le message prêt');
+                                      }
+                                    }}
+                                    disabled={!phoneForWhatsApp}
+                                  >
+                                    <MessageCircle className="h-4 w-4" />
+                                    WhatsApp
+                                  </Button>
+                                </div>
 
-                      {/* Indicateur preuve (toujours accessible rapidement) */}
-                      <div className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <FileText className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
-                          <span className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">
-                            Preuve
-                          </span>
-                          {proofText ? (
-                            <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{proofText}</span>
-                          ) : (
-                            <span className="text-xs text-gray-500 dark:text-gray-400">—</span>
-                          )}
-                        </div>
-                        <Button
-                          variant="secondary"
-                          className="h-9 px-3 flex items-center justify-center gap-2 border-blue-200 text-blue-700 dark:border-blue-300 dark:text-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/30"
-                          onClick={() => toggleExpandedCard(cardKey)}
-                        >
-                          <FileText className="h-4 w-4" />
-                          {isExpanded ? 'Réduire' : 'Voir preuve'}
-                        </Button>
-                      </div>
+                                <Button
+                                  variant="secondary"
+                                  className="w-full flex items-center justify-center gap-2"
+                                  onClick={async () => {
+                                    try {
+                                      await navigator.clipboard.writeText(confirmationMessage);
+                                      toast.success('Message copié dans le presse-papiers');
+                                    } catch {
+                                      toast.error('Erreur', { description: 'Impossible de copier le message dans le presse-papiers.' });
+                                    }
+                                  }}
+                                >
+                                  <Copy className="h-4 w-4" />
+                                  Copier message
+                                </Button>
 
-                      {/* Expanded: preview + message complet + référence + date */}
-                      {isExpanded && (
-                        <div className="space-y-2">
-                          {proofUrl && (
-                            <div className="rounded-xl border border-gray-200 bg-white dark:bg-gray-900 p-2">
-                              {isImageProofUrl(proofUrl) ? (
-                                <img
-                                  src={proofUrl}
-                                  alt="Preuve de paiement"
-                                  className="w-full h-auto max-h-48 object-contain rounded-lg"
-                                />
-                              ) : (
+                                {/* Lien "Voir billet" (toujours disponible) */}
                                 <a
-                                  href={proofUrl}
+                                  href={billetUrl}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85"
+                                  className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85 disabled:pointer-events-none disabled:opacity-50"
                                 >
-                                  <FileText className="h-4 w-4" />
-                                  Ouvrir preuve
+                                  <Eye className="h-4 w-4" />
+                                  Voir billet
                                 </a>
-                              )}
-                            </div>
-                          )}
-
-                          <div className="rounded-xl border border-gray-200 bg-gray-50 dark:bg-gray-800 p-3">
-                            <div className="text-xs font-medium text-gray-500 dark:text-gray-300 mb-1">Message / Référence</div>
-                            <div className="text-sm text-gray-800 dark:text-gray-100 break-words">
-                              {proofText || '—'}
-                            </div>
+                              </div>
+                            )}
                           </div>
 
+                          {/* Actions (compactes) */}
+                          <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
+                            <div className="grid grid-cols-2 gap-2">
+                              <a
+                                href={billetUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85 disabled:pointer-events-none disabled:opacity-50"
+                              >
+                                <Eye className="h-4 w-4" />
+                                Billet
+                              </a>
+                              <Button
+                                variant="secondary"
+                                className="w-full flex items-center justify-center gap-2"
+                                onClick={() => toggleExpandedCard(cardKey)}
+                              >
+                                <FileText className="h-4 w-4" />
+                                Détails
+                              </Button>
+                            </div>
+                          </div>
+                          </div>
+                        </motion.div>
+                      );
+                    }
+
+                    const statusConfig = getStatusConfig(reservation.reservation.status);
+                    const isProcessing = processingId === reservation.id;
+                    const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
+
+                    return (
+                      <motion.div
+                        key={cardKey}
+                        layout
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 12 }}
+                        transition={{ duration: 0.18 }}
+                      >
+                        <div
+                          id={`reservation-${reservation.id}`}
+                          className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-all duration-300 bg-white dark:bg-gray-900"
+                        >
+                        {/* Header avec agence */}
+                        <div className="p-4 border-b border-gray-200 bg-gray-50/50 dark:border-gray-700 dark:bg-gray-900/30">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <div className="h-6 w-6 rounded-md bg-gray-200 dark:bg-gray-800 flex items-center justify-center">
+                                <Building2 className="h-3 w-3 text-gray-600 dark:text-gray-300" />
+                              </div>
+                              <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                                {agencyInfo?.name || 'Agence inconnue'}
+                              </span>
+                            </div>
+                            <StatusBadge status="warning">À vérifier</StatusBadge>
+                          </div>
+                          
                           {reservation.referenceCode && (
                             <div className="text-xs font-mono text-gray-600 dark:text-gray-300">
-                              Référence: #{reservation.referenceCode}
+                              #{reservation.referenceCode}
                             </div>
                           )}
-
-                          <div className="text-xs text-gray-400 dark:text-gray-400">
-                            Reçu le: {fmtDate(reservation.createdAt)}
-                          </div>
                         </div>
-                      )}
-                    </div>
-
-                    {/* Actions compactes (visibles) */}
-                    <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
-                      <div className="grid grid-cols-3 gap-2">
-                        <Button
-                          variant="primary"
-                          onClick={() => handleValidate(reservation)}
-                          disabled={isProcessing}
-                          className="flex items-center justify-center gap-2"
-                        >
-                          {isProcessing ? (
-                            <motion.div
-                              animate={{ rotate: 360 }}
-                              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                            >
-                              <RotateCw className="h-4 w-4" />
-                            </motion.div>
-                          ) : (
-                            <>
-                              <CheckCircle className="h-4 w-4" />
-                              Valider
-                            </>
-                          )}
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          onClick={() => handleRefuse(reservation)}
-                          disabled={isProcessing}
-                          className="border-red-300 text-red-700 hover:bg-red-50 dark:border-red-400 dark:text-red-200 dark:hover:bg-red-950/20"
-                        >
-                          <XCircle className="h-4 w-4" />
-                          Refuser
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          onClick={() => toggleExpandedCard(cardKey)}
-                          className="flex items-center justify-center gap-2"
-                        >
-                          <Eye className="h-4 w-4" />
-                          Détails
-                        </Button>
-                      </div>
-                    </div>
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </AnimatePresence>
-          </div>
-        </SectionCard>
-      )}
-
-      {/* ================= AUTRES RÉSERVATIONS ================= */}
-      {((filterStatus !== 'verification' && filterStatus !== '') || 
-        (filterStatus === '' && otherReservations.length > 0)) && (
-        <SectionCard
-          title={filterStatus ? `${getStatusConfig(filterStatus as ReservationStatus).label}s` : 'Toutes les réservations'}
-          icon={Receipt}
-          right={<span className="text-sm text-gray-600">{filterStatus ? `${filteredReservations.filter(r => r.reservation.status !== 'verification').length} réservation${filteredReservations.filter(r => r.reservation.status !== 'verification').length > 1 ? 's' : ''}` : 'Historique'}</span>}
-        >
-            <button
-              onClick={() => setShowHistory(!showHistory)}
-              className="mb-4 text-sm text-gray-600 hover:text-gray-900 flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-            >
-              {showHistory ? (
-                <>
-                  <ChevronUp className="h-4 w-4" />
-                  Réduire
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="h-4 w-4" />
-                  Développer
-                </>
-              )}
-            </button>
-          
-          {showHistory && (
-            <>
-              {filteredReservations.filter(r => r.reservation.status !== 'verification').length === 0 ? (
-                <div className="text-center py-8 border border-gray-200 rounded-lg">
-                  <div className="text-gray-500">Aucune réservation à afficher</div>
-                </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {filteredReservations
-                      .filter(r => r.reservation.status !== 'verification')
-                      .map((reservation) => {
-                        const statusConfig = getStatusConfig(reservation.reservation.status);
-                        const isProcessing = processingId === reservation.id;
-                        const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
-                        const proofUrl = getProofUrl(reservation);
-                        const proofText =
-                          reservation.payment.reference || reservation.payment.wallet || reservation.proof.message;
                         
-                        return (
-                          <div
-                            key={`${reservation.agencyId}_${reservation.id}`}
-                            className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-all duration-300 bg-white"
-                          >
-                            {/* Header avec agence */}
-                            <div className="p-4 border-b border-gray-200 bg-gray-50/50">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <div className="h-6 w-6 rounded-md bg-gray-200 flex items-center justify-center">
-                                    <Building2 className="h-3 w-3 text-gray-600" />
+                        {/* Détails compacts — mobile-first (focus preuve) */}
+                        <div className="p-3 space-y-2">
+                          {/* Agence: titre (badge) + statut déjà en header ; ici on affiche client/tél */}
+                          <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-xs font-medium text-gray-500 dark:text-gray-300 truncate">
+                                  Client
+                                </div>
+                                <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                                  {reservation.customer.name || 'Sans nom'}
+                                </div>
+                                <div className="flex items-center gap-2 mt-1">
+                                  <Smartphone className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
+                                  <div className="text-sm font-extrabold text-gray-900 dark:text-white break-words">
+                                    {reservation.customer.phone || 'Non renseigné'}
                                   </div>
-                                  <span className="text-sm font-medium text-gray-900 truncate">
-                                    {agencyInfo?.name || 'Agence inconnue'}
-                                  </span>
                                 </div>
-                                <StatusBadge status={statusConfig.statusVariant}>{statusConfig.label}</StatusBadge>
                               </div>
-                              
-                              {reservation.referenceCode && (
-                                <div className="text-xs font-mono text-gray-600">
-                                  #{reservation.referenceCode}
-                                </div>
+                            </div>
+                          </div>
+
+                          {/* Montant + Trajet */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm text-gray-500 dark:text-gray-300">Montant</span>
+                              <span className="text-sm font-bold text-gray-900 dark:text-white">
+                                {fmtMoney(reservation.payment.amount)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm text-gray-500 dark:text-gray-300">Trajet</span>
+                              <span className="text-sm font-medium text-gray-900 dark:text-white text-right truncate">
+                                {reservation.trip.departure || 'N/A'} → {reservation.trip.arrival || 'N/A'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Indicateur preuve (toujours accessible rapidement) */}
+                          <div className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <FileText className="h-4 w-4 text-gray-600 dark:text-gray-300 shrink-0" />
+                              <span className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">
+                                Preuve
+                              </span>
+                              {proofText ? (
+                                <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{proofText}</span>
+                              ) : (
+                                <span className="text-xs text-gray-500 dark:text-gray-400">—</span>
                               )}
                             </div>
-                            
-                            {/* Détails */}
-                            <div className="p-4 space-y-3">
-                              {/* 📞 Téléphone client (priorité) */}
-                              <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                                <div className="flex items-center gap-2 mb-1">
-                                  <Smartphone className="h-4 w-4 text-gray-600" />
-                                  <span className="text-sm font-medium text-gray-700">Téléphone client</span>
-                                </div>
-                                <div className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight break-words">
-                                  {reservation.customer.phone || 'Non renseigné'}
-                                </div>
-                              </div>
+                            <Button
+                              variant="secondary"
+                              className="h-9 px-3 flex items-center justify-center gap-2 border-blue-200 text-blue-700 dark:border-blue-300 dark:text-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                              onClick={() => toggleExpandedCard(cardKey)}
+                            >
+                              <FileText className="h-4 w-4" />
+                              {isExpanded ? 'Réduire' : 'Voir preuve'}
+                            </Button>
+                          </div>
 
-                              {/* 🧾 Preuve de paiement */}
-                              {proofText && (
-                                <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <FileText className="h-4 w-4 text-gray-600" />
-                                    <span className="text-sm font-medium text-gray-700">Preuve de paiement</span>
-                                  </div>
-                                  <div className="text-sm text-gray-800 break-words">{proofText}</div>
-
-                                  {proofUrl && (
-                                    <Button
-                                      variant="secondary"
-                                      className="mt-3 w-full flex items-center justify-center gap-2 border-blue-200 text-blue-700 hover:bg-blue-50"
-                                      onClick={() => window.open(proofUrl, '_blank')}
+                          {/* Expanded: preview + message complet + référence + date */}
+                          {isExpanded && (
+                            <div className="space-y-2">
+                              {proofUrl && (
+                                <div className="rounded-xl border border-gray-200 bg-white dark:bg-gray-900 p-2">
+                                  {isImageProofUrl(proofUrl) ? (
+                                    <img
+                                      src={proofUrl}
+                                      alt="Preuve de paiement"
+                                      className="w-full h-auto max-h-48 object-contain rounded-lg"
+                                    />
+                                  ) : (
+                                    <a
+                                      href={proofUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center justify-center gap-2 w-full rounded-lg font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 h-10 px-4 py-2 bg-[var(--btn-primary,#FF6600)] text-white hover:brightness-90 active:brightness-85"
                                     >
                                       <FileText className="h-4 w-4" />
-                                      Voir le justificatif
-                                    </Button>
+                                      Ouvrir preuve
+                                    </a>
                                   )}
                                 </div>
                               )}
 
-                              {/* Montant */}
-                              <div className="flex items-center justify-between px-1">
-                                <span className="text-sm text-gray-500">Montant</span>
-                                <span className="text-base sm:text-lg font-extrabold text-gray-900">
-                                  {fmtMoney(reservation.payment.amount)}
-                                </span>
+                              <div className="rounded-xl border border-gray-200 bg-gray-50 dark:bg-gray-800 p-3">
+                                <div className="text-xs font-medium text-gray-500 dark:text-gray-300 mb-1">Message / Référence</div>
+                                <div className="text-sm text-gray-800 dark:text-gray-100 break-words">
+                                  {proofText || '—'}
+                                </div>
                               </div>
 
-                              {/* Trajet */}
-                              <div className="flex items-center justify-between px-1">
-                                <span className="text-sm text-gray-500">Trajet</span>
-                                <span className="text-sm font-medium text-gray-900 text-right">
-                                  {reservation.trip.departure || 'N/A'} → {reservation.trip.arrival || 'N/A'}
-                                </span>
-                              </div>
+                              {reservation.referenceCode && (
+                                <div className="text-xs font-mono text-gray-600 dark:text-gray-300">
+                                  Référence: #{reservation.referenceCode}
+                                </div>
+                              )}
 
-                              {/* Client (après les priorités) */}
-                              <div className="flex items-center justify-between px-1">
-                                <span className="text-sm text-gray-500">Client</span>
-                                <span className="text-sm font-medium text-gray-900 truncate max-w-[170px] text-right">
-                                  {reservation.customer.name || 'Sans nom'}
-                                </span>
-                              </div>
-
-                              <div className="text-xs text-gray-400">
-                                Créé le: {fmtDate(reservation.createdAt)}
+                              <div className="text-xs text-gray-400 dark:text-gray-400">
+                                Reçu le: {fmtDate(reservation.createdAt)}
                               </div>
                             </div>
-                            
-                            {/* Actions */}
-                            <div className="p-4 border-t bg-gray-50 space-y-2">
-                              <Button 
-                                variant="secondary"
-                                onClick={() => handleViewDetails(reservation)}
-                                className="w-full flex items-center justify-center gap-2"
-                              >
-                                <Eye className="h-4 w-4" />
-                                Voir détails
-                              </Button>
-                            </div>
+                          )}
+                        </div>
+
+                        {/* Actions compactes (visibles) */}
+                        <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
+                          <div className="grid grid-cols-3 gap-2">
+                            <Button
+                              variant="primary"
+                              onClick={() => handleValidate(reservation)}
+                              disabled={isProcessing}
+                              className="flex items-center justify-center gap-2"
+                            >
+                              {isProcessing ? (
+                                <motion.div
+                                  animate={{ rotate: 360 }}
+                                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                                >
+                                  <RotateCw className="h-4 w-4" />
+                                </motion.div>
+                              ) : (
+                                <>
+                                  <CheckCircle className="h-4 w-4" />
+                                  Valider
+                                </>
+                              )}
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              onClick={() => handleRefuse(reservation)}
+                              disabled={isProcessing}
+                              className="border-red-300 text-red-700 hover:bg-red-50 dark:border-red-400 dark:text-red-200 dark:hover:bg-red-950/20"
+                            >
+                              <XCircle className="h-4 w-4" />
+                              Refuser
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              onClick={() => toggleExpandedCard(cardKey)}
+                              className="flex items-center justify-center gap-2"
+                            >
+                              <Eye className="h-4 w-4" />
+                              Détails
+                            </Button>
                           </div>
-                        );
-                      })}
-                  </div>
-                  
-                  {/* Bouton Charger plus pour les autres réservations */}
-                  {!filterStatus && otherReservations.length > 0 && otherPage * ITEMS_PER_PAGE <= otherReservations.length && (
-                    <div className="text-center pt-6">
-                      <Button variant="secondary" onClick={loadMoreReservations}>
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                        Charger plus de réservations
-                      </Button>
+                        </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+              </div>
+            </SectionCard>
+          )}
+
+          {/* ================= AUTRES RÉSERVATIONS ================= */}
+          {((filterStatus !== 'verification' && filterStatus !== '') || 
+            (filterStatus === '' && otherReservations.length > 0)) && (
+            <SectionCard
+              title={filterStatus ? `${getStatusConfig(filterStatus as ReservationStatus).label}s` : 'Toutes les réservations'}
+              icon={Receipt}
+              right={<span className="text-sm text-gray-600">{filterStatus ? `${filteredReservations.filter(r => r.reservation.status !== 'verification').length} réservation${filteredReservations.filter(r => r.reservation.status !== 'verification').length > 1 ? 's' : ''}` : 'Historique'}</span>}
+            >
+                <button
+                  onClick={() => setShowHistory(!showHistory)}
+                  className="mb-4 text-sm text-gray-600 hover:text-gray-900 flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+                >
+                  {showHistory ? (
+                    <>
+                      <ChevronUp className="h-4 w-4" />
+                      Réduire
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="h-4 w-4" />
+                      Développer
+                    </>
+                  )}
+                </button>
+              
+              {showHistory && (
+                <>
+                  {filteredReservations.filter(r => r.reservation.status !== 'verification').length === 0 ? (
+                    <div className="text-center py-8 border border-gray-200 rounded-lg">
+                      <div className="text-gray-500">Aucune réservation à afficher</div>
                     </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {filteredReservations
+                          .filter(r => r.reservation.status !== 'verification')
+                          .map((reservation) => {
+                            const statusConfig = getStatusConfig(reservation.reservation.status);
+                            const isProcessing = processingId === reservation.id;
+                            const agencyInfo = reservation.agencyId ? agencies[reservation.agencyId] : null;
+                            const proofUrl = getProofUrl(reservation);
+                            const proofText =
+                              reservation.payment.reference || reservation.payment.wallet || reservation.proof.message;
+                            
+                            return (
+                              <div
+                                key={`${reservation.agencyId}_${reservation.id}`}
+                                className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-all duration-300 bg-white"
+                              >
+                                {/* Header avec agence */}
+                                <div className="p-4 border-b border-gray-200 bg-gray-50/50">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                      <div className="h-6 w-6 rounded-md bg-gray-200 flex items-center justify-center">
+                                        <Building2 className="h-3 w-3 text-gray-600" />
+                                      </div>
+                                      <span className="text-sm font-medium text-gray-900 truncate">
+                                        {agencyInfo?.name || 'Agence inconnue'}
+                                      </span>
+                                    </div>
+                                    <StatusBadge status={statusConfig.statusVariant}>{statusConfig.label}</StatusBadge>
+                                  </div>
+                                  
+                                  {reservation.referenceCode && (
+                                    <div className="text-xs font-mono text-gray-600">
+                                      #{reservation.referenceCode}
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                {/* Détails */}
+                                <div className="p-4 space-y-3">
+                                  {/* 📞 Téléphone client (priorité) */}
+                                  <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <Smartphone className="h-4 w-4 text-gray-600" />
+                                      <span className="text-sm font-medium text-gray-700">Téléphone client</span>
+                                    </div>
+                                    <div className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight break-words">
+                                      {reservation.customer.phone || 'Non renseigné'}
+                                    </div>
+                                  </div>
+
+                                  {/* 🧾 Preuve de paiement */}
+                                  {proofText && (
+                                    <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
+                                      <div className="flex items-center gap-2 mb-1">
+                                        <FileText className="h-4 w-4 text-gray-600" />
+                                        <span className="text-sm font-medium text-gray-700">Preuve de paiement</span>
+                                      </div>
+                                      <div className="text-sm text-gray-800 break-words">{proofText}</div>
+
+                                      {proofUrl && (
+                                        <Button
+                                          variant="secondary"
+                                          className="mt-3 w-full flex items-center justify-center gap-2 border-blue-200 text-blue-700 hover:bg-blue-50"
+                                          onClick={() => window.open(proofUrl, '_blank')}
+                                        >
+                                          <FileText className="h-4 w-4" />
+                                          Voir le justificatif
+                                        </Button>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Montant */}
+                                  <div className="flex items-center justify-between px-1">
+                                    <span className="text-sm text-gray-500">Montant</span>
+                                    <span className="text-base sm:text-lg font-extrabold text-gray-900">
+                                      {fmtMoney(reservation.payment.amount)}
+                                    </span>
+                                  </div>
+
+                                  {/* Trajet */}
+                                  <div className="flex items-center justify-between px-1">
+                                    <span className="text-sm text-gray-500">Trajet</span>
+                                    <span className="text-sm font-medium text-gray-900 text-right">
+                                      {reservation.trip.departure || 'N/A'} → {reservation.trip.arrival || 'N/A'}
+                                    </span>
+                                  </div>
+
+                                  {/* Client (après les priorités) */}
+                                  <div className="flex items-center justify-between px-1">
+                                    <span className="text-sm text-gray-500">Client</span>
+                                    <span className="text-sm font-medium text-gray-900 truncate max-w-[170px] text-right">
+                                      {reservation.customer.name || 'Sans nom'}
+                                    </span>
+                                  </div>
+
+                                  <div className="text-xs text-gray-400">
+                                    Créé le: {fmtDate(reservation.createdAt)}
+                                  </div>
+                                </div>
+                                
+                                {/* Actions */}
+                                <div className="p-4 border-t bg-gray-50 space-y-2">
+                                  <Button 
+                                    variant="secondary"
+                                    onClick={() => handleViewDetails(reservation)}
+                                    className="w-full flex items-center justify-center gap-2"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                    Voir détails
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                      
+                      {/* Bouton Charger plus pour les autres réservations */}
+                      {!filterStatus && otherReservations.length > 0 && otherPage * ITEMS_PER_PAGE <= otherReservations.length && (
+                        <div className="text-center pt-6">
+                          <Button variant="secondary" onClick={loadMoreReservations}>
+                            <RefreshCw className="h-4 w-4 mr-2" />
+                            Charger plus de réservations
+                          </Button>
+                        </div>
+                      )}
+                    </>
                   )}
                 </>
               )}
-            </>
+            </SectionCard>
           )}
-        </SectionCard>
-      )}
         </div>
       </StandardLayoutWrapper>
     </InternalLayout>
@@ -2503,4 +2550,3 @@ const ReservationsEnLigne: React.FC = () => {
 };
 
 export default ReservationsEnLigne;
-

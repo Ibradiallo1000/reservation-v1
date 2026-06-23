@@ -3,6 +3,7 @@ import {
   doc,
   runTransaction,
   serverTimestamp,
+  setDoc,
   type DocumentReference,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
@@ -30,6 +31,10 @@ type OperatorCommitParams = {
 
 const PENDING_ONLINE_STATUSES = new Set(["preuve_recue", "verification"]);
 
+// Debug temporaire : ne pas conserver comme solution finale.
+const SKIP_ACTIVITY_LOG_DEBUG = true;
+const SKIP_TRIP_INSTANCE_BOOKING_DEBUG = false;
+
 function hasOwnField(data: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(data, key);
 }
@@ -41,6 +46,8 @@ export async function commitOperatorValidatedOnlineReservation({
   uid,
   userRole,
 }: OperatorCommitParams): Promise<void> {
+  let publicToken = "";
+
   await runTransaction(db, async (tx) => {
     const paymentRef = doc(db, "companies", companyId, "payments", paymentId);
     const [reservationSnap, paymentSnap] = await Promise.all([
@@ -53,12 +60,15 @@ export async function commitOperatorValidatedOnlineReservation({
 
     const reservation = reservationSnap.data() as Record<string, unknown>;
     const payment = paymentSnap.data() as Record<string, unknown>;
+
     const reservationCompanyId = String(reservation.companyId ?? "");
     const agencyId = String(reservation.agencyId ?? "").trim();
     const channel = String(reservation.paymentChannel ?? reservation.canal ?? "").toLowerCase();
     const status = String(reservation.status ?? "").toLowerCase();
     const statut = String(reservation.statut ?? "").toLowerCase();
-    let publicToken = String(reservation.publicToken ?? payment.publicToken ?? "").trim();
+
+    publicToken = String(reservation.publicToken ?? payment.publicToken ?? "").trim();
+
     if (!publicToken) {
       const publicPointerSnap = await tx.get(doc(db, "publicReservations", reservationRef.id));
       const publicPointer = publicPointerSnap.data() as Record<string, unknown> | undefined;
@@ -68,12 +78,15 @@ export async function commitOperatorValidatedOnlineReservation({
     if (reservationCompanyId !== companyId) {
       throw new Error("La réservation ne correspond pas à la compagnie du paiement.");
     }
+
     if (!agencyId) {
       throw new Error("La reservation online n'est rattachee a aucune agence.");
     }
+
     if (channel !== "online" && channel !== "en_ligne") {
       throw new Error("La réservation n'est pas une réservation online.");
     }
+
     if (String(payment.status ?? "") !== "validated") {
       throw new Error("Le paiement doit être validé avant la confirmation de la réservation.");
     }
@@ -81,16 +94,20 @@ export async function commitOperatorValidatedOnlineReservation({
     if (status === "confirme" && statut === "confirme" && reservation.seatsCommittedAt != null) {
       return;
     }
+
     if (!PENDING_ONLINE_STATUSES.has(status) && !PENDING_ONLINE_STATUSES.has(statut)) {
       throw new Error(`Réservation non confirmable : status=${status}, statut=${statut}.`);
     }
 
     const seatHoldOnly = reservation.seatHoldOnly === true;
     const seatsAlreadyCommitted = reservation.seatsCommittedAt != null;
+
     const agencySnap = await tx.get(doc(db, "companies", companyId, "agences", agencyId));
-    const onlineLogSnap = await tx.get(
-      activityLogRef(companyId, activityLogDocIdOnline(reservationRef.id))
-    );
+
+    const onlineLogSnap = SKIP_ACTIVITY_LOG_DEBUG
+      ? null
+      : await tx.get(activityLogRef(companyId, activityLogDocIdOnline(reservationRef.id)));
+
     if (seatHoldOnly && !seatsAlreadyCommitted) {
       const tripInstanceId = String(reservation.tripInstanceId ?? "").trim();
       const heldSeats = Number(reservation.seatsHeld ?? 0) || 0;
@@ -98,34 +115,53 @@ export async function commitOperatorValidatedOnlineReservation({
         0,
         heldSeats > 0 ? heldSeats : Number(reservation.seatsGo ?? 0) || 0
       );
+
       if (!tripInstanceId || seats <= 0) {
         throw new Error("Impossible de confirmer les sièges : trajet ou nombre de sièges manquant.");
       }
 
       const tiRef = tripInstanceRef(companyId, tripInstanceId);
       const tiSnap = await tx.get(tiRef);
-      bookSeatsOnTripInstanceInTransaction(tx, tiRef, tiSnap, seats, {
-        originStopOrder:
-          reservation.originStopOrder != null ? Number(reservation.originStopOrder) : undefined,
-        destinationStopOrder:
-          reservation.destinationStopOrder != null
-            ? Number(reservation.destinationStopOrder)
-            : undefined,
-        depart: String(reservation.depart ?? ""),
-        arrivee: String(reservation.arrivee ?? ""),
+
+      console.log("[DEBUG_TRIP_INSTANCE_BOOKING_ATTEMPT]", {
+        path: tiRef.path,
+        seats,
+        keys: ["reservedSeats", "remainingSeats", "passengerCount", "segments", "updatedAt"],
+        skipped: SKIP_TRIP_INSTANCE_BOOKING_DEBUG,
       });
+
+      if (SKIP_TRIP_INSTANCE_BOOKING_DEBUG) {
+        console.warn("[DEBUG_SKIP_TRIP_INSTANCE_BOOKING]", {
+          path: tiRef.path,
+          seats,
+        });
+      } else {
+        bookSeatsOnTripInstanceInTransaction(tx, tiRef, tiSnap, seats, {
+          originStopOrder:
+            reservation.originStopOrder != null ? Number(reservation.originStopOrder) : undefined,
+          destinationStopOrder:
+            reservation.destinationStopOrder != null
+              ? Number(reservation.destinationStopOrder)
+              : undefined,
+          depart: String(reservation.depart ?? ""),
+          arrivee: String(reservation.arrivee ?? ""),
+        });
+      }
     }
 
     const existingPayment =
       typeof reservation.payment === "object" && reservation.payment !== null
         ? (reservation.payment as Record<string, unknown>)
         : {};
+
     const existingReservation =
       typeof reservation.reservation === "object" && reservation.reservation !== null
         ? (reservation.reservation as Record<string, unknown>)
         : {};
+
     const currentBoardingStatus = String(reservation.boardingStatus ?? "").toLowerCase();
     const currentStatutEmbarquement = String(reservation.statutEmbarquement ?? "").toLowerCase();
+
     const alreadyBoardingProcessed =
       currentBoardingStatus === "boarded" ||
       currentBoardingStatus === "checked_in" ||
@@ -133,37 +169,51 @@ export async function commitOperatorValidatedOnlineReservation({
       currentStatutEmbarquement === "embarque" ||
       reservation.checkInTime != null ||
       reservation.controleurId != null;
+
     const boardingDefaultsPatch: Record<string, unknown> = {};
+
     if (!alreadyBoardingProcessed) {
       if (!hasOwnField(reservation, "boardingStatus")) {
         boardingDefaultsPatch.boardingStatus = "pending";
       }
+
       if (!hasOwnField(reservation, "statutEmbarquement")) {
         boardingDefaultsPatch.statutEmbarquement = "en_attente";
       }
+
       if (!hasOwnField(reservation, "checkInTime")) {
         boardingDefaultsPatch.checkInTime = null;
       }
+
       if (!hasOwnField(reservation, "controleurId")) {
         boardingDefaultsPatch.controleurId = null;
       }
     }
+
     const auditEntry = buildStatutTransitionPayload(
       PENDING_ONLINE_STATUSES.has(statut) ? statut : status,
       "confirme",
       { userId: uid, userRole }
     );
-    const commercialActivityPatch = recordOnlineReservationCommercialActivityInTransaction({
-      tx,
-      reservationRef,
-      data: reservation,
-      agencyTimezone: dailyStatsTimezoneFromAgencyData(
-        agencySnap.data() as { timezone?: string | null } | undefined
-      ),
-      activityLogExists: onlineLogSnap.exists(),
-    });
 
-    tx.update(reservationRef, {
+    const commercialActivityPatch =
+      SKIP_ACTIVITY_LOG_DEBUG || !onlineLogSnap
+        ? {}
+        : recordOnlineReservationCommercialActivityInTransaction({
+            tx,
+            reservationRef,
+            data: reservation,
+            agencyTimezone: dailyStatsTimezoneFromAgencyData(
+              agencySnap.data() as { timezone?: string | null } | undefined
+            ),
+            activityLogExists: onlineLogSnap.exists(),
+          });
+
+    if (SKIP_ACTIVITY_LOG_DEBUG) {
+      console.warn("[DEBUG_SKIP_ACTIVITY_LOG] activity log skipped for isolation test");
+    }
+
+    const updatePayload = {
       status: "confirme",
       statut: "confirme",
       paymentStatus: "paid",
@@ -184,12 +234,25 @@ export async function commitOperatorValidatedOnlineReservation({
       ...(!seatsAlreadyCommitted && { seatsCommittedAt: serverTimestamp() }),
       ...commercialActivityPatch,
       updatedAt: serverTimestamp(),
+    };
+
+    console.log("[DEBUG_RESERVATION_UPDATE_ATTEMPT]", {
+      path: reservationRef.path,
+      keys: Object.keys(updatePayload),
+      status: updatePayload.status,
+      statut: updatePayload.statut,
+      paymentStatus: updatePayload.paymentStatus,
     });
 
-    console.log("[PUBLIC SYNC TOKEN]", publicToken);
-    if (publicToken) {
+    tx.update(reservationRef, updatePayload);
+  });
+
+  if (publicToken) {
+    try {
+      console.log("[PUBLIC SYNC TOKEN]", publicToken);
       console.log("[PUBLIC SYNC PATH]", `publicReservations/${publicToken}`);
-      tx.set(
+
+      await setDoc(
         doc(db, "publicReservations", publicToken),
         {
           status: "confirme",
@@ -203,6 +266,15 @@ export async function commitOperatorValidatedOnlineReservation({
         },
         { merge: true }
       );
+
+      console.log("[PUBLIC_SYNC_SUCCESS]", {
+        path: `publicReservations/${publicToken}`,
+      });
+    } catch (error) {
+      console.warn("[PUBLIC_SYNC_FAILED_NON_BLOCKING]", {
+        path: `publicReservations/${publicToken}`,
+        error,
+      });
     }
-  });
+  }
 }
