@@ -3862,62 +3862,69 @@ const AgenceComptabilitePage: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 sm:gap-6">
-              <MetricCard
-                label="Fonds reçus"
-                value={
-                  cashGlobalPosition == null
-                    ? loadingCash
-                      ? '…'
-                      : 'Indisponible'
-                    : money(cashGlobalPosition.totalCashIn)
-                }
-                icon={HandIcon}
-                valueColorVar={theme?.primary}
-              />
-              <MetricCard
-                label="Encaissements"
-                value={
-                  loadingCash
-                    ? '…'
-                    : ledgerPeriodError
-                      ? 'Indisponible'
-                      : money(ledgerPeriodCash?.totalCashIn ?? totIn)
-                }
-                icon={Wallet}
-                valueColorVar={theme?.primary}
-              />
-              <MetricCard
-                label="Entrées"
-                value={loadingCash ? '…' : ledgerPeriodError ? 'Indisponible' : money(totIn)}
-                icon={ArrowDownCircle}
-                valueColorVar={theme?.primary}
-              />
-              <MetricCard
-                label="Sorties"
-                value={
-                  loadingCash
-                    ? '…'
-                    : ledgerPeriodError
-                      ? 'Indisponible'
-                      : money(ledgerPeriodCash?.totalCashOut ?? totOut)
-                }
-                icon={AlertTriangle}
-                valueColorVar="#b91c1c"
-              />
-              <MetricCard
-                label="Solde"
-                value={
-                  cashGlobalPosition == null
-                    ? loadingCash
-                      ? '…'
-                      : 'Indisponible'
-                    : money(cashGlobalPosition.soldeCash)
-                }
-                icon={Banknote}
-                valueColorVar={theme?.primary}
-              />
-            </div>
+            {/* ===== SECTION CARTES KPI — CAISSE (CORRIGÉE) ===== */}
+            {(() => {
+              const totalPeriodIn = ledgerPeriodCash?.totalCashIn ?? totIn;
+              const totalPeriodOut = ledgerPeriodCash?.totalCashOut ?? totOut;
+              const periodNet = totalPeriodIn - totalPeriodOut;
+
+              return (
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
+                  <MetricCard
+                    label="Fonds reçus période"
+                    value={
+                      loadingCash
+                        ? '…'
+                        : ledgerPeriodError
+                          ? 'Indisponible'
+                          : money(totalPeriodIn)
+                    }
+                    icon={HandIcon}
+                    valueColorVar={theme?.primary}
+                    hint="Total des fonds reçus sur la période sélectionnée"
+                  />
+                  <MetricCard
+                    label="Sorties période"
+                    value={
+                      loadingCash
+                        ? '…'
+                        : ledgerPeriodError
+                          ? 'Indisponible'
+                          : money(totalPeriodOut)
+                    }
+                    icon={AlertTriangle}
+                    valueColorVar="#b91c1c"
+                    hint="Total des sorties sur la période sélectionnée"
+                  />
+                  <MetricCard
+                    label="Net période"
+                    value={
+                      loadingCash
+                        ? '…'
+                        : ledgerPeriodError
+                          ? 'Indisponible'
+                          : money(periodNet)
+                    }
+                    icon={TrendingUp}
+                    valueColorVar={theme?.primary}
+                    hint="Entrées - sorties sur la période sélectionnée"
+                  />
+                  <MetricCard
+                    label="Solde caisse actuel"
+                    value={
+                      cashGlobalPosition == null
+                        ? loadingCash
+                          ? '…'
+                          : 'Indisponible'
+                        : money(cashGlobalPosition.soldeCash)
+                    }
+                    icon={Banknote}
+                    valueColorVar={theme?.primary}
+                    hint="Solde réel disponible dans la caisse agence"
+                  />
+                </div>
+              );
+            })()}
 
             {cashGlobalPosition?.capped && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">

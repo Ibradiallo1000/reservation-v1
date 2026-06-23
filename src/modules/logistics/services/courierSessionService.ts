@@ -255,15 +255,19 @@ export async function validateCourierSession(params: {
       ? Math.max(0, ledgerSessionTotal - params.validatedAmount)
       : 0;
 
-    /**
-     * Flux courrier : ne pas consommer agency_*_pending_cash (le flux courrier ne l'alimente pas).
-     * On poste directement vers agency_*_cash (idempotent) pour éviter toute écriture pending.
-     */
-    // (courrier) ne pas consommer pending_cash : aucune écriture pending ici.
-    // Cette validation comptable poste le cash directement (voir apply* dans financialTransactions).
-    // Ici on ne crée volontairement aucun mouvement via applyRemittancePendingToAgencyCashInTransaction.
+    // ✅ CORRECTION : Mettre à jour le solde du compte caisse agence
+    // Récupérer le document du compte caisse
+    const cashAccountRef = doc(db, `companies/${params.companyId}/accounts/agency_${params.agencyId}_cash`);
+    const cashSnap = await tx.get(cashAccountRef);
+    const currentBalance = cashSnap.exists() ? Number(cashSnap.data()?.balance ?? 0) : 0;
+    
+    // Mettre à jour le solde avec le montant validé
+    tx.update(cashAccountRef, {
+      balance: currentBalance + params.validatedAmount,
+      updatedAt: serverTimestamp(),
+    });
 
-
+    // Mettre à jour le statut de la session
     tx.update(sessionRef, {
       status: "VALIDATED_AGENCY",
       validatedAt: serverTimestamp(),
@@ -279,6 +283,7 @@ export async function validateCourierSession(params: {
       updatedAt: serverTimestamp(),
     });
 
+    // Écrire dans comptaEncaissements (existant)
     if (params.validatedAmount > 0) {
       writeComptaEncaissementInTransaction(tx, params.companyId, params.agencyId, {
         sessionId: params.sessionId,
@@ -473,6 +478,18 @@ export async function returnCourierSessionToAgencyAccountant(params: {
     if (s.status !== "VALIDATED_AGENCY") {
       throw new Error("Cette session n'est plus en attente d'approbation : actualisez la page.");
     }
+
+    // ✅ CORRECTION : Annuler la mise à jour du solde du compte caisse
+    // Récupérer le document du compte caisse
+    const cashAccountRef = doc(db, `companies/${params.companyId}/accounts/agency_${params.agencyId}_cash`);
+    const cashSnap = await tx.get(cashAccountRef);
+    const currentBalance = cashSnap.exists() ? Number(cashSnap.data()?.balance ?? 0) : 0;
+    
+    // Soustraire le montant qui avait été ajouté
+    tx.update(cashAccountRef, {
+      balance: Math.max(0, currentBalance - validatedAmount),
+      updatedAt: serverTimestamp(),
+    });
 
     const comptaRef = courierComptaEncaissementDocRef(params.companyId, params.agencyId, params.sessionId);
     const comptaSnap = validatedAmount > 0 ? await tx.get(comptaRef) : null;
