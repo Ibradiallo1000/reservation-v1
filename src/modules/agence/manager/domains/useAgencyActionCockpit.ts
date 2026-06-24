@@ -25,7 +25,6 @@ import {
   tripInstanceTime,
   type TripInstanceDocWithId,
 } from "@/modules/compagnie/tripInstances/tripInstanceTypes";
-import { markOriginDeparture } from "@/modules/compagnie/tripInstances/tripProgressService";
 import { courierSessionsRef } from "@/modules/logistics/domain/courierSessionPaths";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
 import {
@@ -37,7 +36,6 @@ import { getLedgerBalances } from "@/modules/compagnie/treasury/financialTransac
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-// ✅ Passage à 24h pour les alertes de session longue
 const LONG_SESSION_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 const DEPARTURE_LATE_THRESHOLD_MINUTES = 15;
 const WEAK_FILL_RATE_THRESHOLD = 0.5;
@@ -97,6 +95,20 @@ type TripReservationAggregate = {
   revenue: number;
 };
 
+type DepartureWorkflowDoc = {
+  id: string;
+  tripInstanceId?: string | null;
+  tripAssignmentId?: string | null;
+  tripStatus?: string | null;
+  departureConfirmedAt?: unknown;
+  departureConfirmedBy?: string | null;
+  departedAt?: unknown;
+  updatedAt?: unknown;
+  date?: string | null;
+  agencyId?: string | null;
+  companyId?: string | null;
+};
+
 export type AgencyLiveActivityMetric = {
   count: number;
   amount: number;
@@ -132,6 +144,10 @@ export type AgencyLiveTripItem = {
   isLate: boolean;
   statusLabel: string;
   estimatedLoss: number;
+  departureConfirmed?: boolean;
+  departureConfirmedAt?: unknown;
+  departedAt?: unknown;
+  confirmedAt?: unknown;
 };
 
 export type AgencyProblemItem = {
@@ -190,6 +206,7 @@ type RawLiveSources = {
   activeCourierSessions: SessionDoc[];
   reservationRows: ReservationRow[];
   activeGuichetReservationRows: ReservationRow[];
+  onlineReservationRowsToday: ReservationRow[];
   shipmentsToday: Array<ShipmentRow & { amount: number; createdDate: Date | null }>;
   now: Date;
 };
@@ -232,19 +249,54 @@ function normalizeText(value: unknown): string {
 }
 
 function isReservationCancelled(normalizedStatus: string): boolean {
-  return ["annule", "annulé", "annulation_en_attente", "invalide", "cancelled", "canceled"].includes(normalizedStatus);
+  return ["annule", "annulé", "annulation_en_attente", "invalide", "cancelled", "canceled", "refuse", "refusé", "rejected", "en_attente_paiement"].includes(normalizedStatus);
 }
 
 function isReservationConfirmedStatus(normalizedStatus: string): boolean {
-  return ["confirme", "confirmé", "paye", "payé", "valide", "validé", "paid"].includes(normalizedStatus);
+  return [
+    "confirme", "confirmé", "paye", "payé", "valide", "validé", "paid",
+    "preuve_recue", "verification", "embarque", "embarqué"
+  ].includes(normalizedStatus);
+}
+
+// ✅ Détection robuste des réservations en ligne avec champs imbriqués
+function isOnlineReservation(raw: Record<string, unknown>): boolean {
+  const reservationMap = typeof raw.reservation === "object" && raw.reservation !== null
+    ? raw.reservation as Record<string, unknown>
+    : {};
+
+  const canal = String(
+    raw.canal ??
+    raw.channel ??
+    raw.source ??
+    raw.origin ??
+    reservationMap.channel ??
+    raw.paymentChannel ??
+    ""
+  ).toLowerCase();
+  
+  const isOnline = raw.online === true || raw.isOnline === true;
+  
+  return (
+    isOnline ||
+    canal === "en_ligne" ||
+    canal === "online" ||
+    canal === "web" ||
+    canal === "public" ||
+    canal === "reservation_en_ligne" ||
+    canal === "site_web" ||
+    canal === "mobile" ||
+    canal === "app"
+  );
 }
 
 function toReservationRow(raw: Record<string, unknown>): ReservationRow {
   const normalized = normalizeReservation(raw);
   const reservationStatus = normalizeText(normalized.reservation.status);
   const cancelled = isReservationCancelled(reservationStatus);
-  const isConfirmedStatus = ["confirme", "confirmé"].includes(reservationStatus);
-  const online = isOnlinePaymentChannel(raw);
+  const isConfirmedStatus = isReservationConfirmedStatus(reservationStatus);
+  
+  const online = isOnlineReservation(raw);
   const onlineConfirmed = online && isConfirmedStatus;
   const isPaidStatus = ["paye", "payé", "paid"].includes(reservationStatus);
   const onlineValid = online && (onlineConfirmed || isPaidStatus);
@@ -295,13 +347,44 @@ function tripScheduledAt(dateKey: string, departureTime: string, agencyTimezone:
 function tripHasDeparted(trip: TripInstanceDocWithId): boolean {
   const status = normalizeText(trip.status);
   const statutMetier = normalizeText(trip.statutMetier);
-  return (
+  
+  if (
     status === "departed" ||
-    status === "arrived" ||
+    status === "depart_confirmed" ||
+    status === "confirmed_departure" ||
+    status === "arrived"
+  ) {
+    return true;
+  }
+  
+  if (
     statutMetier === "en_transit" ||
     statutMetier === "retour_origine" ||
-    statutMetier === "termine"
-  );
+    statutMetier === "termine" ||
+    statutMetier === "parti" ||
+    statutMetier === "depart_confirme" ||
+    statutMetier === "depart_confirmed"
+  ) {
+    return true;
+  }
+  
+  if ((trip as any).departureConfirmed === true) {
+    return true;
+  }
+  
+  if (toDateOrNull((trip as any).departureConfirmedAt) !== null) {
+    return true;
+  }
+  
+  if (toDateOrNull((trip as any).departedAt) !== null) {
+    return true;
+  }
+  
+  if (toDateOrNull((trip as any).confirmedAt) !== null) {
+    return true;
+  }
+  
+  return false;
 }
 
 function tripHasArrived(trip: TripInstanceDocWithId): boolean {
@@ -384,8 +467,8 @@ function getLiveActivity(sources: RawLiveSources): {
     });
   }
 
-  // ✅ APPROCHE ROBUSTE: Online = validée OU payée (fallback)
-  const onlineRows = sources.reservationRows.filter(
+  // ✅ Utiliser les réservations en ligne validées aujourd'hui
+  const onlineRows = sources.onlineReservationRowsToday.filter(
     (reservation) => reservation.online && (reservation.confirmed || reservation.onlinePaid)
   );
   const onlineTickets = onlineRows.reduce((sum, reservation) => sum + reservation.seats, 0);
@@ -427,8 +510,8 @@ function getSessionDrivenLiveActivity(sources: RawLiveSources): {
 } {
   const base = getLiveActivity(sources);
   
-  // ✅ APPROCHE ROBUSTE: Online = validée OU payée
-  const onlineSoldRows = sources.reservationRows.filter(
+  // ✅ Utiliser les réservations en ligne validées aujourd'hui
+  const onlineSoldRows = sources.onlineReservationRowsToday.filter(
     (reservation) => reservation.online && (reservation.confirmed || reservation.onlinePaid)
   );
   const onlineTickets = onlineSoldRows.reduce((sum, reservation) => sum + reservation.seats, 0);
@@ -454,7 +537,6 @@ function getSessionDrivenLiveActivity(sources: RawLiveSources): {
 function getTripReservationAggregates(reservationRows: ReservationRow[]): Map<string, TripReservationAggregate> {
   const perTrip = new Map<string, TripReservationAggregate>();
   for (const reservation of reservationRows) {
-    // ✅ On inclut toutes les réservations confirmées ou payées (aligné comptable)
     if (!reservation.tripInstanceId || reservation.tripInstanceId === "") continue;
     if (!reservation.confirmed && !reservation.onlinePaid) continue;
     const current = perTrip.get(reservation.tripInstanceId) ?? {
@@ -477,6 +559,7 @@ function getTripsAnalysis(params: {
   averageTicketPrice: number;
   agencyTimezone: string;
   now: Date;
+  departureWorkflowsByKey: Map<string, DepartureWorkflowDoc>;
 }): {
   liveTrips: AgencyLiveTripItem[];
   weakTrips: AgencyProblemItem[];
@@ -494,10 +577,36 @@ function getTripsAnalysis(params: {
       };
       const fillRate = Math.max(0, Math.min(1, reservationAggregate.reservedSeats / capacity));
       const scheduledAt = tripScheduledAt(trip.date, tripInstanceTime(trip), params.agencyTimezone);
+      
+      // Récupérer le workflow de départ depuis la map
+      const workflow =
+        params.departureWorkflowsByKey.get(trip.id) ??
+        params.departureWorkflowsByKey.get(String((trip as any).tripInstanceId ?? "")) ??
+        params.departureWorkflowsByKey.get(String((trip as any).tripAssignmentId ?? ""));
+      
+      // Statut effectif priorisant le workflow
+      const effectiveStatus = String(
+        workflow?.tripStatus ??
+        (trip as any).tripStatus ??
+        trip.status ??
+        trip.statutMetier ??
+        ""
+      ).toUpperCase();
+      
+      // Départ confirmé basé sur le workflow
+      const workflowDeparted =
+        effectiveStatus === "DEPARTED" ||
+        Boolean(workflow?.departureConfirmedAt) ||
+        Boolean(workflow?.departureConfirmedBy) ||
+        Boolean(workflow?.departedAt);
+      
+      const departed = workflowDeparted || tripHasDeparted(trip);
+      
       const isLate =
         scheduledAt != null &&
         scheduledAt.getTime() < params.now.getTime() - DEPARTURE_LATE_THRESHOLD_MINUTES * 60000 &&
-        !tripHasDeparted(trip);
+        !departed;
+      
       const needsValidation = normalizeText(trip.statutMetier) === "validation_agence_requise";
       const tone: AgencyTripTone =
         fillRate < 0.4 ? "critical" : fillRate < 0.7 ? "warning" : "healthy";
@@ -519,8 +628,12 @@ function getTripsAnalysis(params: {
         tone,
         needsValidation,
         isLate,
-        statusLabel: needsValidation ? "À valider" : isLate ? "En retard" : "En cours",
+        statusLabel: departed ? "Départ confirmé" : needsValidation ? "À surveiller" : isLate ? "En retard" : "En cours",
         estimatedLoss,
+        departureConfirmed: departed,
+        departureConfirmedAt: workflow?.departureConfirmedAt ?? (trip as any).departureConfirmedAt,
+        departedAt: workflow?.departedAt ?? (trip as any).departedAt,
+        confirmedAt: workflow?.departureConfirmedAt ?? (trip as any).confirmedAt,
       };
     })
     .sort((left, right) => left.departureTime.localeCompare(right.departureTime));
@@ -562,14 +675,14 @@ function getTodoItems(params: {
   return [
     {
       id: "departures",
-      title: "Départs à valider",
+      title: "Départs à surveiller",
       count: params.departuresToValidate.length,
       detail:
         params.departuresToValidate.length > 0
-          ? "Validez immédiatement les trajets prêts à partir."
+          ? "Consultez les départs en attente de validation."
           : "Aucun départ bloqué pour le moment.",
       tone: params.departuresToValidate.length > 0 ? "critical" : "neutral",
-      actionLabel: "Valider maintenant",
+      actionLabel: "Consulter",
     },
     {
       id: "posts",
@@ -605,7 +718,6 @@ function getAlerts(params: {
 }): AgencyAlertItem[] {
   const alerts: AgencyAlertItem[] = [];
 
-  // ✅ Seuil passé à 24h
   for (const post of params.activePosts) {
     const startedAt =
       toDateOrNull(post.startAt) ??
@@ -630,11 +742,12 @@ function getAlerts(params: {
     });
   }
 
+  // Ne plus afficher les départs en retard pour les départs confirmés
   for (const trip of params.liveTrips.filter((row) => row.isLate).slice(0, 3)) {
     alerts.push({
       id: `late-trip-${trip.id}`,
       title: "🚨 Départ en retard",
-      detail: `${trip.routeLabel} devait partir à ${trip.departureTime}. Validez ou traitez le retard maintenant.`,
+      detail: `${trip.routeLabel} devait partir à ${trip.departureTime}. Consultez le départ maintenant.`,
       tone: "critical",
     });
   }
@@ -683,7 +796,7 @@ function getRecommendations(params: {
     recommendations.push({
       id: "protect-margin",
       title: "Protégez votre marge dès cette semaine",
-      detail: "Traitez les trajets sous-remplis avant qu’ils ne pèsent durablement sur le revenu de l’agence.",
+      detail: "Traitez les trajets sous-remplis avant qu'ils ne pèsent durablement sur le revenu de l'agence.",
       estimatedGain: Math.round(params.weeklyLeakEstimate * 0.35),
       to: "/agence/validation-departs",
     });
@@ -694,11 +807,23 @@ function getRecommendations(params: {
 
 function getActivityFeed(params: {
   reservationRows: ReservationRow[];
+  onlineReservationRowsToday: ReservationRow[];
   shipmentsToday: Array<ShipmentRow & { amount: number; createdDate: Date | null }>;
   liveTrips: AgencyLiveTripItem[];
   now: Date;
 }): AgencyActivityFeedItem[] {
-  // ✅ Afficher toutes les réservations (même annulées) avec un indicateur
+  // ✅ Ajouter les réservations en ligne validées aujourd'hui
+  const onlineReservationEvents = params.onlineReservationRowsToday
+    .filter((reservation) => reservation.createdAt != null && !reservation.cancelled)
+    .map<AgencyActivityFeedItem>((reservation) => ({
+      id: `online-reservation-${reservation.id}`,
+      kind: "ticket",
+      title: "✅ Réservation en ligne",
+      detail: `${reservation.seats} place(s) • ${reservation.amount.toLocaleString("fr-FR")} FCFA`,
+      occurredAt: reservation.createdAt,
+      tone: "neutral",
+    }));
+
   const reservationEvents = params.reservationRows
     .filter((reservation) => reservation.createdAt != null)
     .map<AgencyActivityFeedItem>((reservation) => ({
@@ -725,6 +850,22 @@ function getActivityFeed(params: {
     tone: "neutral",
   }));
 
+  const departureConfirmedEvents = params.liveTrips
+    .filter((trip) => trip.departureConfirmed === true)
+    .map<AgencyActivityFeedItem>((trip) => ({
+      id: `departure-confirmed-${trip.id}`,
+      kind: "departure",
+      title: "🚌 Départ confirmé",
+      detail: `${trip.routeLabel} • ${trip.departureTime}`,
+      occurredAt: new Date(
+        (trip.departureConfirmedAt as any)?.toDate?.() || 
+        (trip.departedAt as any)?.toDate?.() || 
+        params.now
+      ),
+      tone: "neutral",
+    }));
+
+  // Retards uniquement si le départ n'est pas confirmé
   const delayEvents = params.liveTrips
     .filter((trip) => trip.isLate)
     .map<AgencyActivityFeedItem>((trip) => ({
@@ -737,7 +878,7 @@ function getActivityFeed(params: {
     }));
 
   const departureEvents = params.liveTrips
-    .filter((trip) => !trip.needsValidation && !trip.isLate)
+    .filter((trip) => !trip.needsValidation && !trip.isLate && !trip.departureConfirmed)
     .slice(0, 2)
     .map<AgencyActivityFeedItem>((trip) => ({
       id: `departure-${trip.id}`,
@@ -748,7 +889,7 @@ function getActivityFeed(params: {
       tone: "neutral",
     }));
 
-  return [...reservationEvents, ...shipmentEvents, ...delayEvents, ...departureEvents]
+  return [...onlineReservationEvents, ...reservationEvents, ...shipmentEvents, ...departureConfirmedEvents, ...delayEvents, ...departureEvents]
     .sort((left, right) => (right.occurredAt?.getTime() ?? 0) - (left.occurredAt?.getTime() ?? 0))
     .slice(0, 8);
 }
@@ -793,7 +934,14 @@ export function useAgencyActionCockpit() {
   const [destinationTrips, setDestinationTrips] = useState<TripInstanceDocWithId[]>([]);
   const [pendingExpenses, setPendingExpenses] = useState<AgencyPendingExpenseItem[]>([]);
 
-  // ✅ NOUVEAU : Alignement avec le comptable
+  // 🔥 Nouvel état pour les workflows de départ
+  const [departureWorkflows, setDepartureWorkflows] = useState<DepartureWorkflowDoc[]>([]);
+  const [loadingDepartureWorkflows, setLoadingDepartureWorkflows] = useState(true);
+
+  // 🔥 Nouvel état pour les réservations en ligne validées aujourd'hui
+  const [rawOnlineReservationsToday, setRawOnlineReservationsToday] = useState<Array<Record<string, unknown>>>([]);
+  const [loadingOnlineReservationsToday, setLoadingOnlineReservationsToday] = useState(true);
+
   const [todayLedgerEncaissements, setTodayLedgerEncaissements] = useState(0);
   const [cashBalance, setCashBalance] = useState<number | null>(null);
   const [cashPositionCapped, setCashPositionCapped] = useState<boolean>(false);
@@ -806,7 +954,6 @@ export function useAgencyActionCockpit() {
   const [loadingTrips, setLoadingTrips] = useState(true);
   const [loadingExpenses, setLoadingExpenses] = useState(true);
 
-  const [validatingTripId, setValidatingTripId] = useState<string | null>(null);
   const [processingExpenseId, setProcessingExpenseId] = useState<string | null>(null);
   const [timeTick, setTimeTick] = useState(0);
 
@@ -817,7 +964,151 @@ export function useAgencyActionCockpit() {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  // ✅ CORRIGÉ : Chargement des données comptables avec Promise.allSettled
+  // 🔥 Lecture de la collection departures
+  useEffect(() => {
+    if (!companyId || !agencyId) {
+      setDepartureWorkflows([]);
+      setLoadingDepartureWorkflows(false);
+      return;
+    }
+
+    setLoadingDepartureWorkflows(true);
+
+    const departuresRef = collection(
+      db,
+      "companies",
+      companyId,
+      "agences",
+      agencyId,
+      "departures"
+    );
+
+    return onSnapshot(
+      query(departuresRef, where("date", "==", todayKey), limit(200)),
+      (snapshot) => {
+        setDepartureWorkflows(
+          snapshot.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...(docSnap.data() as Omit<DepartureWorkflowDoc, "id">),
+          }))
+        );
+        setLoadingDepartureWorkflows(false);
+      },
+      () => {
+        setDepartureWorkflows([]);
+        setLoadingDepartureWorkflows(false);
+      }
+    );
+  }, [companyId, agencyId, todayKey]);
+
+  // 🔥 Lecture des réservations en ligne validées aujourd'hui
+  useEffect(() => {
+    if (!companyId || !agencyId) {
+      setRawOnlineReservationsToday([]);
+      setLoadingOnlineReservationsToday(false);
+      return;
+    }
+
+    setLoadingOnlineReservationsToday(true);
+
+    const reservationsRef = collection(
+      db,
+      "companies",
+      companyId,
+      "agences",
+      agencyId,
+      "reservations"
+    );
+
+    // Query sur ticketValidatedAt (le plus fiable)
+    const unsubTicketValidated = onSnapshot(
+      query(
+        reservationsRef,
+        where("ticketValidatedAt", ">=", dayStart),
+        where("ticketValidatedAt", "<=", dayEnd),
+        limit(300)
+      ),
+      (snapshot) => {
+        const docs = snapshot.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...(docSnap.data() as Record<string, unknown>),
+        }));
+        setRawOnlineReservationsToday((prev) => {
+          const merged = new Map<string, Record<string, unknown>>();
+          // Garder les docs existants
+          for (const doc of prev) {
+            merged.set(doc.id as string, doc);
+          }
+          // Ajouter ou remplacer les nouveaux
+          for (const doc of docs) {
+            merged.set(doc.id as string, doc);
+          }
+          return [...merged.values()];
+        });
+        setLoadingOnlineReservationsToday(false);
+      },
+      () => {
+        setLoadingOnlineReservationsToday(false);
+      }
+    );
+
+    // Query complémentaire sur updatedAt pour les réservations qui n'ont pas ticketValidatedAt
+    const unsubUpdatedAt = onSnapshot(
+      query(
+        reservationsRef,
+        where("updatedAt", ">=", dayStart),
+        where("updatedAt", "<=", dayEnd),
+        limit(300)
+      ),
+      (snapshot) => {
+        const docs = snapshot.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...(docSnap.data() as Record<string, unknown>),
+        }));
+        setRawOnlineReservationsToday((prev) => {
+          const merged = new Map<string, Record<string, unknown>>();
+          for (const doc of prev) {
+            merged.set(doc.id as string, doc);
+          }
+          for (const doc of docs) {
+            merged.set(doc.id as string, doc);
+          }
+          return [...merged.values()];
+        });
+        setLoadingOnlineReservationsToday(false);
+      },
+      () => {
+        setLoadingOnlineReservationsToday(false);
+      }
+    );
+
+    return () => {
+      unsubTicketValidated();
+      unsubUpdatedAt();
+    };
+  }, [companyId, agencyId, dayStart, dayEnd]);
+
+  // 🔥 Map de correspondance pour les workflows de départ
+  const departureWorkflowsByKey = useMemo(() => {
+    const map = new Map<string, DepartureWorkflowDoc>();
+
+    for (const departure of departureWorkflows) {
+      const keys = [
+        departure.id,
+        departure.tripInstanceId,
+        departure.tripAssignmentId,
+      ]
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean);
+
+      for (const key of keys) {
+        map.set(key, departure);
+      }
+    }
+
+    return map;
+  }, [departureWorkflows]);
+
   useEffect(() => {
     if (!companyId || !agencyId) {
       setTodayLedgerEncaissements(0);
@@ -833,18 +1124,15 @@ export function useAgencyActionCockpit() {
         const dayEndBm = getEndOfDayForDate(todayKey, agencyTimezone);
         const dayEndExclusive = new Date(dayEndBm.getTime() + 1);
 
-        // ✅ Utiliser Promise.allSettled pour éviter les erreurs
         const results = await Promise.allSettled([
           getAgencyLedgerPaymentReceivedTotalForPeriod(companyId, agencyId, dayStartBm, dayEndExclusive),
           getAgencyCashPosition(companyId, agencyId),
           getLedgerBalances(companyId, agencyId),
         ]);
 
-        // ✅ Gérer chaque résultat individuellement
         if (results[0].status === 'fulfilled') {
           setTodayLedgerEncaissements(results[0].value.total);
         } else {
-          console.warn("[useAgencyActionCockpit] Impossible de charger les encaissements:", results[0].reason);
           setTodayLedgerEncaissements(0);
         }
 
@@ -853,7 +1141,6 @@ export function useAgencyActionCockpit() {
           setCashBalance(cashPos.soldeCash);
           setCashPositionCapped(cashPos.capped || false);
         } else {
-          console.warn("[useAgencyActionCockpit] Impossible de charger la position caisse:", results[1].reason);
           setCashBalance(null);
           setCashPositionCapped(false);
         }
@@ -864,16 +1151,9 @@ export function useAgencyActionCockpit() {
           const variance = balances.cash - currentCash;
           setAccountsVsLedgerVariance(Math.abs(variance) > 0.01 ? variance : 0);
         } else {
-          console.warn("[useAgencyActionCockpit] Impossible de charger les soldes ledger:", results[2].reason);
           setAccountsVsLedgerVariance(0);
         }
-      } catch (error) {
-        // ✅ Ne pas afficher d'erreur si c'est une erreur de permission
-        if (error?.code === 'permission-denied') {
-          console.warn("[useAgencyActionCockpit] Permission refusée pour les données comptables, ignorée.");
-        } else {
-          console.warn("[useAgencyActionCockpit] Erreur chargement données comptables:", error);
-        }
+      } catch {
         setTodayLedgerEncaissements(0);
         setCashBalance(null);
         setCashPositionCapped(false);
@@ -883,7 +1163,6 @@ export function useAgencyActionCockpit() {
 
     void loadFinancialData();
 
-    // Rafraîchissement toutes les 5 minutes
     const intervalId = setInterval(() => void loadFinancialData(), 300000);
     return () => clearInterval(intervalId);
   }, [companyId, agencyId, todayKey, agencyTimezone]);
@@ -1131,6 +1410,10 @@ export function useAgencyActionCockpit() {
     return rawReservations.map(toReservationRow);
   }, [rawReservations]);
 
+  const onlineReservationRowsToday = useMemo<ReservationRow[]>(() => {
+    return rawOnlineReservationsToday.map(toReservationRow);
+  }, [rawOnlineReservationsToday]);
+
   const activeGuichetReservationRows = useMemo<ReservationRow[]>(
     () => rawActiveGuichetReservations.map(toReservationRow),
     [rawActiveGuichetReservations]
@@ -1163,7 +1446,6 @@ export function useAgencyActionCockpit() {
     [destinationTrips, todayKey]
   );
 
-  // ✅ CORRIGÉ : Utilisation de confirmed || onlinePaid (aligné comptable)
   const averageTicketPrice = useMemo(() => {
     const confirmedReservations = reservationRows.filter(
       (reservation) => reservation.confirmed || reservation.onlinePaid
@@ -1183,13 +1465,13 @@ export function useAgencyActionCockpit() {
         activeCourierSessions,
         reservationRows,
         activeGuichetReservationRows,
+        onlineReservationRowsToday,
         shipmentsToday,
         now,
       }),
-    [activeShifts, activeCourierSessions, reservationRows, activeGuichetReservationRows, shipmentsToday, now]
+    [activeShifts, activeCourierSessions, reservationRows, activeGuichetReservationRows, onlineReservationRowsToday, shipmentsToday, now]
   );
 
-  // ✅ CORRIGÉ : Utilisation de confirmed || onlinePaid (aligné comptable)
   const reservationAggregates = useMemo(
     () => getTripReservationAggregates(reservationRows),
     [reservationRows]
@@ -1204,11 +1486,11 @@ export function useAgencyActionCockpit() {
         averageTicketPrice,
         agencyTimezone,
         now,
+        departureWorkflowsByKey,
       }),
-    [tripsToday, destinationTripsToday, reservationAggregates, averageTicketPrice, agencyTimezone, now]
+    [tripsToday, destinationTripsToday, reservationAggregates, averageTicketPrice, agencyTimezone, now, departureWorkflowsByKey]
   );
 
-  // ✅ AMÉLIORÉ : Ajout des données comptables
   const summary = useMemo(() => {
     const guichetSales = liveActivity.guichet.amount;
     const onlineSales = liveActivity.online.amount;
@@ -1218,7 +1500,6 @@ export function useAgencyActionCockpit() {
       onlineSales,
       totalSales: guichetSales + onlineSales,
       expectedCash: guichetSales + parcelSales,
-      // ✅ Données comptables alignées
       todayLedgerEncaissements,
       cashBalance,
       cashPositionCapped,
@@ -1256,16 +1537,16 @@ export function useAgencyActionCockpit() {
     [tripInsights.weakTrips, tripInsights.weeklyLeakEstimate]
   );
 
-  // ✅ CORRIGÉ : Toutes les réservations (avec indicateur d'annulation)
   const activityFeed = useMemo(
     () =>
       getActivityFeed({
         reservationRows,
+        onlineReservationRowsToday,
         shipmentsToday,
         liveTrips: tripInsights.liveTrips,
         now,
       }),
-    [reservationRows, shipmentsToday, tripInsights.liveTrips, now]
+    [reservationRows, onlineReservationRowsToday, shipmentsToday, tripInsights.liveTrips, now]
   );
 
   const todoItems = useMemo(
@@ -1276,19 +1557,6 @@ export function useAgencyActionCockpit() {
         pendingExpenses,
       }),
     [tripInsights.departuresToValidate, liveActivity.activePosts, pendingExpenses]
-  );
-
-  const validateDeparture = useCallback(
-    async (tripInstanceId: string) => {
-      if (!companyId || !userId) throw new Error("Contexte agence indisponible.");
-      setValidatingTripId(tripInstanceId);
-      try {
-        await markOriginDeparture(companyId, tripInstanceId, userId);
-      } finally {
-        setValidatingTripId(null);
-      }
-    },
-    [companyId, userId]
   );
 
   const approvePendingExpense = useCallback(
@@ -1323,9 +1591,11 @@ export function useAgencyActionCockpit() {
       loadingShifts ||
       loadingCourierSessions ||
       loadingReservations ||
+      loadingOnlineReservationsToday ||
       loadingShipments ||
       loadingTrips ||
-      loadingExpenses,
+      loadingExpenses ||
+      loadingDepartureWorkflows,
     plan,
     isPremium,
     companyId,
@@ -1343,9 +1613,7 @@ export function useAgencyActionCockpit() {
     departuresToValidate: tripInsights.departuresToValidate,
     activePosts: liveActivity.activePosts,
     pendingExpenses,
-    validatingTripId,
     processingExpenseId,
-    validateDeparture,
     approvePendingExpense,
     rejectPendingExpense,
   };

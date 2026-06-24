@@ -7,6 +7,7 @@ import {
   Clock3,
   Eye,
   Lock,
+  Package,
   Radio,
   Receipt,
   TrendingDown,
@@ -15,7 +16,12 @@ import {
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
-import { ActionButton, PageHeader, StandardLayoutWrapper } from "@/ui";
+import { ActionButton, StandardLayoutWrapper } from "@/ui";
+import {
+  CompactKpiCard,
+  MiniDonutStat,
+  RevenueMiniChart,
+} from "@/modules/agence/dashboard/components";
 import ChiefSessionDetailModal from "@/modules/agence/manager/ChiefSessionDetailModal";
 import {
   useAgencyActionCockpit,
@@ -24,7 +30,6 @@ import {
   type AgencyAlertItem,
   type AgencyLiveTripItem,
   type AgencyPendingExpenseItem,
-  type AgencyProblemItem,
   type AgencyRecommendation,
   type AgencyTodoItem,
 } from "./useAgencyActionCockpit";
@@ -53,302 +58,245 @@ function postStartedAt(post: AgencyActivePostItem): Date | null {
   );
 }
 
-function sectionTitle(title: string, subtitle: string) {
+function todoIcon(id: AgencyTodoItem["id"]) {
+  if (id === "departures") return <CheckCircle2 className="h-4 w-4" />;
+  if (id === "expenses") return <Receipt className="h-4 w-4" />;
+  return <Radio className="h-4 w-4" />;
+}
+
+// ✅ Fonction utilitaire pour vérifier si un départ est confirmé
+function isTripConfirmed(trip: AgencyLiveTripItem): boolean {
   return (
-    <div className="mb-4">
-      <h2 className="text-base font-semibold text-slate-900 dark:text-white">{title}</h2>
-      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{subtitle}</p>
-    </div>
+    trip.departureConfirmed === true ||
+    trip.departureConfirmedAt !== undefined ||
+    trip.departedAt !== undefined ||
+    trip.confirmedAt !== undefined
   );
 }
 
-function todoToneClasses(tone: AgencyTodoItem["tone"]) {
-  if (tone === "critical") {
-    return "border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-950/20";
-  }
-  if (tone === "warning") {
-    return "border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/20";
-  }
-  return "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900";
-}
-
-function alertToneClasses(tone: AgencyAlertItem["tone"]) {
-  if (tone === "critical") {
-    return "border-red-200 bg-red-50 text-red-950 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-100";
-  }
-  return "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-100";
-}
-
-function tripToneClasses(tone: AgencyLiveTripItem["tone"]) {
-  if (tone === "critical") {
-    return {
-      badge: "bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-200",
-      bar: "bg-red-500",
-      track: "bg-red-100 dark:bg-red-950/40",
-    };
-  }
-  if (tone === "warning") {
-    return {
-      badge: "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-200",
-      bar: "bg-amber-500",
-      track: "bg-amber-100 dark:bg-amber-950/40",
-    };
-  }
-  return {
-    badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-200",
-    bar: "bg-emerald-500",
-    track: "bg-emerald-100 dark:bg-emerald-950/40",
-  };
-}
-
-function LiveTripCard({
+// ✅ Modale de consultation de départ (lecture seule)
+function TripConsultationModal({
+  open,
   trip,
+  onClose,
   money,
-  onOpen,
 }: {
-  trip: AgencyLiveTripItem;
+  open: boolean;
+  trip: AgencyLiveTripItem | null;
+  onClose: () => void;
   money: (value: number) => string;
-  onOpen: () => void;
 }) {
-  const tone = tripToneClasses(trip.tone);
-  const fillPercent = Math.round(trip.fillRate * 100);
+  if (!open || !trip) return null;
+
+  const isConfirmed = isTripConfirmed(trip);
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-slate-900 dark:text-white">{trip.routeLabel}</p>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Départ {trip.departureTime}</p>
+    <div className="fixed inset-0 z-50 flex items-end bg-slate-950/50 p-0 sm:items-center sm:justify-center sm:p-6">
+      <div className="w-full max-w-xl overflow-hidden rounded-t-3xl bg-white shadow-2xl dark:bg-slate-950 sm:rounded-3xl">
+        <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+                {isConfirmed ? "Départ confirmé" : "Consultation départ"}
+              </h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400">{trip.routeLabel}</p>
+            </div>
+            <button
+              onClick={onClose}
+              className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-900"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
-        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${tone.badge}`}>
-          {fillPercent}%
-        </span>
-      </div>
-
-      <div className="mt-4">
-        <div className="mb-2 flex items-center justify-between text-sm text-slate-600 dark:text-slate-400">
-          <span>{trip.reservedSeats} réservées / {trip.capacity}</span>
-          <span>{trip.statusLabel}</span>
+        <div className="space-y-4 p-5">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Départ prévu</p>
+              <p className="font-semibold text-slate-900 dark:text-white">{trip.departureTime}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Statut</p>
+              <p className={`font-semibold ${isConfirmed ? "text-emerald-600 dark:text-emerald-400" : trip.isLate ? "text-red-600 dark:text-red-400" : "text-slate-900 dark:text-white"}`}>
+                {isConfirmed ? "✅ Confirmé" : trip.isLate ? "⏰ En retard" : "En cours"}
+              </p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Places occupées</p>
+              <p className="font-semibold text-slate-900 dark:text-white">{trip.reservedSeats} / {trip.capacity}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Taux de remplissage</p>
+              <p className="font-semibold text-slate-900 dark:text-white">{Math.round(trip.fillRate * 100)}%</p>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+            <p className="text-xs text-slate-500 dark:text-slate-400">Perte estimée si vide</p>
+            <p className="font-semibold text-slate-900 dark:text-white">{money(trip.estimatedLoss)}</p>
+          </div>
+          <div className="flex justify-end">
+            <ActionButton variant="secondary" onClick={onClose}>
+              Fermer
+            </ActionButton>
+          </div>
         </div>
-        <div className={`h-2 overflow-hidden rounded-full ${tone.track}`}>
-          <div
-            className={`h-full rounded-full ${tone.bar}`}
-            style={{ width: `${Math.max(4, Math.min(100, fillPercent))}%` }}
-          />
-        </div>
       </div>
-
-      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
-        {trip.needsValidation ? (
-          <span className="rounded-full bg-slate-100 px-3 py-1 font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-            Validation agence requise
-          </span>
-        ) : null}
-        {trip.isLate ? (
-          <span className="rounded-full bg-red-100 px-3 py-1 font-medium text-red-700 dark:bg-red-950/40 dark:text-red-200">
-            Retard détecté
-          </span>
-        ) : null}
-        {trip.fillRate < 0.5 ? (
-          <span className="rounded-full bg-amber-100 px-3 py-1 font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
-            Risque {money(trip.estimatedLoss)}
-          </span>
-        ) : null}
-      </div>
-      <button
-        type="button"
-        onClick={onOpen}
-        className="mt-4 inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800 sm:w-auto"
-      >
-        Voir le départ
-      </button>
     </div>
   );
 }
 
-function TodoActionCard({
-  item,
-  onOpen,
+// ✅ Modale de consultation de poste
+function PostConsultationModal({
+  open,
+  post,
+  onClose,
+  money,
 }: {
-  item: AgencyTodoItem;
-  onOpen: (panel: AgencyActionPanel) => void;
+  open: boolean;
+  post: AgencyActivePostItem | null;
+  onClose: () => void;
+  money: (value: number) => string;
 }) {
+  if (!open || !post) return null;
+
   return (
-    <div className={`rounded-2xl border p-4 ${todoToneClasses(item.tone)}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-slate-900 dark:text-white">{item.title}</p>
-          <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">{item.count}</p>
+    <div className="fixed inset-0 z-50 flex items-end bg-slate-950/50 p-0 sm:items-center sm:justify-center sm:p-6">
+      <div className="w-full max-w-xl overflow-hidden rounded-t-3xl bg-white shadow-2xl dark:bg-slate-950 sm:rounded-3xl">
+        <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-slate-900 dark:text-white">
+                Poste {post.kind === "guichet" ? "guichet" : "courrier"}
+              </h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400">{post.label}</p>
+            </div>
+            <button
+              onClick={onClose}
+              className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-900"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
-        <div className="rounded-xl bg-white/80 p-2 text-slate-700 dark:bg-slate-900/70 dark:text-slate-200">
-          {item.id === "departures" ? (
-            <CheckCircle2 className="h-5 w-5" />
-          ) : item.id === "expenses" ? (
-            <Receipt className="h-5 w-5" />
-          ) : (
-            <Radio className="h-5 w-5" />
-          )}
+        <div className="space-y-4 p-5">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Type</p>
+              <p className="font-semibold text-slate-900 dark:text-white">
+                {post.kind === "guichet" ? "Guichet" : "Courrier"}
+              </p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Durée</p>
+              <p className="font-semibold text-slate-900 dark:text-white">{post.durationLabel}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Montant</p>
+              <p className="font-semibold text-slate-900 dark:text-white">{money(post.amount)}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
+              <p className="text-xs text-slate-500 dark:text-slate-400">Opérations</p>
+              <p className="font-semibold text-slate-900 dark:text-white">
+                {post.kind === "guichet" ? post.tickets : post.count}
+              </p>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+            <p className="text-xs text-slate-500 dark:text-slate-400">Agent</p>
+            <p className="font-medium text-slate-900 dark:text-white">
+              {post.userName || post.agentName || "Non renseigné"}
+            </p>
+          </div>
+          <div className="flex justify-end">
+            <ActionButton variant="secondary" onClick={onClose}>
+              Fermer
+            </ActionButton>
+          </div>
         </div>
-      </div>
-      <div className="mt-4">
-        <ActionButton className="w-full sm:w-auto" variant={item.tone === "critical" ? "primary" : "secondary"} onClick={() => onOpen(item.id)}>
-          {item.actionLabel}
-        </ActionButton>
       </div>
     </div>
   );
 }
 
-function LateDeparturesActionCard({
-  count,
-  onOpen,
-}: {
-  count: number;
-  onOpen: () => void;
-}) {
-  return (
-    <div className={`rounded-2xl border p-4 ${count > 0 ? todoToneClasses("critical") : todoToneClasses("neutral")}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-slate-900 dark:text-white">Départs en retard</p>
-          <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-900 dark:text-white">{count}</p>
-        </div>
-        <div className="rounded-xl bg-white/80 p-2 text-red-700 dark:bg-slate-900/70 dark:text-red-200">
-          <AlertTriangle className="h-5 w-5" />
-        </div>
-      </div>
-      <div className="mt-4">
-        <ActionButton className="w-full sm:w-auto" variant={count > 0 ? "primary" : "secondary"} onClick={onOpen}>
-          Traiter maintenant
-        </ActionButton>
-      </div>
-    </div>
-  );
-}
-
-function DayPerformanceCard({
+function DayPerformancePanel({
   totalSales,
   ticketsSold,
   guichetSales,
   onlineSales,
+  guichetCount,
+  onlineCount,
+  parcelCount,
+  parcelSales,
   money,
 }: {
   totalSales: number;
   ticketsSold: number;
   guichetSales: number;
   onlineSales: number;
+  guichetCount: number;
+  onlineCount: number;
+  parcelCount: number;
+  parcelSales: number;
   money: (value: number) => string;
 }) {
-  return (
-    <div className="overflow-hidden rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-600 to-emerald-700 text-white shadow-sm dark:border-emerald-900">
-      <div className="p-5 sm:p-7">
-        <p className="text-sm font-semibold text-emerald-50">Ventes du jour</p>
-        <p className="mt-3 break-words text-3xl font-bold tracking-tight sm:text-5xl">{money(totalSales)}</p>
-        <p className="mt-3 text-sm font-medium text-emerald-50">{ticketsSold} billets vendus</p>
-      </div>
-      <div className="grid grid-cols-1 gap-px bg-white/20 sm:grid-cols-2">
-        <div className="bg-emerald-800/35 px-5 py-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-emerald-100">Guichet</p>
-          <p className="mt-1 text-lg font-semibold">{money(guichetSales)}</p>
-        </div>
-        <div className="bg-emerald-800/35 px-5 py-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-emerald-100">En ligne</p>
-          <p className="mt-1 text-lg font-semibold">{money(onlineSales)}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
+  const channelTotal = Math.max(guichetSales + onlineSales + parcelSales, 1);
+  const pct = (value: number) => (channelTotal > 0 ? (value / channelTotal) * 100 : 0);
 
-function AlertCard({
-  alert,
-  risk,
-  actionLabel,
-  onAction,
-}: {
-  alert: AgencyAlertItem;
-  risk?: string;
-  actionLabel?: string;
-  onAction?: () => void;
-}) {
-  return (
-    <div className={`rounded-2xl border p-4 ${alertToneClasses(alert.tone)}`}>
-      <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
-        <div>
-          <p className="text-sm font-semibold">{alert.title}</p>
-          <p className="mt-1 text-sm opacity-90">{alert.detail}</p>
-          {risk ? (
-            <p className="mt-3 text-sm font-medium opacity-95">
-              Risque : {risk}
-            </p>
-          ) : null}
-          {actionLabel && onAction ? (
-            <div className="mt-3">
-              <ActionButton size="sm" variant={alert.tone === "critical" ? "primary" : "secondary"} onClick={onAction}>
-                {actionLabel}
-              </ActionButton>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
-}
+  const chartData = [
+    { label: "Guichet", value: guichetSales, color: "#059669" },
+    { label: "En ligne", value: onlineSales, color: "#2563EB" },
+    { label: "Réserv.", value: guichetSales + onlineSales, color: "#7C3AED" },
+    { label: "Courrier", value: parcelSales, color: "#EA580C" },
+  ];
 
-function ProblemCard({
-  problem,
-  money,
-}: {
-  problem: AgencyProblemItem;
-  money: (value: number) => string;
-}) {
-  const fillPercent = Math.round(problem.fillRate * 100);
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-      <div className="flex items-start justify-between gap-3">
+    <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="text-sm font-semibold text-slate-900 dark:text-white">{problem.routeLabel}</p>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Départ {problem.departureTime}</p>
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Performance du jour</h2>
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            {ticketsSold} billet{ticketsSold !== 1 ? "s" : ""} • répartition par canal
+          </p>
         </div>
-        <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
-          {fillPercent}% remplissage
-        </span>
+        <p className="text-lg font-bold text-slate-900 dark:text-white">{money(totalSales)}</p>
       </div>
-      <div className="mt-4 rounded-xl bg-red-50 p-4 dark:bg-red-950/20">
-        <p className="text-xs uppercase tracking-wide text-red-600 dark:text-red-300">Perte estimée</p>
-        <p className="mt-1 text-lg font-semibold text-red-700 dark:text-red-100">{money(problem.estimatedLoss)}</p>
-      </div>
-    </div>
-  );
-}
 
-function RecommendationCard({
-  recommendation,
-  money,
-}: {
-  recommendation: AgencyRecommendation;
-  money: (value: number) => string;
-}) {
-  return (
-    <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-5 dark:border-indigo-900/60 dark:bg-indigo-950/30">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-indigo-950 dark:text-indigo-100">{recommendation.title}</p>
-          <p className="mt-2 text-sm text-indigo-900/85 dark:text-indigo-100/80">{recommendation.detail}</p>
-        </div>
-        <TrendingDown className="h-5 w-5 text-indigo-600 dark:text-indigo-200" />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <MiniDonutStat
+          label="Guichet"
+          displayValue={money(guichetSales)}
+          subLabel={`${guichetCount} billet${guichetCount !== 1 ? "s" : ""}`}
+          percentage={pct(guichetSales)}
+          color="#059669"
+        />
+        <MiniDonutStat
+          label="En ligne"
+          displayValue={money(onlineSales)}
+          subLabel={`${onlineCount} billet${onlineCount !== 1 ? "s" : ""}`}
+          percentage={pct(onlineSales)}
+          color="#2563EB"
+        />
+        <MiniDonutStat
+          label="Réservations"
+          displayValue={String(ticketsSold)}
+          subLabel="billets confirmés"
+          percentage={pct(guichetSales + onlineSales)}
+          color="#7C3AED"
+        />
+        <MiniDonutStat
+          label="Courrier"
+          displayValue={String(parcelCount)}
+          subLabel={money(parcelSales)}
+          percentage={pct(parcelSales)}
+          color="#EA580C"
+        />
       </div>
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Gain estimé</p>
-          <p className="mt-1 text-lg font-semibold text-indigo-950 dark:text-indigo-50">{money(recommendation.estimatedGain)}</p>
-        </div>
-        <Link
-          to={recommendation.to}
-          className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-        >
-          Voir détails
-        </Link>
+
+      <div className="mt-4 border-t border-slate-100 pt-3 dark:border-slate-800">
+        <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          Recettes par canal
+        </p>
+        <RevenueMiniChart data={chartData} height={44} />
       </div>
     </div>
   );
@@ -356,6 +304,7 @@ function RecommendationCard({
 
 function ActivityFeedCard({
   items,
+  totalCount,
 }: {
   items: Array<{
     id: string;
@@ -364,38 +313,87 @@ function ActivityFeedCard({
     occurredAt: Date | null;
     tone: "neutral" | "warning";
   }>;
+  totalCount: number;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:p-5">
-      <div className="flex items-center gap-2">
-        <Clock3 className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-        <p className="text-sm font-semibold text-slate-900 dark:text-white">Activité récente</p>
+    <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Clock3 className="h-4 w-4 text-slate-500 dark:text-slate-400" />
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Activité récente</h2>
+        </div>
+        {totalCount > items.length ? (
+          <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            +{totalCount - items.length} autre{totalCount - items.length > 1 ? "s" : ""}
+          </span>
+        ) : null}
       </div>
       {items.length === 0 ? (
-        <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">Aucun mouvement récent à afficher.</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">Aucun mouvement récent.</p>
       ) : (
-        <div className="relative mt-4 space-y-0 before:absolute before:bottom-3 before:left-[2.15rem] before:top-3 before:w-px before:bg-slate-200 dark:before:bg-slate-700">
+        <div className="space-y-2">
           {items.map((item) => (
-            <div key={item.id} className="relative flex gap-4 py-3">
-              <span className="w-12 shrink-0 text-xs font-semibold text-slate-500 dark:text-slate-400">
-                {item.occurredAt
-                  ? new Intl.DateTimeFormat("fr-FR", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    }).format(item.occurredAt)
-                  : "Live"}
-              </span>
-              <span className={`relative z-10 mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
-                item.tone === "warning" ? "bg-amber-500" : "bg-emerald-500"
-              }`} />
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-slate-900 dark:text-white">{item.title}</p>
-                <p className="mt-0.5 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">{item.detail}</p>
+            <div
+              key={item.id}
+              className="flex items-start gap-2 rounded-lg bg-slate-50 px-2 py-1.5 dark:bg-slate-800/50"
+            >
+              <span
+                className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                  item.tone === "warning" ? "bg-amber-500" : "bg-emerald-500"
+                }`}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="truncate text-xs font-medium text-slate-900 dark:text-white">{item.title}</p>
+                  <span className="shrink-0 text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                    {item.occurredAt
+                      ? new Intl.DateTimeFormat("fr-FR", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        }).format(item.occurredAt)
+                      : "Live"}
+                  </span>
+                </div>
+                <p className="line-clamp-1 text-[11px] text-slate-500 dark:text-slate-400">{item.detail}</p>
               </div>
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function CompactRecommendationCard({
+  recommendation,
+  money,
+}: {
+  recommendation: AgencyRecommendation;
+  money: (value: number) => string;
+}) {
+  return (
+    <div className="flex h-full flex-col rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 dark:border-indigo-900/60 dark:bg-indigo-950/30">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-xs font-semibold text-indigo-950 dark:text-indigo-100">{recommendation.title}</p>
+        <TrendingDown className="h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-200" />
+      </div>
+      <p className="mt-1 line-clamp-2 flex-1 text-[11px] text-indigo-900/85 dark:text-indigo-100/80">
+        {recommendation.detail}
+      </p>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Gain estimé</p>
+          <p className="text-sm font-semibold text-indigo-950 dark:text-indigo-50">
+            {money(recommendation.estimatedGain)}
+          </p>
+        </div>
+        <Link
+          to={recommendation.to}
+          className="inline-flex h-8 items-center justify-center rounded-lg border border-indigo-200 bg-white px-3 text-[11px] font-semibold text-indigo-800 transition-colors hover:bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-100 dark:hover:bg-indigo-900/40"
+        >
+          Voir
+        </Link>
+      </div>
     </div>
   );
 }
@@ -477,7 +475,6 @@ export default function AgencyActivityDomainPage() {
   const { user } = useAuth() as { user?: { companyId?: string; agencyId?: string } | null };
   const {
     loading,
-    plan,
     isPremium,
     liveActivity,
     liveTrips,
@@ -492,19 +489,22 @@ export default function AgencyActivityDomainPage() {
     departuresToValidate,
     activePosts,
     pendingExpenses,
-    validatingTripId,
     processingExpenseId,
-    validateDeparture,
     approvePendingExpense,
     rejectPendingExpense,
   } = useAgencyActionCockpit();
 
   const [openPanel, setOpenPanel] = useState<AgencyActionPanel | null>(null);
+  const [selectedTrip, setSelectedTrip] = useState<AgencyLiveTripItem | null>(null);
+  const [selectedPost, setSelectedPost] = useState<AgencyActivePostItem | null>(null);
   const [detailSession, setDetailSession] = useState<AgencyActivePostItem | null>(null);
 
-  const planLabel = useMemo(() => plan.toUpperCase(), [plan]);
   const guichetPosts = useMemo(
     () => activePosts.filter((post) => post.kind === "guichet"),
+    [activePosts]
+  );
+  const courierPosts = useMemo(
+    () => activePosts.filter((post) => post.kind === "courrier"),
     [activePosts]
   );
   const oldestGuichetPost = useMemo(() => {
@@ -521,26 +521,34 @@ export default function AgencyActivityDomainPage() {
     const now = Date.now();
     return guichetPosts.find((post) => {
       const startedAt = postStartedAt(post);
-      return startedAt ? now - startedAt.getTime() >= 8 * 3600000 : false;
+      return startedAt ? now - startedAt.getTime() >= 24 * 3600000 : false;
     }) ?? null;
   }, [guichetPosts]);
   const tensionPost = longRunningPost ?? oldestGuichetPost;
   const shouldShowTensionSignal = Boolean(tensionPost) && (hasNoSalesDespiteOpenPost || Boolean(longRunningPost));
-  const lateTrips = useMemo(() => liveTrips.filter((trip) => trip.isLate), [liveTrips]);
+  
+  // ✅ Les départs en retard excluent ceux qui sont confirmés
+  const lateTrips = useMemo(() => {
+    return liveTrips.filter((trip) => {
+      const isConfirmed = isTripConfirmed(trip);
+      return trip.isLate && !isConfirmed;
+    });
+  }, [liveTrips]);
+  
   const departuresToHandle = useMemo(() => {
     const byId = new Map<string, AgencyLiveTripItem>();
     for (const trip of [...departuresToValidate, ...lateTrips]) byId.set(trip.id, trip);
     return [...byId.values()];
   }, [departuresToValidate, lateTrips]);
+  
+  const worstFillRate = useMemo(() => {
+    if (weakTrips.length === 0) return null;
+    return Math.round(Math.min(...weakTrips.map((trip) => trip.fillRate)) * 100);
+  }, [weakTrips]);
+  const recentActivity = useMemo(() => activityFeed.slice(0, 5), [activityFeed]);
 
-  const handleValidateDeparture = async (tripId: string) => {
-    try {
-      await validateDeparture(tripId);
-      toast.success("Départ validé.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Validation impossible.");
-    }
-  };
+  const showPremiumSection =
+    (isPremium && recommendations.length > 0) || (!isPremium && weeklyLeakEstimate > 0);
 
   const handleApproveExpense = async (expenseId: string) => {
     try {
@@ -552,7 +560,7 @@ export default function AgencyActivityDomainPage() {
   };
 
   const handleRejectExpense = async (expenseId: string) => {
-    const reason = window.prompt("Motif du refus", "Refusé depuis le cockpit agence");
+    const reason = window.prompt("Motif du refus", "Refusé depuis le dashboard agence");
     if (!reason || !reason.trim()) return;
     try {
       await rejectPendingExpense(expenseId, reason.trim());
@@ -567,7 +575,6 @@ export default function AgencyActivityDomainPage() {
       const postId = alert.id.replace("long-session-", "");
       const post = activePosts.find((item) => item.id === postId);
       return {
-        risk: "perte de ventes et désorganisation du poste",
         actionLabel: "Agir",
         onAction: () => {
           if (post) setDetailSession(post);
@@ -577,21 +584,22 @@ export default function AgencyActivityDomainPage() {
     }
     if (alert.id === "zero-sales") {
       return {
-        risk: "inactivité agent, problème tarif ou absence de demande",
-        actionLabel: "Vérifier maintenant",
+        actionLabel: "Vérifier",
         onAction: () => setOpenPanel("posts"),
       };
     }
     if (alert.id.startsWith("late-trip-")) {
       return {
-        risk: "retard opérationnel et passagers bloqués",
-        actionLabel: "Traiter le départ",
-        onAction: () => setOpenPanel("departures"),
+        actionLabel: "Consulter",
+        onAction: () => {
+          const tripId = alert.id.replace("late-trip-", "");
+          const trip = liveTrips.find((t) => t.id === tripId);
+          if (trip) setSelectedTrip(trip);
+        },
       };
     }
     if (alert.id === "pending-expenses") {
       return {
-        risk: "blocage terrain et retard de règlement",
         actionLabel: "Traiter",
         onAction: () => setOpenPanel("expenses"),
       };
@@ -599,100 +607,206 @@ export default function AgencyActivityDomainPage() {
     return {};
   };
 
-  const alertCopy = (alert: AgencyAlertItem): AgencyAlertItem => {
-    if (alert.id === "zero-sales") {
-      return {
-        ...alert,
-        title: "Aucune vente malgré poste actif",
-        detail: "Vérifiez maintenant l'agent, le tarif ou l'absence de demande avant de perdre la matinée.",
-      };
-    }
-    return alert;
-  };
-
   return (
     <StandardLayoutWrapper>
-      <PageHeader
-        title="Cockpit agence"
-        subtitle="Pilotez l’activité en direct et traitez immédiatement les blocages terrain"
-        icon={Activity}
-      />
-
-      <div className="mb-6 flex flex-wrap items-center gap-2">
-        <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
-          Plan {planLabel}
-        </span>
-        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200">
-          Temps réel
-        </span>
-        <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
-          {operations.departuresToday} départ(s) • {operations.arrivalsExpected} arrivée(s) attendue(s)
-        </span>
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+            <Activity className="h-5 w-5" />
+          </div>
+          <div>
+            <h1 className="text-xl font-semibold text-slate-900 dark:text-white">Dashboard agence</h1>
+            <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-400">
+              Ce qui nécessite votre attention aujourd&apos;hui
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200">
+            Temps réel
+          </span>
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
+            {operations.departuresToday} départ{operations.departuresToday !== 1 ? "s" : ""}
+          </span>
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
+            {operations.arrivalsExpected} arrivée{operations.arrivalsExpected !== 1 ? "s" : ""} attendue{operations.arrivalsExpected !== 1 ? "s" : ""}
+          </span>
+        </div>
       </div>
 
       {loading ? (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 9 }).map((_, index) => (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, index) => (
             <div
               key={index}
-              className="h-36 animate-pulse rounded-2xl border border-slate-200 bg-slate-100 dark:border-slate-800 dark:bg-slate-900"
+              className="h-24 animate-pulse rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-800 dark:bg-slate-900"
             />
           ))}
         </div>
       ) : (
-        <div className="space-y-10">
+        <div className="space-y-5">
           <section>
-            {sectionTitle(
-              "Actions requises",
-              "Commencez par les décisions qui bloquent l’activité de l’agence."
-            )}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Actions requises
+            </h2>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
               {todoItems.map((item) => (
-                <TodoActionCard key={item.id} item={item} onOpen={setOpenPanel} />
+                <CompactKpiCard
+                  key={item.id}
+                  title={item.title}
+                  value={item.count}
+                  subtitle={item.count > 0 ? item.detail : "Rien à traiter"}
+                  icon={todoIcon(item.id)}
+                  tone={item.tone}
+                  actionLabel={item.count > 0 ? item.actionLabel : undefined}
+                  onAction={item.count > 0 ? () => {
+                    if (item.id === "departures") {
+                      // ✅ Ouverture directe des départs en consultation
+                      const trip = departuresToHandle[0];
+                      if (trip) setSelectedTrip(trip);
+                    } else {
+                      setOpenPanel(item.id);
+                    }
+                  } : undefined}
+                />
               ))}
-              <LateDeparturesActionCard count={lateTrips.length} onOpen={() => setOpenPanel("departures")} />
+              <CompactKpiCard
+                title="Départs en retard"
+                value={lateTrips.length}
+                subtitle={lateTrips.length > 0 ? "Retards opérationnels détectés" : "Aucun retard"}
+                icon={<AlertTriangle className="h-4 w-4" />}
+                tone={lateTrips.length > 0 ? "critical" : "neutral"}
+                badge={lateTrips.length > 0 ? "Urgent" : undefined}
+                actionLabel={lateTrips.length > 0 ? "Consulter" : undefined}
+                onAction={lateTrips.length > 0 ? () => {
+                  const trip = lateTrips[0];
+                  if (trip) setSelectedTrip(trip);
+                } : undefined}
+              />
             </div>
+
             {shouldShowTensionSignal && tensionPost ? (
-              <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-950/20 sm:p-5">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-red-900 dark:text-red-100">
-                      Poste actif depuis {tensionPost.durationLabel}
-                    </p>
-                    <p className="mt-2 text-sm text-red-800/90 dark:text-red-100/90">
-                      {hasNoSalesDespiteOpenPost
-                        ? "Aucun billet vendu. Vérifiez maintenant l’agent, le tarif ou l’absence de demande."
-                        : "Poste ouvert anormalement longtemps. Vérifiez la clôture, la rotation ou un blocage caisse."}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                      <span className="rounded-full bg-white/80 px-3 py-1 font-medium text-red-700 dark:bg-red-950/40 dark:text-red-100">
-                        Risque : perte de ventes
-                      </span>
-                      <span className="rounded-full bg-white/80 px-3 py-1 font-medium text-red-700 dark:bg-red-950/40 dark:text-red-100">
-                        Risque : désorganisation
-                      </span>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
-                    <ActionButton variant="primary" onClick={() => setDetailSession(tensionPost)}>
-                      Voir le poste
-                    </ActionButton>
-                    <ActionButton variant="secondary" onClick={() => setOpenPanel("posts")}>
-                      Vérifier maintenant
-                    </ActionButton>
-                  </div>
+              <div className="mt-2 flex flex-col gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 dark:border-red-900/50 dark:bg-red-950/20 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-red-900 dark:text-red-100">
+                    Poste actif depuis {tensionPost.durationLabel}
+                  </p>
+                  <p className="text-[11px] text-red-800/90 dark:text-red-100/90">
+                    {hasNoSalesDespiteOpenPost
+                      ? "Aucune vente — vérifiez l'agent ou le tarif."
+                      : "Poste ouvert longtemps — vérifiez la rotation."}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDetailSession(tensionPost)}
+                    className="text-[11px] font-semibold text-red-800 underline-offset-2 hover:underline dark:text-red-200"
+                  >
+                    Voir le poste
+                  </button>
                 </div>
               </div>
             ) : null}
+          </section>
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-5">
+            <div className="lg:col-span-3">
+              <DayPerformancePanel
+                totalSales={summary.totalSales}
+                ticketsSold={liveActivity.total.count}
+                guichetSales={summary.guichetSales}
+                onlineSales={summary.onlineSales}
+                guichetCount={liveActivity.guichet.count}
+                onlineCount={liveActivity.online.count}
+                parcelCount={liveActivity.parcels.count}
+                parcelSales={liveActivity.parcels.amount}
+                money={money}
+              />
+            </div>
+            <div className="lg:col-span-2">
+              <ActivityFeedCard items={recentActivity} totalCount={activityFeed.length} />
+            </div>
+          </div>
+
+          <section>
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Analyse et problèmes
+            </h2>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              <CompactKpiCard
+                title="Retard départ"
+                value={lateTrips.length}
+                subtitle={lateTrips.length > 0 ? "Départs à surveiller" : "Aucun retard"}
+                icon={<AlertTriangle className="h-4 w-4" />}
+                tone={lateTrips.length > 0 ? "critical" : "success"}
+                badge={lateTrips.length > 0 ? "Risque élevé" : "OK"}
+                actionLabel={lateTrips.length > 0 ? "Consulter" : undefined}
+                onAction={lateTrips.length > 0 ? () => {
+                  const trip = lateTrips[0];
+                  if (trip) setSelectedTrip(trip);
+                } : undefined}
+              />
+              <CompactKpiCard
+                title="Remplissage"
+                value={weakTrips.length}
+                subtitle={
+                  worstFillRate !== null
+                    ? `Plus faible : ${worstFillRate}%`
+                    : "Aucun trajet sous-rempli"
+                }
+                icon={<TrendingDown className="h-4 w-4" />}
+                tone={weakTrips.length > 0 ? "warning" : "success"}
+                badge={weakTrips.length > 0 ? "À surveiller" : "OK"}
+              />
+              <CompactKpiCard
+                title="Dépenses en attente"
+                value={pendingExpenses.length}
+                subtitle={pendingExpenses.length > 0 ? "Validation requise" : "Aucune en attente"}
+                icon={<Receipt className="h-4 w-4" />}
+                tone={pendingExpenses.length > 0 ? "warning" : "neutral"}
+                actionLabel={pendingExpenses.length > 0 ? "Traiter" : undefined}
+                onAction={pendingExpenses.length > 0 ? () => setOpenPanel("expenses") : undefined}
+              />
+              <CompactKpiCard
+                title="Départs à valider"
+                value={departuresToValidate.length}
+                subtitle={departuresToValidate.length > 0 ? "En attente de validation" : "Tous validés"}
+                icon={<CheckCircle2 className="h-4 w-4" />}
+                tone={departuresToValidate.length > 0 ? "critical" : "success"}
+                actionLabel={departuresToValidate.length > 0 ? "Consulter" : undefined}
+                onAction={departuresToValidate.length > 0 ? () => {
+                  const trip = departuresToValidate[0];
+                  if (trip) setSelectedTrip(trip);
+                } : undefined}
+              />
+              <CompactKpiCard
+                title="Courriers en attente"
+                value={courierPosts.length}
+                subtitle={
+                  courierPosts.length > 0
+                    ? `${liveActivity.parcels.count} envoi${liveActivity.parcels.count !== 1 ? "s" : ""} du jour`
+                    : "Aucun poste courrier actif"
+                }
+                icon={<Package className="h-4 w-4" />}
+                tone={courierPosts.length > 0 ? "warning" : "neutral"}
+                actionLabel={courierPosts.length > 0 ? "Voir postes" : undefined}
+                onAction={courierPosts.length > 0 ? () => setOpenPanel("posts") : undefined}
+              />
+            </div>
+
             {alerts.length > 0 ? (
-              <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                {alerts.slice(0, 2).map((alert) => {
+              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {alerts.slice(0, 3).map((alert) => {
                   const meta = alertMeta(alert);
                   return (
-                    <AlertCard
+                    <CompactKpiCard
                       key={alert.id}
-                      alert={alertCopy(alert)}
-                      risk={meta.risk}
+                      title={alert.title.replace(/^[^\w]+/, "").trim()}
+                      subtitle={alert.detail}
+                      icon={<AlertTriangle className="h-4 w-4" />}
+                      tone={alert.tone === "critical" ? "critical" : "warning"}
+                      badge={alert.tone === "critical" ? "Alerte" : "Signal"}
                       actionLabel={meta.actionLabel}
                       onAction={meta.onAction}
                     />
@@ -702,164 +816,102 @@ export default function AgencyActivityDomainPage() {
             ) : null}
           </section>
 
-          <section>
-            {sectionTitle(
-              "Performance du jour",
-              "Le niveau de ventes actuel, avec la répartition guichet et en ligne."
-            )}
-            <DayPerformanceCard
-              totalSales={summary.totalSales}
-              ticketsSold={liveActivity.total.count}
-              guichetSales={summary.guichetSales}
-              onlineSales={summary.onlineSales}
-              money={money}
-            />
-          </section>
-
-          <section>
-            {sectionTitle(
-              "Départs du jour",
-              "Repérez rapidement le remplissage, les retards et les départs à valider."
-            )}
-            {liveTrips.length === 0 ? (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/50 dark:bg-amber-950/20 sm:p-5">
-                <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">Aucun trajet aujourd'hui</p>
-                <p className="mt-2 text-sm text-amber-800/90 dark:text-amber-100/85">
-                  Problème potentiel : planning non défini ou agence inactive sur la journée.
-                </p>
-                <div className="mt-4 grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
-                  <Link
-                    to="/agence/planification"
-                    className="inline-flex min-h-10 items-center justify-center rounded-xl bg-amber-600 px-4 text-sm font-medium text-white transition-colors hover:bg-amber-700"
-                  >
-                    Créer un trajet
-                  </Link>
-                  <Link
-                    to="/agence/planification"
-                    className="inline-flex min-h-10 items-center justify-center rounded-xl border border-amber-300 bg-white px-4 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 dark:hover:bg-amber-900/40"
-                  >
-                    Voir planning
-                  </Link>
-                </div>
-              </div>
-            ) : (
-              <div className="grid gap-4 lg:grid-cols-2">
-                {liveTrips.map((trip) => (
-                  <LiveTripCard key={trip.id} trip={trip} money={money} onOpen={() => setOpenPanel("departures")} />
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section>
-            {sectionTitle(
-              "Activité récente",
-              "Les derniers mouvements utiles pour comprendre ce qui vient de se passer."
-            )}
-            <ActivityFeedCard items={activityFeed} />
-          </section>
-
-          <section>
-            {sectionTitle(
-              "Analyse et problèmes",
-              "Les risques de remplissage et signaux opérationnels à surveiller après les actions urgentes."
-            )}
-            {weakTrips.length === 0 ? (
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-100">
-                Aucun trajet sous-rempli à corriger dans la fenêtre de décision actuelle.
-              </div>
-            ) : (
-              <div className="grid gap-4 lg:grid-cols-2">
-                {weakTrips.map((problem) => (
-                  <ProblemCard key={problem.id} problem={problem} money={money} />
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section>
-            {sectionTitle(
-              "Premium",
-              "Optimisez les décisions après avoir traité les opérations du jour."
-            )}
-            {!isPremium ? (
-              <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5 dark:border-indigo-900/60 dark:bg-indigo-950/30">
-                <div className="flex items-start gap-3">
-                  <div className="rounded-xl bg-white/80 p-2 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-100">
-                    <Lock className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-indigo-950 dark:text-indigo-100">
-                      🔒 Optimisez votre agence avec Premium
-                    </p>
-                    <p className="mt-2 text-sm text-indigo-900/85 dark:text-indigo-100/80">
-                      {weeklyLeakEstimate > 0
-                        ? `Vous perdez environ ${money(weeklyLeakEstimate)} / semaine sur des trajets sous-remplis.`
-                        : "Données insuffisantes aujourd'hui pour chiffrer une perte fiable."}
-                    </p>
-                    <div className="mt-3 space-y-2 text-sm text-indigo-900/85 dark:text-indigo-100/80">
-                      <p>Passez en Premium pour :</p>
-                      <ul className="space-y-1">
-                        <li>- analyse multi-jours</li>
-                        <li>- détection anomalies</li>
-                        <li>- optimisation trajets</li>
-                      </ul>
+          {showPremiumSection ? (
+            <section>
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                Recommandations
+              </h2>
+              {!isPremium ? (
+                <div className="flex flex-col gap-3 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 dark:border-indigo-900/60 dark:bg-indigo-950/30 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-start gap-2">
+                    <div className="rounded-lg bg-white/80 p-1.5 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-100">
+                      <Lock className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-indigo-950 dark:text-indigo-100">
+                        Optimisez avec Premium
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-indigo-900/85 dark:text-indigo-100/80">
+                        Perte estimée : {money(weeklyLeakEstimate)} / semaine sur trajets sous-remplis.
+                      </p>
                     </div>
                   </div>
+                  <Link
+                    to="/agence/planification"
+                    className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-white px-3 text-[11px] font-semibold text-indigo-800 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-100"
+                  >
+                    En savoir plus
+                  </Link>
                 </div>
-              </div>
-            ) : recommendations.length === 0 ? (
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-                Aucune recommandation forte pour l’instant. L’activité du jour reste équilibrée.
-              </div>
-            ) : (
-              <div className="grid gap-4 lg:grid-cols-2">
-                {recommendations.map((recommendation) => (
-                  <RecommendationCard key={recommendation.id} recommendation={recommendation} money={money} />
-                ))}
-              </div>
-            )}
-          </section>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {recommendations.map((recommendation) => (
+                    <CompactRecommendationCard
+                      key={recommendation.id}
+                      recommendation={recommendation}
+                      money={money}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          {liveTrips.length === 0 ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/50 dark:bg-amber-950/20">
+              <p className="text-xs font-semibold text-amber-900 dark:text-amber-100">Aucun trajet aujourd&apos;hui</p>
+              <p className="text-[11px] text-amber-800/90 dark:text-amber-100/85">
+                Vérifiez le planning si l&apos;agence devrait être active.
+              </p>
+              <Link
+                to="/agence/planification"
+                className="mt-1 inline-block text-[11px] font-semibold text-amber-800 underline-offset-2 hover:underline dark:text-amber-200"
+              >
+                Voir le planning
+              </Link>
+            </div>
+          ) : null}
         </div>
       )}
 
       <OverlayPanel
         open={openPanel === "departures"}
         onClose={() => setOpenPanel(null)}
-        title="Départs à traiter"
-        subtitle="Validez les départs requis et traitez les départs en retard sans quitter le cockpit."
+        title="Départs à surveiller"
+        subtitle="Consultez les départs en attente ou en retard."
       >
         <div className="space-y-4">
           {departuresToHandle.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-              Aucun départ à traiter.
+              Aucun départ à surveiller.
             </div>
           ) : (
-            departuresToHandle.map((trip) => (
-              <div key={trip.id} className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900 dark:text-white">{trip.routeLabel}</p>
-                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                      Départ {trip.departureTime} • {trip.reservedSeats} / {trip.capacity} places
-                    </p>
-                    <p className={`mt-2 text-xs font-semibold ${trip.isLate ? "text-red-700 dark:text-red-300" : "text-amber-700 dark:text-amber-300"}`}>
-                      {trip.isLate ? "Départ en retard" : "Validation agence requise"}
-                    </p>
+            departuresToHandle.map((trip) => {
+              const isConfirmed = isTripConfirmed(trip);
+              
+              return (
+                <div key={trip.id} className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900 dark:text-white">{trip.routeLabel}</p>
+                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                        Départ {trip.departureTime} • {trip.reservedSeats} / {trip.capacity} places
+                      </p>
+                      <p className={`mt-2 text-xs font-semibold ${isConfirmed ? "text-emerald-600 dark:text-emerald-400" : trip.isLate ? "text-red-700 dark:text-red-300" : "text-amber-700 dark:text-amber-300"}`}>
+                        {isConfirmed ? "✅ Départ confirmé" : trip.isLate ? "⏰ Départ en retard" : "Validation agence requise"}
+                      </p>
+                    </div>
+                    <ActionButton 
+                      variant="secondary" 
+                      onClick={() => setSelectedTrip(trip)}
+                    >
+                      <Eye className="h-4 w-4" />
+                      Consulter
+                    </ActionButton>
                   </div>
-                  <ActionButton
-                    disabled={validatingTripId === trip.tripInstanceId}
-                    onClick={() => void handleValidateDeparture(trip.tripInstanceId)}
-                  >
-                    {validatingTripId === trip.tripInstanceId
-                      ? "Validation..."
-                      : trip.isLate
-                        ? "Confirmer le départ"
-                        : "Valider maintenant"}
-                  </ActionButton>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </OverlayPanel>
@@ -868,7 +920,7 @@ export default function AgencyActivityDomainPage() {
         open={openPanel === "posts"}
         onClose={() => setOpenPanel(null)}
         title="Postes actifs"
-        subtitle="Consultez les sessions en cours sans les mélanger avec la validation comptable."
+        subtitle="Sessions en cours — cliquez pour consulter."
       >
         <div className="space-y-4">
           {activePosts.length === 0 ? (
@@ -893,9 +945,9 @@ export default function AgencyActivityDomainPage() {
                       • {money(post.amount)} • {post.durationLabel}
                     </p>
                   </div>
-                  <ActionButton variant="secondary" onClick={() => setDetailSession(post)}>
+                  <ActionButton variant="secondary" onClick={() => setSelectedPost(post)}>
                     <Eye className="h-4 w-4" />
-                    Ouvrir
+                    Consulter
                   </ActionButton>
                 </div>
               </div>
@@ -929,6 +981,22 @@ export default function AgencyActivityDomainPage() {
           )}
         </div>
       </OverlayPanel>
+
+      {/* ✅ Modale de consultation de départ (lecture seule) */}
+      <TripConsultationModal
+        open={Boolean(selectedTrip)}
+        trip={selectedTrip}
+        onClose={() => setSelectedTrip(null)}
+        money={money}
+      />
+
+      {/* ✅ Modale de consultation de poste */}
+      <PostConsultationModal
+        open={Boolean(selectedPost)}
+        post={selectedPost}
+        onClose={() => setSelectedPost(null)}
+        money={money}
+      />
 
       <ChiefSessionDetailModal
         open={Boolean(detailSession)}

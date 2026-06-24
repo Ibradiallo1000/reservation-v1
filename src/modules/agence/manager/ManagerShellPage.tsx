@@ -80,8 +80,40 @@ function buildFleetOpsChildren(includeCourier: boolean): NavSectionChild[] {
   ];
 }
 
-/** 5 domaines principaux + entrée « Modules » (secondaire). */
-const BASE_SECTIONS: Array<
+/** Menu Chef d'Agence : Dashboard, Finances, Départs, Rapports, Équipe, Trajets */
+const MANAGER_SECTIONS: Array<
+  NavSection & { moduleKey: string; activityBadge?: boolean; caisseBadge?: boolean }
+> = [
+  {
+    label: "Dashboard",
+    icon: Activity,
+    path: "/agence/activite",
+    end: true,
+    moduleKey: "dashboard",
+    activityBadge: true,
+  },
+  {
+    label: "Finances",
+    icon: Banknote,
+    path: "/agence/caisse",
+    end: true,
+    moduleKey: "finances",
+    caisseBadge: true,
+  },
+  {
+    label: "Départs",
+    icon: ClipboardCheck,
+    path: "/agence/validation-departs",
+    end: true,
+    moduleKey: "validations",
+  },
+  { label: "Rapports", icon: FileBarChart2, path: "/agence/reports", end: true, moduleKey: "reports" },
+  { label: "Équipe", icon: Users, path: "/agence/team", end: true, moduleKey: "team" },
+  { label: "Trajets", icon: MapPinned, path: "/agence/trajets", end: true, moduleKey: "trajets" },
+];
+
+/** Menu complet (pour admin/superviseur non chef) */
+const FULL_SECTIONS: Array<
   NavSection & { moduleKey: string; activityBadge?: boolean; caisseBadge?: boolean }
 > = [
   {
@@ -135,19 +167,6 @@ const ManagerShellInner: React.FC = () => {
   const isOnline = useOnlineStatus();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
   const [pendingManagerExpensesCount, setPendingManagerExpensesCount] = React.useState(0);
-  const sectionOrder: Record<string, number> = {
-    Activité: 1,
-    Caisse: 2,
-    Équipe: 3,
-    Trajets: 4,
-    Planification: 5,
-    "Validation départs": 6,
-    "Arrivées attendues": 7,
-    Rapports: 8,
-    "Journal agents": 8,
-    Courrier: 8,
-    Exploitation: 8,
-  };
 
   const rolesArr: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
   const roles = new Set(rolesArr);
@@ -188,49 +207,86 @@ const ManagerShellInner: React.FC = () => {
         { label: "Retour tableau de bord escale", icon: Activity, path: "/agence/escale", end: true },
       ];
     }
+
     const isCourierOnly = has("agentCourrier") && !has("chefAgence") && !has("superviseur") && !has("admin_compagnie");
     const canValidateAgencyExpenses = has("chefAgence") || has("superviseur") || has("admin_compagnie");
-    const visibleBaseSections = ENABLE_PHASE1_ONLY
-      ? BASE_SECTIONS.filter((s) => !["planning", "arrivals"].includes(s.moduleKey))
-      : BASE_SECTIONS;
-    const list: NavSection[] = isCourierOnly
-      ? [
-          { label: "Courrier", icon: Boxes, path: "/agence/courrier/session", end: true },
-          { label: "Nouvel envoi", icon: Boxes, path: "/agence/courrier/nouveau", end: true },
-          { label: "Arrivages", icon: Boxes, path: "/agence/courrier/arrivages", end: true },
-          { label: "Remise", icon: Boxes, path: "/agence/courrier/remise", end: true },
-        ]
-      : visibleBaseSections.map((s) => {
-          if (s.label === "Validation départs" && !has("chefAgence") && !has("chefagence")) {
-            return null;
-          }
-          if (s.label === "Arrivées attendues" && !has("chefAgence") && !has("chefagence")) {
-            return null;
-          }
-          const opBadge = (badgeByModule as Record<string, number>).operations ?? 0;
-          const finBadge = (badgeByModule as Record<string, number>).finances ?? 0;
-          let badge: number | undefined;
-          if (s.activityBadge) {
-            const n = (badgeByModule.dashboard ?? 0) + opBadge;
-            badge = n > 0 ? n : undefined;
-          } else if (s.caisseBadge) {
-            const n = finBadge + (canValidateAgencyExpenses ? pendingManagerExpensesCount : 0);
-            badge = n > 0 ? n : undefined;
-          } else {
-            badge = badgeByModule[s.moduleKey as keyof typeof badgeByModule] || undefined;
-          }
-          return {
-            label: s.label,
-            icon: s.icon,
-            path: s.path,
-            end: s.end,
-            badge,
-          };
-        }).filter(Boolean) as NavSection[];
+    
+    // 🔥 Chef d'Agence : menu simplifié
+    const isChefAgence = has("chefAgence") && !has("admin_compagnie") && !has("superviseur");
+    
+    if (isCourierOnly) {
+      return [
+        { label: "Courrier", icon: Boxes, path: "/agence/courrier/session", end: true },
+        { label: "Nouvel envoi", icon: Boxes, path: "/agence/courrier/nouveau", end: true },
+        { label: "Arrivages", icon: Boxes, path: "/agence/courrier/arrivages", end: true },
+        { label: "Remise", icon: Boxes, path: "/agence/courrier/remise", end: true },
+      ];
+    }
 
+    // 🔥 Chef d'Agence : utiliser MANAGER_SECTIONS
+    if (isChefAgence) {
+      return MANAGER_SECTIONS.map((s) => {
+        let badge: number | undefined;
+        if (s.activityBadge) {
+          const opBadge = (badgeByModule as Record<string, number>).operations ?? 0;
+          const n = (badgeByModule.dashboard ?? 0) + opBadge;
+          badge = n > 0 ? n : undefined;
+        } else if (s.caisseBadge) {
+          const finBadge = (badgeByModule as Record<string, number>).finances ?? 0;
+          const n = finBadge + (canValidateAgencyExpenses ? pendingManagerExpensesCount : 0);
+          badge = n > 0 ? n : undefined;
+        } else {
+          badge = badgeByModule[s.moduleKey as keyof typeof badgeByModule] || undefined;
+        }
+        return {
+          label: s.label,
+          icon: s.icon,
+          path: s.path,
+          end: s.end,
+          badge,
+        };
+      });
+    }
+
+    // 🔥 Admin / Superviseur : menu complet avec modules optionnels
+    const visibleBaseSections = ENABLE_PHASE1_ONLY
+      ? FULL_SECTIONS.filter((s) => !["planning", "arrivals"].includes(s.moduleKey))
+      : FULL_SECTIONS;
+
+    const list: NavSection[] = visibleBaseSections
+      .map((s) => {
+        if (s.label === "Validation départs" && !has("chefAgence") && !has("chefagence")) {
+          return null;
+        }
+        if (s.label === "Arrivées attendues" && !has("chefAgence") && !has("chefagence")) {
+          return null;
+        }
+        const opBadge = (badgeByModule as Record<string, number>).operations ?? 0;
+        const finBadge = (badgeByModule as Record<string, number>).finances ?? 0;
+        let badge: number | undefined;
+        if (s.activityBadge) {
+          const n = (badgeByModule.dashboard ?? 0) + opBadge;
+          badge = n > 0 ? n : undefined;
+        } else if (s.caisseBadge) {
+          const n = finBadge + (canValidateAgencyExpenses ? pendingManagerExpensesCount : 0);
+          badge = n > 0 ? n : undefined;
+        } else {
+          badge = badgeByModule[s.moduleKey as keyof typeof badgeByModule] || undefined;
+        }
+        return {
+          label: s.label,
+          icon: s.icon,
+          path: s.path,
+          end: s.end,
+          badge,
+        };
+      })
+      .filter(Boolean) as NavSection[];
+
+    // 🔥 Modules optionnels uniquement pour Admin/Superviseur (pas pour Chef)
     if (
       !isCourierOnly &&
-      (has("chefAgence") || has("superviseur") || has("admin_compagnie") || has("agency_fleet_controller"))
+      (has("superviseur") || has("admin_compagnie") || has("agency_fleet_controller"))
     ) {
       const includeCourier = ENABLE_COURIER && (has("agentCourrier") || has("chefAgence") || has("chefagence") || has("admin_compagnie"));
       if (has("admin_compagnie")) {
@@ -241,7 +297,7 @@ const ManagerShellInner: React.FC = () => {
           end: false,
           children: buildFullOpsChildren(includeCourier),
         });
-      } else if (has("chefAgence") || has("superviseur")) {
+      } else if (has("superviseur")) {
         if (includeCourier) {
           list.push({
             label: "Courrier",
@@ -262,7 +318,7 @@ const ManagerShellInner: React.FC = () => {
       }
     }
 
-    return isCourierOnly ? list : list.sort((a, b) => (sectionOrder[a.label] ?? 99) - (sectionOrder[b.label] ?? 99));
+    return list;
   }, [badgeByModule, rolesArr, pendingManagerExpensesCount]);
 
   useAgencyKeyboardShortcuts(sections);

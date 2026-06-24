@@ -1,13 +1,11 @@
-// src/modules/agence/dashboard/components/BarChartMini.tsx
-
 import React from "react";
 
-interface BarChartMiniProps {
+export interface RevenueMiniChartProps {
   data: { label: string; value: number; color?: string }[];
   height?: number;
 }
 
-export function BarChartMini({ data, height = 60 }: BarChartMiniProps) {
+export function RevenueMiniChart({ data, height = 48 }: RevenueMiniChartProps) {
   const maxValue = Math.max(...data.map((d) => d.value), 1);
 
   return (
@@ -33,3 +31,6 @@ export function BarChartMini({ data, height = 60 }: BarChartMiniProps) {
     </div>
   );
 }
+
+/** @deprecated Prefer RevenueMiniChart */
+export const BarChartMini = RevenueMiniChart;

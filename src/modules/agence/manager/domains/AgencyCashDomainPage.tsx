@@ -1,6 +1,6 @@
 /**
- * Domaine « Caisse » — priorité : valider les sessions & voir les écarts.
- * Trésorerie, dépenses et contrôle : onglets (pas de page interminable).
+ * Domaine « Finances » — supervision des fonds, dépenses, sessions et contrôles de l’agence.
+ * Les onglets évitent une page interminable et gardent chaque action dans son périmètre.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -14,13 +14,20 @@ import ManagerExpensesPage from "../ManagerExpensesPage";
 import CashSessionsPage from "@/modules/agence/cashControl/CashSessionsPage";
 import { dispatchAgencyCashUiRefresh } from "@/modules/agence/constants/agencyCashUiRefresh";
 
-type CashTabId = "caisse-sessions" | "caisse-tresorerie" | "caisse-depenses" | "caisse-controle";
+type CashTabId = "caisse-tresorerie" | "caisse-depenses" | "caisse-sessions" | "caisse-controle";
 
 function hashToTab(hash: string, canExpenses: boolean): CashTabId {
   const id = hash.replace("#", "");
-  if (id === "caisse-tresorerie" || id === "caisse-controle") return id;
-  if (id === "caisse-depenses" && canExpenses) return "caisse-depenses";
-  return "caisse-sessions";
+
+  if (id === "caisse-tresorerie" || id === "caisse-sessions" || id === "caisse-controle") {
+    return id;
+  }
+
+  if (id === "caisse-depenses" && canExpenses) {
+    return "caisse-depenses";
+  }
+
+  return "caisse-tresorerie";
 }
 
 export default function AgencyCashDomainPage() {
@@ -46,32 +53,36 @@ export default function AgencyCashDomainPage() {
 
   const tabs = useMemo(() => {
     const base: Array<{ id: CashTabId; label: string; icon: typeof Banknote }> = [
-      { id: "caisse-sessions", label: "Sessions", icon: ClipboardCheck },
       { id: "caisse-tresorerie", label: "Trésorerie", icon: Landmark },
     ];
+
     if (canValidateExpenses) {
       base.push({ id: "caisse-depenses", label: "Dépenses", icon: Receipt });
     }
-    base.push({ id: "caisse-controle", label: "Contrôle", icon: Wallet });
+
+    base.push(
+      { id: "caisse-sessions", label: "Sessions", icon: ClipboardCheck },
+      { id: "caisse-controle", label: "Contrôle", icon: Wallet }
+    );
+
     return base;
   }, [canValidateExpenses]);
 
   return (
     <StandardLayoutWrapper className="pb-24 md:pb-8">
       <PageHeader
-        title="Caisse"
-        subtitle="Valider d’abord les sessions, puis trésorerie & contrôle si besoin"
+        title="Finances"
+        subtitle="Suivi des fonds, dépenses et contrôles de l’agence."
         icon={Banknote}
       />
 
-      {/* Onglets — sticky desktop ; barre fixe mobile */}
       <div
         className={cn(
           "mb-4 hidden gap-1 rounded-xl border border-gray-200 bg-gray-100/90 p-1 dark:border-slate-700 dark:bg-slate-800/80",
           "md:sticky md:top-0 md:z-20 md:flex"
         )}
         role="tablist"
-        aria-label="Sections caisse"
+        aria-label="Sections finances"
       >
         {tabs.map((t) => {
           const Icon = t.icon;
@@ -103,7 +114,7 @@ export default function AgencyCashDomainPage() {
           "md:hidden"
         )}
         role="tablist"
-        aria-label="Sections caisse"
+        aria-label="Sections finances"
       >
         {tabs.map((t) => {
           const Icon = t.icon;
@@ -128,21 +139,24 @@ export default function AgencyCashDomainPage() {
       </div>
 
       <div className="min-h-[50vh]">
-        {tab === "caisse-sessions" && (
-          <section id="caisse-sessions" className="scroll-mt-28">
-            <ManagerFinancesPage embedded onAgencyFinancialUpdate={dispatchAgencyCashUiRefresh} />
-          </section>
-        )}
         {tab === "caisse-tresorerie" && (
           <section id="caisse-tresorerie" className="scroll-mt-28">
             <AgencyTreasuryPage embedded />
           </section>
         )}
+
         {tab === "caisse-depenses" && canValidateExpenses && (
           <section id="caisse-depenses" className="scroll-mt-28">
             <ManagerExpensesPage embedded />
           </section>
         )}
+
+        {tab === "caisse-sessions" && (
+          <section id="caisse-sessions" className="scroll-mt-28">
+            <ManagerFinancesPage embedded onAgencyFinancialUpdate={dispatchAgencyCashUiRefresh} />
+          </section>
+        )}
+
         {tab === "caisse-controle" && (
           <section id="caisse-controle" className="scroll-mt-28">
             <CashSessionsPage embedded />

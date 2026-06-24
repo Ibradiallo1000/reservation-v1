@@ -23,7 +23,7 @@ import {
 } from "@/modules/compagnie/treasury/expenses";
 import { listExpenseCategories, listSuppliers, type ExpenseCategoryDoc, type SupplierDoc } from "@/modules/compagnie/finance/expenseMetadataService";
 import { ensureDefaultAgencyAccounts } from "@/modules/compagnie/treasury/financialAccounts";
-import { Wallet, ArrowRightLeft, FileText, Plus, Loader2 } from "lucide-react";
+import { Wallet, ArrowRightLeft, FileText, Plus, Loader2, ArrowLeft, Building2, CreditCard } from "lucide-react";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
 import { StandardLayoutWrapper, PageHeader, SectionCard, EmptyState, table, tableRowClassName, ActionButton } from "@/ui";
@@ -50,6 +50,8 @@ const MOVEMENT_TYPE_LABELS: Record<string, string> = {
   refund: "Remboursement",
 };
 
+type TreasuryActionView = "overview" | "expense" | "transfer" | "supplier";
+
 export type AgencyTreasuryPageProps = { embedded?: boolean };
 
 export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryPageProps = {}) {
@@ -60,13 +62,15 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
 
+  // 🔥 État de navigation interne
+  const [actionView, setActionView] = useState<TreasuryActionView>("overview");
+
   const [accounts, setAccounts] = useState<{ id: string; accountName: string; currentBalance: number; currency: string; accountType: string }[]>([]);
   const [operationalCash, setOperationalCash] = useState<{
     accountingCash: number;
     adjustmentTotal: number;
     availableCash: number;
   } | null>(null);
-  /** Miroir `financialAccounts` — affichage secondaire uniquement (écarts journalisés côté service). */
   const [mirrorCashSecondary, setMirrorCashSecondary] = useState<number | null>(null);
   const [movements, setMovements] = useState<{ id: string; amount: number; movementType: string; performedAt: unknown }[]>([]);
   const [pendingExpenses, setPendingExpenses] = useState<{ id: string; amount: number; category: string; status: ExpenseStatus }[]>([]);
@@ -160,7 +164,7 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
       return;
     }
     if (operationalCash != null && amount > operationalCash.availableCash + 0.0001) {
-      toast.error("Montant supérieur à la caisse disponible (solde ledger).");
+      toast.error("Montant supérieur à la caisse disponible.");
       return;
     }
     setSubmitting(true);
@@ -178,10 +182,11 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
         supplierName: suppliers.find((s) => s.id === formSupplierId)?.name ?? null,
         receiptUrls: formReceiptUrl.trim() ? [formReceiptUrl.trim()] : [],
       });
-      toast.success("Dépense soumise. Elle sera validée selon le montant (chef agence, chef comptable ou CEO).");
+      toast.success("Dépense soumise. Elle sera validée selon le montant.");
       setFormDescription("");
       setFormAmount("");
       setFormReceiptUrl("");
+      setActionView("overview");
       setReloadKey((k) => k + 1);
       listExpenses(companyId, { agencyId, statusIn: [...PENDING_STATUSES], limitCount: 20 }).then((list) =>
         setPendingExpenses(list.map((e) => ({ id: e.id, amount: e.amount, category: e.category, status: e.status })))
@@ -213,15 +218,12 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
         };
       })
     );
-    // ✅ Effacer l'erreur si elle était affichée
     setError(null);
   }, (err) => {
-    // ✅ Ne pas afficher d'erreur si c'est une erreur de permission
-    // (le Chef d'Agence peut ne pas avoir accès aux transactions)
     if (err.code === 'permission-denied') {
       console.warn("[AgencyTreasury] Permission denied pour financialTransactions, ignoré.");
       setMovements([]);
-      setError(null); // ✅ Pas d'erreur affichée
+      setError(null);
     } else {
       setError(
         !isOnline
@@ -257,7 +259,6 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
   const caisseDevise =
     agencyCashAccounts[0]?.currency ?? (company as { devise?: string })?.devise ?? "XOF";
   const ledgerCashDisplay = operationalCash?.availableCash ?? 0;
-  const displayedCash = ledgerCashDisplay;
   const pendingExpensesTotal = useMemo(
     () => pendingExpenses.reduce((sum, e) => sum + Number(e.amount || 0), 0),
     [pendingExpenses]
@@ -277,7 +278,183 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
     return embedded ? <div className="py-8 text-gray-500">Chargement…</div> : <PageLoadingState />;
   }
 
-  const treasuryBody = (
+  // 🔥 Vue "Nouvelle dépense"
+  const renderExpenseForm = () => (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => setActionView("overview")}
+          className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Retour
+        </button>
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Nouvelle dépense</h3>
+      </div>
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        Enregistrez une dépense à soumettre pour validation.
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Catégorie</label>
+          <select
+            value={formCategory}
+            onChange={(e) => setFormCategory(e.target.value)}
+            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+          >
+            {customCategories.map((c) => (
+              <option key={`custom-${c.id}`} value={c.code}>
+                {c.label}
+              </option>
+            ))}
+            {EXPENSE_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Compte à débiter</label>
+          <select
+            value={formAccountId}
+            onChange={(e) => setFormAccountId(e.target.value)}
+            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+          >
+            {agencyCashAccounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                Caisse agence — {formatCurrency(ledgerCashDisplay, caisseDevise)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="sm:col-span-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Description</label>
+          <input
+            type="text"
+            value={formDescription}
+            onChange={(e) => setFormDescription(e.target.value)}
+            placeholder="Ex. Carburant bus 12, Péage A1..."
+            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fournisseur (optionnel)</label>
+          <select
+            value={formSupplierId}
+            onChange={(e) => setFormSupplierId(e.target.value)}
+            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+          >
+            <option value="">— Aucun —</option>
+            {suppliers.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Montant</label>
+          <input
+            type="text"
+            value={formAmount}
+            onChange={(e) => setFormAmount(e.target.value)}
+            placeholder="0"
+            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">URL justificatif (optionnel)</label>
+          <input
+            type="url"
+            value={formReceiptUrl}
+            onChange={(e) => setFormReceiptUrl(e.target.value)}
+            placeholder="https://..."
+            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+          />
+        </div>
+        <div className="flex items-end gap-3">
+          <ActionButton
+            variant="primary"
+            onClick={handleSubmitExpense}
+            disabled={submitting || !formDescription.trim() || !formAmount.trim() || !formAccountId}
+          >
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {" "}Soumettre la dépense
+          </ActionButton>
+          <ActionButton
+            variant="secondary"
+            onClick={() => setActionView("overview")}
+          >
+            Annuler
+          </ActionButton>
+        </div>
+      </div>
+    </div>
+  );
+
+  // 🔥 Vue "Versement compagnie" (placeholder)
+  const renderTransferView = () => (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => setActionView("overview")}
+          className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Retour
+        </button>
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Versement compagnie</h3>
+      </div>
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-6 text-center">
+        <Building2 className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" />
+        <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">
+          Cette action sera disponible dans le module Finances.
+        </p>
+        <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+          Vous pourrez effectuer un versement depuis la caisse agence vers la banque compagnie.
+        </p>
+        <ActionButton
+          variant="secondary"
+          className="mt-4"
+          onClick={() => setActionView("overview")}
+        >
+          Retour à la trésorerie
+        </ActionButton>
+      </div>
+    </div>
+  );
+
+  // 🔥 Vue "Paiement fournisseur" (placeholder)
+  const renderSupplierView = () => (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => setActionView("overview")}
+          className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Retour
+        </button>
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Paiement fournisseur</h3>
+      </div>
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-6 text-center">
+        <CreditCard className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" />
+        <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">
+          Cette action sera disponible dans le module Finances.
+        </p>
+        <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+          Vous pourrez enregistrer un paiement fournisseur depuis la caisse agence.
+        </p>
+        <ActionButton
+          variant="secondary"
+          className="mt-4"
+          onClick={() => setActionView("overview")}
+        >
+          Retour à la trésorerie
+        </ActionButton>
+      </div>
+    </div>
+  );
+
+  // 🔥 Vue Overview (page principale)
+  const renderOverview = () => (
     <>
       {!isOnline && (
         <PageOfflineState message="Connexion instable: certaines données peuvent être incomplètes." />
@@ -285,104 +462,53 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
       {error && (
         <PageErrorState message={error} onRetry={() => setReloadKey((v) => v + 1)} />
       )}
-      {embedded ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900 dark:text-white">Trésorerie</h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              Pilotage chef d&apos;agence : position caisse, demandes en attente et actions rapides.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <ActionButton size="sm" onClick={() => navigate("/agence/treasury/new-operation")}>
-              Soumettre dépense
-            </ActionButton>
-            <ActionButton size="sm" variant="secondary" onClick={() => navigate("/agence/treasury/transfer")}>
-              Versement compagnie
-            </ActionButton>
-            <ActionButton size="sm" variant="secondary" onClick={() => navigate("/agence/treasury/new-payable")}>
-              Payable fournisseur
-            </ActionButton>
-          </div>
-        </div>
-      ) : (
-      <PageHeader
-        title="Trésorerie agence"
-        subtitle={formatDateLongFr(new Date())}
-        icon={Wallet}
-        right={
-          <div className="flex min-w-0 flex-wrap items-stretch justify-end gap-2">
-            <ActionButton className="w-full sm:w-auto" onClick={() => navigate("/agence/treasury/new-operation")}>
-              Soumettre dépense
-            </ActionButton>
-            <ActionButton
-              className="w-full sm:w-auto"
-              variant="secondary"
-              onClick={() => navigate("/agence/treasury/transfer")}
-            >
-              Versement banque compagnie
-            </ActionButton>
-            <ActionButton
-              className="w-full sm:w-auto"
-              variant="secondary"
-              onClick={() => navigate("/agence/treasury/new-payable")}
-            >
-              Paiement fournisseur
-            </ActionButton>
-          </div>
-        }
-      />
-      )}
 
-      <SectionCard title="Vue rapide" icon={Wallet}>
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Trésorerie</h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Suivi des fonds disponibles et des mouvements de l'agence.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <ActionButton size="sm" onClick={() => setActionView("expense")}>
+            Nouvelle dépense
+          </ActionButton>
+          <ActionButton size="sm" variant="secondary" onClick={() => setActionView("transfer")}>
+            Versement compagnie
+          </ActionButton>
+          <ActionButton size="sm" variant="secondary" onClick={() => setActionView("supplier")}>
+            Paiement fournisseur
+          </ActionButton>
+        </div>
+      </div>
+
+      {/* Carte résumé compacte */}
+      <SectionCard title="Résumé" icon={Wallet}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2">
-            <div className="text-xs text-indigo-700">Caisse disponible</div>
-            <div className="text-lg font-semibold text-indigo-800">{money(displayedCash)}</div>
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 dark:border-indigo-900/30 dark:bg-indigo-900/20">
+            <div className="text-xs text-indigo-700 dark:text-indigo-300">Solde disponible</div>
+            <div className="text-lg font-semibold text-indigo-800 dark:text-indigo-200">{money(ledgerCashDisplay)}</div>
           </div>
-          <div className="rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2">
-            <div className="text-xs text-amber-700">Demandes en attente</div>
-            <div className="text-lg font-semibold text-amber-800">{pendingExpenses.length}</div>
+          <div className="rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2 dark:border-amber-900/30 dark:bg-amber-900/20">
+            <div className="text-xs text-amber-700 dark:text-amber-300">Demandes en attente</div>
+            <div className="text-lg font-semibold text-amber-800 dark:text-amber-200">{pendingExpenses.length}</div>
           </div>
-          <div className="rounded-lg border border-rose-100 bg-rose-50/60 px-3 py-2">
-            <div className="text-xs text-rose-700">Montant en attente</div>
-            <div className="text-lg font-semibold text-rose-800">{money(pendingExpensesTotal)}</div>
+          <div className="rounded-lg border border-rose-100 bg-rose-50/60 px-3 py-2 dark:border-rose-900/30 dark:bg-rose-900/20">
+            <div className="text-xs text-rose-700 dark:text-rose-300">Montant en attente</div>
+            <div className="text-lg font-semibold text-rose-800 dark:text-rose-200">{money(pendingExpensesTotal)}</div>
           </div>
         </div>
       </SectionCard>
 
-      <SectionCard title="Position caisse agence" icon={Wallet}>
-        <div className="text-2xl font-bold text-indigo-700 dark:text-indigo-300">{money(displayedCash)}</div>
-        <p className="mt-1 text-xs text-gray-500">
-          Montant issu du grand livre (comptes caisse), source utilisée pour les plafonds dépense et versement.
-        </p>
-        {mirrorCashSecondary != null ? (
-          <p className="mt-2 text-xs text-gray-500">
-            Référence compte miroir (non prioritaire) : {formatCurrency(mirrorCashSecondary, caisseDevise)}
-          </p>
-        ) : null}
-        {embedded ? (
-          <p className="mt-3 text-sm text-gray-600">
-            Compte ledger agence : <span className="font-medium">{formatCurrency(ledgerCashDisplay, caisseDevise)}</span>
-          </p>
-        ) : agencyCashAccounts.length === 0 ? (
-          <p className="mt-3 text-sm text-gray-500">Aucun compte caisse agence n&apos;est encore disponible.</p>
-        ) : (
-          <p className="mt-3 text-sm text-gray-600">
-            Compte métier :{" "}
-            <span className="font-medium">
-              {agencyCashAccounts[0].accountName || "Caisse agence"} — solde ledger {formatCurrency(ledgerCashDisplay, caisseDevise)}
-            </span>
-          </p>
-        )}
-      </SectionCard>
-
+      {/* Derniers mouvements */}
       <SectionCard title="Derniers mouvements" icon={ArrowRightLeft}>
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {movements.length === 0
               ? "Aucun mouvement enregistré."
-              : `${Math.min(25, movements.length)} mouvement(s) récent(s) — affichage optionnel.`}
+              : `${Math.min(25, movements.length)} mouvement(s) récent(s)`}
           </p>
           <ActionButton
             type="button"
@@ -423,197 +549,7 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
         ) : null}
       </SectionCard>
 
-      {embedded ? (
-        <details className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
-          <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-gray-900 dark:text-white [&::-webkit-details-marker]:hidden">
-            Nouvelle demande de dépense (caisse)
-          </summary>
-          <div className="border-t border-gray-100 p-4 dark:border-gray-800">
-            <p className="text-sm text-gray-600 mb-4">
-              Cette demande débite uniquement la caisse agence. Aucun débit banque n'est autorisé à ce niveau.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Catégorie</label>
-                <select
-                  value={formCategory}
-                  onChange={(e) => setFormCategory(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                >
-                  {customCategories.map((c) => (
-                    <option key={`custom-${c.id}`} value={c.code}>
-                      {c.label}
-                    </option>
-                  ))}
-                  {EXPENSE_CATEGORIES.map((c) => (
-                    <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Compte à débiter</label>
-                <select
-                  value={formAccountId}
-                  onChange={(e) => setFormAccountId(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                >
-                  {agencyCashAccounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      Caisse agence — {formatCurrency(ledgerCashDisplay, caisseDevise)} (ledger)
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                <input
-                  type="text"
-                  value={formDescription}
-                  onChange={(e) => setFormDescription(e.target.value)}
-                  placeholder="Ex. Carburant bus 12, Péage A1..."
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Fournisseur (optionnel)</label>
-                <select
-                  value={formSupplierId}
-                  onChange={(e) => setFormSupplierId(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="">— Aucun —</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Montant</label>
-                <input
-                  type="text"
-                  value={formAmount}
-                  onChange={(e) => setFormAmount(e.target.value)}
-                  placeholder="0"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">URL justificatif (optionnel)</label>
-                <input
-                  type="url"
-                  value={formReceiptUrl}
-                  onChange={(e) => setFormReceiptUrl(e.target.value)}
-                  placeholder="https://..."
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div className="flex items-end">
-                <ActionButton
-                  variant="primary"
-                  onClick={handleSubmitExpense}
-                  disabled={submitting || !formDescription.trim() || !formAmount.trim() || !formAccountId}
-                >
-                  {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                  {" "}Soumettre la dépense
-                </ActionButton>
-              </div>
-            </div>
-          </div>
-        </details>
-      ) : (
-      <SectionCard title="Nouvelle demande de dépense (caisse)" icon={Plus}>
-        <p className="text-sm text-gray-600 mb-4">
-          Cette demande débite uniquement la caisse agence. Aucun débit banque n'est autorisé à ce niveau.
-        </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Catégorie</label>
-            <select
-              value={formCategory}
-              onChange={(e) => setFormCategory(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            >
-              {customCategories.map((c) => (
-                <option key={`custom-${c.id}`} value={c.code}>
-                  {c.label}
-                </option>
-              ))}
-              {EXPENSE_CATEGORIES.map((c) => (
-                <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Compte à débiter</label>
-            <select
-              value={formAccountId}
-              onChange={(e) => setFormAccountId(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            >
-              {agencyCashAccounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  Caisse agence — {formatCurrency(ledgerCashDisplay, caisseDevise)} (ledger)
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-            <input
-              type="text"
-              value={formDescription}
-              onChange={(e) => setFormDescription(e.target.value)}
-              placeholder="Ex. Carburant bus 12, Péage A1..."
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Fournisseur (optionnel)</label>
-            <select
-              value={formSupplierId}
-              onChange={(e) => setFormSupplierId(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            >
-              <option value="">— Aucun —</option>
-              {suppliers.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Montant</label>
-            <input
-              type="text"
-              value={formAmount}
-              onChange={(e) => setFormAmount(e.target.value)}
-              placeholder="0"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">URL justificatif (optionnel)</label>
-            <input
-              type="url"
-              value={formReceiptUrl}
-              onChange={(e) => setFormReceiptUrl(e.target.value)}
-              placeholder="https://..."
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-          <div className="flex items-end">
-            <ActionButton
-              variant="primary"
-              onClick={handleSubmitExpense}
-              disabled={submitting || !formDescription.trim() || !formAmount.trim() || !formAccountId}
-            >
-              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              {" "}Soumettre la dépense
-            </ActionButton>
-          </div>
-        </div>
-      </SectionCard>
-      )}
-
+      {/* Demandes en attente */}
       <SectionCard title="Demandes en attente de validation" icon={FileText}>
         {pendingExpenses.length === 0 ? (
           <EmptyState message="Aucune dépense en attente." />
@@ -624,9 +560,9 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
                 key={e.id}
                 className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"
               >
-                <span className="font-medium">{e.category}</span>
-                <span className="text-gray-600">
-                  {money(e.amount)} — {e.status}
+                <span className="font-medium">{CATEGORY_LABELS[e.category] ?? e.category}</span>
+                <span className="text-gray-600 dark:text-gray-400">
+                  {money(e.amount)} — {e.status === "pending" ? "En attente" : e.status === "pending_manager" ? "Validation chef" : e.status}
                 </span>
               </li>
             ))}
@@ -636,8 +572,28 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
     </>
   );
 
+  // 🔥 Sélection de la vue à afficher
+  const renderContent = () => {
+    switch (actionView) {
+      case "expense":
+        return renderExpenseForm();
+      case "transfer":
+        return renderTransferView();
+      case "supplier":
+        return renderSupplierView();
+      default:
+        return renderOverview();
+    }
+  };
+
+  const treasuryBody = (
+    <div className="max-w-4xl min-w-0 space-y-4">
+      {renderContent()}
+    </div>
+  );
+
   return embedded ? (
-    <div className="max-w-4xl min-w-0 space-y-4">{treasuryBody}</div>
+    treasuryBody
   ) : (
     <StandardLayoutWrapper className="min-w-0" maxWidthClass="max-w-4xl">
       {treasuryBody}

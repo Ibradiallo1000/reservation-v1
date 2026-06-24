@@ -10,3 +10,5 @@ export * from './TopTrajetsCard';
 
 export * from './ActivityMetricCard';
 export * from './ChannelDonutCard';
+export * from './MiniDonutStat';
+export * from './CompactKpiCard';
