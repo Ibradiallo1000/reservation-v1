@@ -1,4 +1,5 @@
 // src/pages/DashboardAgencePage.tsx
+
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { collection, query, where, Timestamp, getDocs } from 'firebase/firestore';
@@ -13,7 +14,9 @@ import {
   ChannelsChart,
   DestinationsChart,
   TopTrajetsCard,
-  NextDepartureCard
+  NextDepartureCard,
+  ActivityMetricCard,
+  ChannelDonutCard,
 } from '@/modules/agence/dashboard/components';
 import { CashSummaryCard } from '@/modules/compagnie/cash/CashSummaryCard';
 import { routePermissions } from '@/constants/routePermissions';
@@ -25,7 +28,7 @@ import {
   ActionButton,
   typography,
 } from '@/ui';
-import { Ticket, DollarSign, Monitor, Store, FileDown } from 'lucide-react';
+import { Ticket, DollarSign, Monitor, Store, FileDown, AlertTriangle, Package } from 'lucide-react';
 import { useFormatCurrency } from '@/shared/currency/CurrencyContext';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -50,9 +53,8 @@ function rangeToAgencyKeys(startDate: Date, endDate: Date, ianaTimezone: string)
   };
 }
 
-/* ===================== Types & helpers ===================== */
+/* ===================== Types ===================== */
 type DailyStat = { date: string; reservations: number; revenue: number };
-type DestinationStat = { name: string; count: number };
 type ChannelStat = { name: string; value: number };
 type TopRoute = { id: string; name: string; count: number; revenue: number };
 type DashboardStats = {
@@ -62,10 +64,13 @@ type DashboardStats = {
   courierRevenue: number;
   dailyStats: DailyStat[];
   nextDeparture: string;
-  destinations: DestinationStat[];
+  destinations: { name: string; count: number }[];
   channels: ChannelStat[];
   topRoutes: TopRoute[];
 };
+type ModePeriode = 'month'|'year'|'range';
+type ChannelData = { label: string; value: number; color: string };
+
 const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
 const endOfDay   = (d: Date) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
 const startOfMonth = (y:number,m:number) => new Date(y, m, 1, 0,0,0,0);
@@ -73,7 +78,6 @@ const endOfMonth   = (y:number,m:number) => new Date(y, m+1, 0, 23,59,59,999);
 const startOfYear  = (y:number) => new Date(y, 0, 1, 0,0,0,0);
 const endOfYear    = (y:number) => new Date(y,11,31,23,59,59,999);
 const fmtDDMM = (d: Date) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
-type ModePeriode = 'month'|'year'|'range';
 
 /* ===================== Page ===================== */
 const DashboardAgencePage: React.FC = () => {
@@ -83,12 +87,6 @@ const DashboardAgencePage: React.FC = () => {
   const { id: agencyIdFromRoute } = useParams();
   const isOnline = useOnlineStatus();
   const agencyId = agencyIdFromRoute || user?.agencyId;
-  const canCloseCash = useMemo(() => {
-    const role = (user as { role?: string })?.role ?? '';
-    const roles = Array.isArray((user as { roles?: string[] })?.roles) ? (user as { roles?: string[] }).roles! : [role];
-    return [...routePermissions.guichet, ...routePermissions.escaleDashboard].some((r) => roles.includes(r));
-  }, [user]);
-
   const agencyTz = useMemo(
     () => resolveAgencyTimezone({ timezone: (user as { agencyTimezone?: string })?.agencyTimezone }),
     [user]
@@ -123,7 +121,6 @@ const DashboardAgencePage: React.FC = () => {
     sales: 0, totalRevenue: 0, ticketRevenue: 0, courierRevenue: 0, dailyStats: [],
     nextDeparture: '—', destinations: [], channels: [], topRoutes: []
   });
-  const [courierRevenuePeriod, setCourierRevenuePeriod] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -148,7 +145,6 @@ const DashboardAgencePage: React.FC = () => {
       const agencyStats = await getAgencyStats(companyId, agencyId, startKey, endKey, agencyTz);
 
       const dailyStats: DailyStat[] = agencyStats.dailyChartData.map((p) => {
-        // p.date est soit YYYY-MM-DD soit YYYY-MM-DDThh:00 → on formate en DD/MM pour l'affichage local
         const d = typeof p.date === "string" && p.date.includes("T") ? p.date.split("T")[0] : p.date;
         const [y, m, day] = d.split("-").map(Number);
         const dateObj = new Date(y, (m || 1) - 1, day || 1);
@@ -171,7 +167,6 @@ const DashboardAgencePage: React.FC = () => {
         ticketRevenue: agencyStats.totalRevenue,
         courierRevenue: prev.courierRevenue,
         dailyStats,
-        // On gardera nextDeparture / destinations / topRoutes tels quels, mis à jour par d'autres flux si nécessaire
         nextDeparture: prev.nextDeparture,
         destinations: prev.destinations,
         channels: channelData,
@@ -212,10 +207,8 @@ const DashboardAgencePage: React.FC = () => {
           sum += Number(s.transportFee ?? 0) + Number(s.insuranceAmount ?? 0);
         }
       });
-      setCourierRevenuePeriod(sum);
       setStats((prev) => ({ ...prev, courierRevenue: sum }));
     }).catch(() => {
-      setCourierRevenuePeriod(0);
       setStats((prev) => ({ ...prev, courierRevenue: 0 }));
     });
   }, [user?.companyId, user?.agencyId, agencyIdFromRoute, dateRange, agencyTz]);
@@ -225,7 +218,7 @@ const DashboardAgencePage: React.FC = () => {
     return () => { if (unsubscribeRef.current) unsubscribeRef.current?.(); };
   }, [fetchStats, dateRange, reloadKey]);
 
-  // Finance unifiée : live / cash / validated (même période que le dashboard)
+  // Finance unifiée
   useEffect(() => {
     const companyId = user?.companyId;
     const agencyId = agencyIdFromRoute || user?.agencyId;
@@ -258,6 +251,30 @@ const DashboardAgencePage: React.FC = () => {
     const a = document.createElement('a'); a.href=url; a.download='dashboard_reservations.csv'; a.click(); URL.revokeObjectURL(url);
   };
 
+  // Données pour les graphiques modernes
+  const totalSales = stats.ticketRevenue + stats.courierRevenue;
+  const guichetSales = stats.channels.find(c => c.name === 'Guichet')?.value ?? 0;
+  const onlineSales = stats.channels.find(c => c.name === 'En ligne')?.value ?? 0;
+
+  const chartData = stats.dailyStats.map(d => ({
+    label: d.date,
+    value: d.revenue,
+    color: theme.colors.primary,
+  }));
+
+  const channelData: ChannelData[] = [
+    { label: 'Guichet', value: guichetSales, color: '#EA580C' },
+    { label: 'En ligne', value: onlineSales, color: '#3B82F6' },
+    { label: 'Courrier', value: stats.courierRevenue, color: '#8B5CF6' },
+  ];
+
+  // Alertes
+  const alerts: { id: string; title: string; detail: string; tone: 'warning' | 'critical' | 'neutral' }[] = [];
+
+  if (stats.sales === 0 && !isLoading) {
+    alerts.push({ id: 'zero-sales', title: 'Aucune vente aujourd\'hui', detail: 'Aucun billet vendu pour le moment.', tone: 'warning' });
+  }
+
   return (
     <div className="min-h-screen" style={{ backgroundColor: theme.colors.background }}>
       <StandardLayoutWrapper>
@@ -268,80 +285,167 @@ const DashboardAgencePage: React.FC = () => {
           <PageErrorState message={loadError} onRetry={() => setReloadKey((v) => v + 1)} />
         )}
 
-        <PageHeader
-          title="Tableau de bord • Réservations"
-          subtitle={`${user?.agencyName} • Période ${dateRange[0].toLocaleDateString()} → ${dateRange[1].toLocaleDateString()}`}
-          icon={Ticket}
-          primaryColorVar={theme.colors.primary}
-          right={
-            <ActionButton variant="secondary" onClick={exportCSV}>
-              <FileDown className="h-4 w-4" /> Exporter
-            </ActionButton>
-          }
-        />
+        {/* ===== EN-TÊTE ===== */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">📊 Tableau de bord</h1>
+            <p className="text-sm text-gray-500 mt-1">
+              {user?.agencyName} · {dateRange[0].toLocaleDateString()} → {dateRange[1].toLocaleDateString()}
+            </p>
+          </div>
+          <ActionButton variant="secondary" onClick={exportCSV} size="sm">
+            <FileDown className="h-4 w-4 mr-2" /> Exporter
+          </ActionButton>
+        </div>
 
-        <SectionCard title="Filtres période">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 text-sm">
+        {/* ===== FILTRES PÉRIODE ===== */}
+        <SectionCard title="Filtres période" className="mb-6">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1.5 text-sm">
                 <input type="radio" name="mode" checked={mode==='month'} onChange={()=>setMode('month')} /> Mois
               </label>
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex items-center gap-1.5 text-sm">
                 <input type="radio" name="mode" checked={mode==='year'} onChange={()=>setMode('year')} /> Année
               </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="radio" name="mode" checked={mode==='range'} onChange={()=>setMode('range')} /> Période personnalisée
+              <label className="flex items-center gap-1.5 text-sm">
+                <input type="radio" name="mode" checked={mode==='range'} onChange={()=>setMode('range')} /> Période
               </label>
             </div>
 
-            {mode==='month' && (
+            {mode === 'month' && (
               <div className="flex items-center gap-2">
-                <select className="border rounded-lg px-3 py-2" value={mois} onChange={e=>setMois(Number(e.target.value))}>
-                  {Array.from({length:12}).map((_,i)=>
-                    <option key={i} value={i}>
-                      {new Date(2000,i,1).toLocaleString('fr-FR',{month:'long'})}
-                    </option>
-                  )}
+                <select className="border rounded-lg px-3 py-2 text-sm" value={mois} onChange={e=>setMois(Number(e.target.value))}>
+                  {Array.from({length:12}).map((_,i)=>(
+                    <option key={i} value={i}>{new Date(2000,i,1).toLocaleString('fr-FR',{month:'long'})}</option>
+                  ))}
                 </select>
-                <input className="border rounded-lg px-3 py-2 w-28" type="number" value={annee} onChange={e=>setAnnee(Number(e.target.value))} />
+                <input className="border rounded-lg px-3 py-2 w-24 text-sm" type="number" value={annee} onChange={e=>setAnnee(Number(e.target.value))} />
               </div>
             )}
-
-            {mode==='year' && (
-              <div className="flex items-center gap-2">
-                <input className="border rounded-lg px-3 py-2 w-28" type="number" value={annee} onChange={e=>setAnnee(Number(e.target.value))} />
-              </div>
+            {mode === 'year' && (
+              <input className="border rounded-lg px-3 py-2 w-24 text-sm" type="number" value={annee} onChange={e=>setAnnee(Number(e.target.value))} />
             )}
-
-            {mode==='range' && (
+            {mode === 'range' && (
               <div className="flex items-center gap-2">
-                <input type="date" className="border rounded-lg px-3 py-2" value={rangeStart} onChange={e=>setRangeStart(e.target.value)} />
-                <span className="text-gray-500">→</span>
-                <input type="date" className="border rounded-lg px-3 py-2" value={rangeEnd} onChange={e=>setRangeEnd(e.target.value)} />
+                <input type="date" className="border rounded-lg px-3 py-2 text-sm" value={rangeStart} onChange={e=>setRangeStart(e.target.value)} />
+                <span className="text-gray-400">→</span>
+                <input type="date" className="border rounded-lg px-3 py-2 text-sm" value={rangeEnd} onChange={e=>setRangeEnd(e.target.value)} />
               </div>
             )}
           </div>
         </SectionCard>
 
-        <div className="mt-2 mb-6 space-y-2 text-xs text-gray-600 dark:text-gray-400">
-          <p>
-            <span className="font-semibold">Activité commerciale</span> — ventes guichet et en ligne (billets payés,
-            période dans le fuseau agence) et colis pris en compte dans le chiffre d&apos;activité.
-          </p>
-          <p>
-            <span className="font-semibold">Trésorerie (ledger)</span> — liquidité réelle et mouvements comptabilisés
-            (blocs ci-dessous). Ne pas confondre avec l&apos;activité ventes.
-          </p>
-          <p>La carte caisse affiche le solde espèces (ledger) et l&apos;historique opérationnel.</p>
+        {/* ===== ALERTES ===== */}
+        {alerts.length > 0 && (
+          <div className="space-y-2 mb-6">
+            {alerts.map((alert) => (
+              <div
+                key={alert.id}
+                className={`flex items-start gap-3 rounded-xl border p-3 ${
+                  alert.tone === 'warning'
+                    ? 'border-amber-200 bg-amber-50'
+                    : alert.tone === 'critical'
+                    ? 'border-red-200 bg-red-50'
+                    : 'border-blue-200 bg-blue-50'
+                }`}
+              >
+                <AlertTriangle className={`h-5 w-5 shrink-0 mt-0.5 ${
+                  alert.tone === 'warning' ? 'text-amber-500'
+                  : alert.tone === 'critical' ? 'text-red-500'
+                  : 'text-blue-500'
+                }`} />
+                <div>
+                  <div className="text-sm font-medium text-gray-900">{alert.title}</div>
+                  <div className="text-sm text-gray-600">{alert.detail}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ===== KPI PRINCIPAUX AVEC CERCLES ===== */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <ActivityMetricCard
+            label="Ventes totales"
+            value={totalSales}
+            icon={<Ticket className="h-5 w-5" />}
+            color={theme.colors.primary}
+            progress={totalSales > 0 ? 100 : 0}
+            subtitle={`${stats.sales} billets vendus`}
+          />
+          <ActivityMetricCard
+            label="Guichet"
+            value={guichetSales}
+            icon={<Store className="h-5 w-5" />}
+            color="#EA580C"
+            progress={totalSales > 0 ? (guichetSales / totalSales) * 100 : 0}
+            subtitle={`${guichetSales} FCFA`}
+          />
+          <ActivityMetricCard
+            label="En ligne"
+            value={onlineSales}
+            icon={<Monitor className="h-5 w-5" />}
+            color="#3B82F6"
+            progress={totalSales > 0 ? (onlineSales / totalSales) * 100 : 0}
+            subtitle={`${onlineSales} FCFA`}
+          />
+          <ActivityMetricCard
+            label="Courrier"
+            value={stats.courierRevenue}
+            icon={<Package className="h-5 w-5" />}
+            color="#8B5CF6"
+            progress={stats.courierRevenue > 0 ? 100 : 0}
+            subtitle={`${stats.courierRevenue} FCFA`}
+          />
         </div>
 
+        {/* ===== GRAPHIQUES MODERNES ===== */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+          {/* Évolution en barres */}
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <div className="text-sm font-medium text-gray-700">Évolution des ventes</div>
+                <div className="text-xs text-gray-400">{mode === 'month' ? 'Ce mois' : mode === 'year' ? 'Cette année' : 'Période'}</div>
+              </div>
+              <span className="text-lg font-bold text-gray-900">{money(totalSales)}</span>
+            </div>
+            {isLoading ? (
+              <div className="flex items-center justify-center h-24 text-gray-400 text-sm">Chargement...</div>
+            ) : chartData.length === 0 ? (
+              <div className="flex items-center justify-center h-24 text-gray-400 text-sm">Aucune donnée</div>
+            ) : (
+          <div className="flex h-20 items-end gap-2">
+            {chartData.map((item) => (
+              <div key={item.label} className="flex flex-1 flex-col items-center gap-1">
+               <div
+                  className="w-full rounded-t-lg bg-orange-500"
+                  style={{ height: `${Math.max(8, item.value)}%` }}
+                  title={`${item.label}: ${item.value}`}
+                />
+                <span className="text-[10px] text-slate-500">{item.label}</span>
+               </div>
+             ))}
+           </div>
+            )}
+          </div>
+
+          {/* Donut de répartition */}
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+            <div className="text-sm font-medium text-gray-700 mb-4">Répartition des ventes</div>
+            <ChannelDonutCard channels={channelData} totalLabel="Total ventes" />
+          </div>
+        </div>
+
+        {/* ===== CARTE CAISSE ===== */}
         {agencyId && user?.companyId && (
           <div className="mb-6">
             <CashSummaryCard
               companyId={user.companyId}
               locationId={agencyId}
               locationType="agence"
-              canClose={canCloseCash}
+              canClose={false}
               createdBy={user?.uid ?? ''}
               formatCurrency={money}
               ianaTimezone={agencyTz}
@@ -349,119 +453,30 @@ const DashboardAgencePage: React.FC = () => {
           </div>
         )}
 
-        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">1 — Argent réel (soldes accounts)</div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-          <div className="rounded-lg border-2 border-slate-300 bg-slate-50/90 dark:bg-slate-900/50 dark:border-slate-600 p-4">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Caisse espèces</div>
-            <div className="text-xl font-bold mt-1 text-slate-800 dark:text-slate-100">
-              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.realMoney.cash ?? 0)}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
+        {/* ===== STATISTIQUES SUPPLÉMENTAIRES ===== */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div className="rounded-xl border border-gray-200 bg-white p-4 text-center">
+            <div className="text-2xl font-bold text-gray-900">{stats.sales}</div>
+            <div className="text-xs text-gray-500 mt-1">Billets vendus</div>
           </div>
-          <div className="rounded-lg border-2 border-slate-300 bg-slate-50/90 dark:bg-slate-900/50 dark:border-slate-600 p-4">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Mobile money</div>
-            <div className="text-xl font-bold mt-1 text-slate-800 dark:text-slate-100">
-              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.realMoney.mobileMoney ?? 0)}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
+          <div className="rounded-xl border border-gray-200 bg-white p-4 text-center">
+            <div className="text-2xl font-bold text-gray-900">{money(stats.ticketRevenue)}</div>
+            <div className="text-xs text-gray-500 mt-1">Revenus billetterie</div>
           </div>
-          <div className="rounded-lg border-2 border-slate-300 bg-slate-50/90 dark:bg-slate-900/50 dark:border-slate-600 p-4">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Dépôts validés</div>
-            <div className="text-xl font-bold mt-1 text-slate-800 dark:text-slate-100">
-              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.realMoney.bank ?? 0)}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
+          <div className="rounded-xl border border-gray-200 bg-white p-4 text-center">
+            <div className="text-2xl font-bold text-gray-900">{money(stats.courierRevenue)}</div>
+            <div className="text-xs text-gray-500 mt-1">Revenus courrier</div>
           </div>
-          <div className="rounded-lg border-2 border-slate-300 bg-slate-50/90 dark:bg-slate-900/50 dark:border-slate-600 p-4">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Liquidité totale</div>
-            <div className="text-xl font-bold mt-1 text-slate-800 dark:text-slate-100">
-              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.realMoney.total ?? 0)}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
-          </div>
-        </div>
-        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
-          2 — Activité (période) · ventes = {AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO} · encaissements ={" "}
-          {AGENCY_KPI_TIME.LEDGER_BAMAKO}
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-          <div className="rounded-lg border-2 border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800 p-4">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Ventes (réservations)</div>
-            <div className="text-xl font-bold mt-1" style={{ color: '#2563eb' }}>
-              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.activity.sales.amountHint ?? 0)}
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              {unifiedFinanceLoading ? '—' : `${unifiedFinance?.activity.sales.reservationCount ?? 0} réservation(s) · ${unifiedFinance?.activity.sales.tickets ?? 0} place(s)`}
-            </p>
-            <p className="text-[11px] text-slate-500 mt-1 font-medium">{AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}</p>
-          </div>
-          <div className="rounded-lg border-2 border-green-200 bg-green-50/50 dark:bg-green-900/20 dark:border-green-800 p-4">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">Encaissements</div>
-            <div className="text-xl font-bold mt-1" style={{ color: '#16a34a' }}>
-              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.activity.encaissements.total ?? 0)}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1 font-medium">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
-          </div>
-          <div className="rounded-lg border-2 border-violet-200 bg-violet-50/50 dark:bg-violet-900/20 dark:border-violet-800 p-4">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300">CA net (ledger)</div>
-            <div className="text-xl font-bold mt-1" style={{ color: '#7c3aed' }}>
-              {unifiedFinanceLoading ? '—' : money(unifiedFinance?.activity.caNet ?? 0)}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1 font-medium">{AGENCY_KPI_TIME.LEDGER_BAMAKO}</p>
+          <div className="rounded-xl border border-gray-200 bg-white p-4 text-center">
+            <div className="text-2xl font-bold text-gray-900">{money(totalSales)}</div>
+            <div className="text-xs text-gray-500 mt-1">Revenus totaux</div>
           </div>
         </div>
 
-        <div className="mb-3 rounded-lg border border-amber-100 bg-amber-50/50 px-3 py-2 text-xs text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-100">
-          Grille ci-dessous : <strong>terrain uniquement</strong> — ne pas comparer aux montants du ledger sans lire les blocs 1–2.
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <UIMetricCard
-            label="Billets vendus"
-            value={isLoading ? "—" : stats.sales}
-            icon={Ticket}
-            valueColorVar={theme.colors.secondary}
-            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
-          />
-          <UIMetricCard
-            label="Revenus billets (réservations)"
-            value={isLoading ? "—" : money(stats.ticketRevenue)}
-            icon={DollarSign}
-            valueColorVar={theme.colors.primary}
-            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
-          />
-          <UIMetricCard
-            label="Revenus courrier (colis)"
-            value={isLoading ? "—" : money(stats.courierRevenue)}
-            icon={DollarSign}
-            valueColorVar={theme.colors.secondary}
-            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
-          />
-          <UIMetricCard
-            label="Revenus totaux (terrain)"
-            value={isLoading ? "—" : money(stats.ticketRevenue + stats.courierRevenue)}
-            icon={DollarSign}
-            valueColorVar={theme.colors.primary}
-            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
-          />
-          <UIMetricCard
-            label="En ligne"
-            value={isLoading ? "—" : (stats.channels.find(c => c.name==='En ligne')?.value ?? 0)}
-            icon={Monitor}
-            valueColorVar={theme.colors.primary}
-            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
-          />
-          <UIMetricCard
-            label="Au guichet"
-            value={isLoading ? "—" : (stats.channels.find(c => c.name==='Guichet')?.value ?? 0)}
-            icon={Store}
-            valueColorVar={theme.colors.secondary}
-            hint={AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
-          />
-        </div>
-
+        {/* ===== GRAPHIQUES EXISTANTS ===== */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2">
-            <SectionCard title="Revenus">
+            <SectionCard title="Revenus (détail)">
               <RevenueChart data={stats.dailyStats} isLoading={isLoading} />
             </SectionCard>
           </div>
@@ -493,6 +508,10 @@ const DashboardAgencePage: React.FC = () => {
           </SectionCard>
         </div>
 
+        {/* ===== FOOTER ===== */}
+        <div className="mt-6 text-xs text-gray-400 text-center border-t border-gray-100 pt-4">
+          Données actualisées en temps réel · {AGENCY_KPI_TIME.CREATION_RESERVATION_BAMAKO}
+        </div>
       </StandardLayoutWrapper>
     </div>
   );

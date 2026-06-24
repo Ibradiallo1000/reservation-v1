@@ -28,11 +28,17 @@ import {
 import { markOriginDeparture } from "@/modules/compagnie/tripInstances/tripProgressService";
 import { courierSessionsRef } from "@/modules/logistics/domain/courierSessionPaths";
 import { shipmentsRef } from "@/modules/logistics/domain/firestorePaths";
+import {
+  getAgencyLedgerPaymentReceivedTotalForPeriod,
+  getAgencyCashPosition,
+} from "@/modules/agence/comptabilite/agencyCashAuditService";
+import { getLedgerBalances } from "@/modules/compagnie/treasury/financialTransactions";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const LONG_SESSION_THRESHOLD_MS = 8 * 60 * 60 * 1000;
+// ✅ Passage à 24h pour les alertes de session longue
+const LONG_SESSION_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 const DEPARTURE_LATE_THRESHOLD_MINUTES = 15;
 const WEAK_FILL_RATE_THRESHOLD = 0.5;
 
@@ -257,7 +263,7 @@ function toReservationRow(raw: Record<string, unknown>): ReservationRow {
       1
     ),
     createdAt: normalized.reservation.createdAt ?? toDateOrNull(raw.createdAt),
-    confirmed: sold,
+    confirmed: isConfirmedStatus || isPaidStatus,
     cancelled,
     online,
     onlinePaid: onlineValid,
@@ -448,8 +454,9 @@ function getSessionDrivenLiveActivity(sources: RawLiveSources): {
 function getTripReservationAggregates(reservationRows: ReservationRow[]): Map<string, TripReservationAggregate> {
   const perTrip = new Map<string, TripReservationAggregate>();
   for (const reservation of reservationRows) {
-    // ✅ On inclut toutes les réservations (cancelled ou non)
+    // ✅ On inclut toutes les réservations confirmées ou payées (aligné comptable)
     if (!reservation.tripInstanceId || reservation.tripInstanceId === "") continue;
+    if (!reservation.confirmed && !reservation.onlinePaid) continue;
     const current = perTrip.get(reservation.tripInstanceId) ?? {
       reservations: 0,
       reservedSeats: 0,
@@ -598,6 +605,7 @@ function getAlerts(params: {
 }): AgencyAlertItem[] {
   const alerts: AgencyAlertItem[] = [];
 
+  // ✅ Seuil passé à 24h
   for (const post of params.activePosts) {
     const startedAt =
       toDateOrNull(post.startAt) ??
@@ -607,7 +615,7 @@ function getAlerts(params: {
     if (params.now.getTime() - startedAt.getTime() <= LONG_SESSION_THRESHOLD_MS) continue;
     alerts.push({
       id: `long-session-${post.id}`,
-      title: "Poste actif depuis plus de 8 h",
+      title: "⚠️ Poste actif depuis plus de 24h",
       detail: `${post.label} est ouvert depuis ${post.durationLabel}. Risque de perte de ventes ou de blocage caisse.`,
       tone: "critical",
     });
@@ -625,7 +633,7 @@ function getAlerts(params: {
   for (const trip of params.liveTrips.filter((row) => row.isLate).slice(0, 3)) {
     alerts.push({
       id: `late-trip-${trip.id}`,
-      title: "Départ en retard",
+      title: "🚨 Départ en retard",
       detail: `${trip.routeLabel} devait partir à ${trip.departureTime}. Validez ou traitez le retard maintenant.`,
       tone: "critical",
     });
@@ -634,7 +642,7 @@ function getAlerts(params: {
   if (params.pendingExpenses.length > 0) {
     alerts.push({
       id: "pending-expenses",
-      title: "Validation dépenses à traiter",
+      title: "💰 Validation dépenses à traiter",
       detail: `${params.pendingExpenses.length} dépense(s) attendent encore votre décision.`,
       tone: "warning",
     });
@@ -690,21 +698,28 @@ function getActivityFeed(params: {
   liveTrips: AgencyLiveTripItem[];
   now: Date;
 }): AgencyActivityFeedItem[] {
+  // ✅ Afficher toutes les réservations (même annulées) avec un indicateur
   const reservationEvents = params.reservationRows
-    .filter((reservation) => reservation.createdAt != null && !reservation.cancelled)
+    .filter((reservation) => reservation.createdAt != null)
     .map<AgencyActivityFeedItem>((reservation) => ({
       id: `reservation-${reservation.id}`,
       kind: "ticket",
-      title: reservation.online ? "Réservation en ligne" : "Billet vendu au guichet",
-      detail: `${reservation.seats} place(s) • ${reservation.amount.toLocaleString("fr-FR")} FCFA`,
+      title: reservation.cancelled
+        ? `❌ ${reservation.online ? "Réservation en ligne" : "Billet guichet"} annulé`
+        : reservation.online
+        ? "✅ Réservation en ligne"
+        : "🎫 Billet vendu au guichet",
+      detail: `${reservation.seats} place(s) • ${reservation.amount.toLocaleString("fr-FR")} FCFA${
+        reservation.cancelled ? " • ANNULÉ" : ""
+      }`,
       occurredAt: reservation.createdAt,
-      tone: "neutral",
+      tone: reservation.cancelled ? "warning" : "neutral",
     }));
 
   const shipmentEvents = params.shipmentsToday.map<AgencyActivityFeedItem>((shipment) => ({
     id: `shipment-${shipment.id}`,
     kind: "parcel",
-    title: "Colis enregistré",
+    title: "📦 Colis enregistré",
     detail: `${String(shipment.nature ?? "Colis")} • ${shipment.amount.toLocaleString("fr-FR")} FCFA`,
     occurredAt: shipment.createdDate,
     tone: "neutral",
@@ -715,7 +730,7 @@ function getActivityFeed(params: {
     .map<AgencyActivityFeedItem>((trip) => ({
       id: `delay-${trip.id}`,
       kind: "delay",
-      title: "Retard détecté",
+      title: "⏰ Retard détecté",
       detail: `${trip.routeLabel} • départ prévu ${trip.departureTime}`,
       occurredAt: params.now,
       tone: "warning",
@@ -727,7 +742,7 @@ function getActivityFeed(params: {
     .map<AgencyActivityFeedItem>((trip) => ({
       id: `departure-${trip.id}`,
       kind: "departure",
-      title: "Départ prêt",
+      title: "🚌 Départ prêt",
       detail: `${trip.routeLabel} • ${trip.departureTime}`,
       occurredAt: params.now,
       tone: "neutral",
@@ -778,6 +793,12 @@ export function useAgencyActionCockpit() {
   const [destinationTrips, setDestinationTrips] = useState<TripInstanceDocWithId[]>([]);
   const [pendingExpenses, setPendingExpenses] = useState<AgencyPendingExpenseItem[]>([]);
 
+  // ✅ NOUVEAU : Alignement avec le comptable
+  const [todayLedgerEncaissements, setTodayLedgerEncaissements] = useState(0);
+  const [cashBalance, setCashBalance] = useState<number | null>(null);
+  const [cashPositionCapped, setCashPositionCapped] = useState<boolean>(false);
+  const [accountsVsLedgerVariance, setAccountsVsLedgerVariance] = useState<number>(0);
+
   const [loadingShifts, setLoadingShifts] = useState(true);
   const [loadingCourierSessions, setLoadingCourierSessions] = useState(true);
   const [loadingReservations, setLoadingReservations] = useState(true);
@@ -795,6 +816,77 @@ export function useAgencyActionCockpit() {
     }, 60000);
     return () => window.clearInterval(intervalId);
   }, []);
+
+  // ✅ CORRIGÉ : Chargement des données comptables avec Promise.allSettled
+  useEffect(() => {
+    if (!companyId || !agencyId) {
+      setTodayLedgerEncaissements(0);
+      setCashBalance(null);
+      setCashPositionCapped(false);
+      setAccountsVsLedgerVariance(0);
+      return;
+    }
+
+    const loadFinancialData = async () => {
+      try {
+        const dayStartBm = getStartOfDayForDate(todayKey, agencyTimezone);
+        const dayEndBm = getEndOfDayForDate(todayKey, agencyTimezone);
+        const dayEndExclusive = new Date(dayEndBm.getTime() + 1);
+
+        // ✅ Utiliser Promise.allSettled pour éviter les erreurs
+        const results = await Promise.allSettled([
+          getAgencyLedgerPaymentReceivedTotalForPeriod(companyId, agencyId, dayStartBm, dayEndExclusive),
+          getAgencyCashPosition(companyId, agencyId),
+          getLedgerBalances(companyId, agencyId),
+        ]);
+
+        // ✅ Gérer chaque résultat individuellement
+        if (results[0].status === 'fulfilled') {
+          setTodayLedgerEncaissements(results[0].value.total);
+        } else {
+          console.warn("[useAgencyActionCockpit] Impossible de charger les encaissements:", results[0].reason);
+          setTodayLedgerEncaissements(0);
+        }
+
+        if (results[1].status === 'fulfilled') {
+          const cashPos = results[1].value;
+          setCashBalance(cashPos.soldeCash);
+          setCashPositionCapped(cashPos.capped || false);
+        } else {
+          console.warn("[useAgencyActionCockpit] Impossible de charger la position caisse:", results[1].reason);
+          setCashBalance(null);
+          setCashPositionCapped(false);
+        }
+
+        if (results[2].status === 'fulfilled') {
+          const balances = results[2].value;
+          const currentCash = results[1].status === 'fulfilled' ? results[1].value.soldeCash : 0;
+          const variance = balances.cash - currentCash;
+          setAccountsVsLedgerVariance(Math.abs(variance) > 0.01 ? variance : 0);
+        } else {
+          console.warn("[useAgencyActionCockpit] Impossible de charger les soldes ledger:", results[2].reason);
+          setAccountsVsLedgerVariance(0);
+        }
+      } catch (error) {
+        // ✅ Ne pas afficher d'erreur si c'est une erreur de permission
+        if (error?.code === 'permission-denied') {
+          console.warn("[useAgencyActionCockpit] Permission refusée pour les données comptables, ignorée.");
+        } else {
+          console.warn("[useAgencyActionCockpit] Erreur chargement données comptables:", error);
+        }
+        setTodayLedgerEncaissements(0);
+        setCashBalance(null);
+        setCashPositionCapped(false);
+        setAccountsVsLedgerVariance(0);
+      }
+    };
+
+    void loadFinancialData();
+
+    // Rafraîchissement toutes les 5 minutes
+    const intervalId = setInterval(() => void loadFinancialData(), 300000);
+    return () => clearInterval(intervalId);
+  }, [companyId, agencyId, todayKey, agencyTimezone]);
 
   useEffect(() => {
     if (!companyId || !agencyId) {
@@ -1071,18 +1163,19 @@ export function useAgencyActionCockpit() {
     [destinationTrips, todayKey]
   );
 
+  // ✅ CORRIGÉ : Utilisation de confirmed || onlinePaid (aligné comptable)
   const averageTicketPrice = useMemo(() => {
-    // ✅ On utilise TOUTES les réservations (pas de filtre sold)
-    const soldReservations = reservationRows.filter((reservation) => reservation.sold);
-    const totalSeats = soldReservations.reduce((sum, reservation) => sum + reservation.seats, 0);
-    const totalAmount = soldReservations.reduce((sum, reservation) => sum + reservation.amount, 0);
+    const confirmedReservations = reservationRows.filter(
+      (reservation) => reservation.confirmed || reservation.onlinePaid
+    );
+    const totalSeats = confirmedReservations.reduce((sum, reservation) => sum + reservation.seats, 0);
+    const totalAmount = confirmedReservations.reduce((sum, reservation) => sum + reservation.amount, 0);
     if (totalSeats <= 0) return 0;
     return totalAmount / totalSeats;
   }, [reservationRows]);
 
   const now = useMemo(() => new Date(), [timeTick]);
 
-  // ✅ PLUS DE FILTRE sold DESTRUCTEUR
   const liveActivity = useMemo(
     () =>
       getSessionDrivenLiveActivity({
@@ -1096,9 +1189,9 @@ export function useAgencyActionCockpit() {
     [activeShifts, activeCourierSessions, reservationRows, activeGuichetReservationRows, shipmentsToday, now]
   );
 
-  // ✅ On garde le filtre sold pour les agrégats de trajets (cohérence métier)
+  // ✅ CORRIGÉ : Utilisation de confirmed || onlinePaid (aligné comptable)
   const reservationAggregates = useMemo(
-    () => getTripReservationAggregates(reservationRows.filter((reservation) => reservation.sold)),
+    () => getTripReservationAggregates(reservationRows),
     [reservationRows]
   );
 
@@ -1115,6 +1208,7 @@ export function useAgencyActionCockpit() {
     [tripsToday, destinationTripsToday, reservationAggregates, averageTicketPrice, agencyTimezone, now]
   );
 
+  // ✅ AMÉLIORÉ : Ajout des données comptables
   const summary = useMemo(() => {
     const guichetSales = liveActivity.guichet.amount;
     const onlineSales = liveActivity.online.amount;
@@ -1124,8 +1218,22 @@ export function useAgencyActionCockpit() {
       onlineSales,
       totalSales: guichetSales + onlineSales,
       expectedCash: guichetSales + parcelSales,
+      // ✅ Données comptables alignées
+      todayLedgerEncaissements,
+      cashBalance,
+      cashPositionCapped,
+      accountsVsLedgerVariance,
+      varianceSign: accountsVsLedgerVariance > 0 ? "excédent" : "manque",
     };
-  }, [liveActivity.guichet.amount, liveActivity.online.amount, shipmentsToday]);
+  }, [
+    liveActivity.guichet.amount,
+    liveActivity.online.amount,
+    shipmentsToday,
+    todayLedgerEncaissements,
+    cashBalance,
+    cashPositionCapped,
+    accountsVsLedgerVariance,
+  ]);
 
   const alerts = useMemo(
     () =>
@@ -1148,10 +1256,11 @@ export function useAgencyActionCockpit() {
     [tripInsights.weakTrips, tripInsights.weeklyLeakEstimate]
   );
 
+  // ✅ CORRIGÉ : Toutes les réservations (avec indicateur d'annulation)
   const activityFeed = useMemo(
     () =>
       getActivityFeed({
-        reservationRows: reservationRows.filter((reservation) => reservation.sold),
+        reservationRows,
         shipmentsToday,
         liveTrips: tripInsights.liveTrips,
         now,

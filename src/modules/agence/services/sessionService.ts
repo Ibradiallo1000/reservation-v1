@@ -651,18 +651,22 @@ export async function validateSessionByAccountant(params: {
   const cashAccountRef = doc(db, `companies/${params.companyId}/accounts/agency_${params.agencyId}_cash`);
   const cashLedgerRef = doc(cashAccountRef, 'ledger', `session_${params.shiftId}_accountant_validation`);
 
+  // ✅ Référence au compte pending_cash pour déduction
+  const pendingCashRef = doc(db, `companies/${params.companyId}/accounts/agency_${params.agencyId}_pending_cash`);
+
   type AccountantTxOutcome = {
     computedDifference: number;
     accountantSessionLog: SessionAccountantHistoryLog | null;
   };
 
   const { computedDifference, accountantSessionLog } = await runTransaction(db, async (tx): Promise<AccountantTxOutcome> => {
-    const [sSnap, rSnap, agencySnap, cashAccountSnap, cashLedgerSnap] = await Promise.all([
+    const [sSnap, rSnap, agencySnap, cashAccountSnap, cashLedgerSnap, pendingSnap] = await Promise.all([
       tx.get(shiftRef),
       tx.get(reportRef),
       tx.get(agencyRef),
       tx.get(cashAccountRef),
       tx.get(cashLedgerRef),
+      tx.get(pendingCashRef),
     ]);
     if (!sSnap.exists()) throw new Error('Poste introuvable.');
     if (!rSnap.exists()) throw new Error('Rapport introuvable.');
@@ -698,6 +702,15 @@ export async function validateSessionByAccountant(params: {
       ? Math.max(0, expectedCash - params.receivedCashAmount)
       : 0;
     const now = Timestamp.now();
+
+    // ✅ CORRECTION : Déduire le montant de pending_cash
+    const currentPending = pendingSnap.exists() ? Number(pendingSnap.data()?.balance ?? 0) : 0;
+    const newPendingBalance = Math.max(0, currentPending - params.receivedCashAmount);
+
+    tx.update(pendingCashRef, {
+      balance: newPendingBalance,
+      updatedAt: serverTimestamp(),
+    });
 
     const validationAudit: ValidationAudit = {
       validatedBy: params.validatedBy,

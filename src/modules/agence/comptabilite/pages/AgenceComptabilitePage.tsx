@@ -43,6 +43,8 @@ import { useAgencyDarkMode } from '@/modules/agence/shared';
 import AgencyTreasuryNewOperationPage from '@/modules/agence/treasury/pages/AgencyTreasuryNewOperationPage';
 import AgencyTreasuryTransferPage from '@/modules/agence/treasury/pages/AgencyTreasuryTransferPage';
 import AgencyTreasuryNewPayablePage from '@/modules/agence/treasury/pages/AgencyTreasuryNewPayablePage';
+// ✅ NOUVEAU : Import de la page des payables
+import AgencyTreasuryPayablesListPage from '@/modules/agence/treasury/pages/AgencyTreasuryPayablesListPage';
 import { getAgencyStats } from '@/modules/compagnie/networkStats/networkStatsService';
 import { getUnifiedCommercialActivity } from '@/modules/compagnie/networkStats/activityCore';
 import { getCashTransactionsByLocation } from '@/modules/compagnie/cash/cashService';
@@ -213,7 +215,7 @@ function aggregateCashDaysByDate(rows: CashDay[]): CashDay[] {
     .sort((a, b) => (a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : 0));
 }
 
-type TreasuryModalView = 'new-operation' | 'transfer' | 'new-payable' | null;
+type TreasuryModalView = 'new-operation' | 'transfer' | 'new-payable' | 'payables' | null;
 
 /* ============================================================================
    SECTION : TYPES RÉCONCILIATION
@@ -3788,6 +3790,15 @@ const AgenceComptabilitePage: React.FC = () => {
                       >
                         Paiement fournisseur
                       </ActionButton>
+                      {/* ✅ NOUVEAU : Bouton Payables */}
+                      <ActionButton
+                        variant="secondary"
+                        onClick={() => setTreasuryModalView('payables')}
+                        className="whitespace-nowrap"
+                      >
+                        <CreditCard className="h-4 w-4 mr-2" />
+                        Payables
+                      </ActionButton>
                     </>
                   )}
                   <ActionButton
@@ -4294,6 +4305,7 @@ const AgenceComptabilitePage: React.FC = () => {
                   {treasuryModalView === 'new-operation' && 'Dépense caisse'}
                   {treasuryModalView === 'transfer' && 'Versement vers la compagnie'}
                   {treasuryModalView === 'new-payable' && 'Paiement fournisseur'}
+                  {treasuryModalView === 'payables' && 'Payables fournisseurs'}
                 </div>
                 <button
                   type="button"
@@ -4307,6 +4319,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 {treasuryModalView === 'new-operation' && <AgencyTreasuryNewOperationPage />}
                 {treasuryModalView === 'transfer' && <AgencyTreasuryTransferPage />}
                 {treasuryModalView === 'new-payable' && <AgencyTreasuryNewPayablePage />}
+                {treasuryModalView === 'payables' && <AgencyTreasuryPayablesListPage />}
               </div>
             </div>
           </div>

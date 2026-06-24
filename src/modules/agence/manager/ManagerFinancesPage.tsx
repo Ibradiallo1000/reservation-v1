@@ -3,7 +3,7 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
 import {
-  collection, query, where, onSnapshot, limit,
+  collection, query, where, onSnapshot, limit, getDocs,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
@@ -58,6 +58,16 @@ type ShiftReportDoc = {
   billets?: number;
   montant?: number;
   details?: Array<{ trajet?: string; billets?: number; montant?: number }>;
+};
+
+type TransferRequestLite = {
+  id: string;
+  amount: number;
+  currency: string;
+  status: string;
+  description?: string;
+  initiatedBy: string;
+  createdAt: any;
 };
 
 function getShiftReportExpectedAmount(report: Record<string, unknown>): number {
@@ -159,6 +169,11 @@ export default function ManagerFinancesPage({
   const [openIncidents, setOpenIncidents] = useState<
     Array<{ id: string; severity: string; reason: string; relatedSessionId: string; createdAtIso: string }>
   >([]);
+  
+  // ✅ NOUVEAU : Transferts en attente
+  const [pendingTransfers, setPendingTransfers] = useState<TransferRequestLite[]>([]);
+  const [busyTransferId, setBusyTransferId] = useState<string | null>(null);
+
   /** Incrémenté après validation chef / remboursement pour relire KPI période + jour. */
   const [financeKpiRefreshKey, setFinanceKpiRefreshKey] = useState(0);
 
@@ -191,6 +206,76 @@ export default function ManagerFinancesPage({
     onAgencyFinancialUpdate?.();
   }, [refreshLedgerBalancesOnly, onAgencyFinancialUpdate]);
 
+  // ✅ NOUVEAU : Chargement des transferts en attente
+  const loadPendingTransfers = useCallback(async () => {
+    if (!companyId || !agencyId) return;
+    try {
+      const transferRef = collection(db, `companies/${companyId}/transferRequests`);
+      const q = query(
+        transferRef,
+        where("agencyId", "==", agencyId),
+        where("status", "==", "pending_manager"),
+        limit(50)
+      );
+      const snap = await getDocs(q);
+      const transfers = snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      })) as TransferRequestLite[];
+      setPendingTransfers(transfers);
+    } catch (error) {
+      console.warn("[ManagerFinances] Erreur chargement transferts:", error);
+      setPendingTransfers([]);
+    }
+  }, [companyId, agencyId]);
+
+  // ✅ NOUVEAU : Valider un transfert
+  const handleApproveTransfer = useCallback(async (transferId: string) => {
+    if (!companyId || !user?.uid) return;
+    setBusyTransferId(transferId);
+    try {
+      // Importer dynamiquement pour éviter les dépendances circulaires
+      const { approveTransferRequest } = await import("@/modules/agence/treasury/transferRequestsService");
+      await approveTransferRequest({
+        companyId,
+        requestId: transferId,
+        managerId: user.uid,
+        managerRoles: [user.role],
+      });
+      toast.success("Transfert validé et exécuté.");
+      await loadPendingTransfers();
+      notifyAgencyFinancialChange();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Erreur lors de la validation du transfert.");
+    } finally {
+      setBusyTransferId(null);
+    }
+  }, [companyId, user?.uid, user?.role, loadPendingTransfers, notifyAgencyFinancialChange]);
+
+  // ✅ NOUVEAU : Refuser un transfert
+  const handleRejectTransfer = useCallback(async (transferId: string) => {
+    if (!companyId || !user?.uid) return;
+    const reason = window.prompt("Motif du refus (optionnel) :") ?? "";
+    setBusyTransferId(transferId);
+    try {
+      const { rejectTransferRequest } = await import("@/modules/agence/treasury/transferRequestsService");
+      await rejectTransferRequest({
+        companyId,
+        requestId: transferId,
+        managerId: user.uid,
+        managerRoles: [user.role],
+        reason: reason || "Refusé par le chef d'agence",
+      });
+      toast.success("Transfert refusé.");
+      await loadPendingTransfers();
+      notifyAgencyFinancialChange();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Erreur lors du refus du transfert.");
+    } finally {
+      setBusyTransferId(null);
+    }
+  }, [companyId, user?.uid, user?.role, loadPendingTransfers, notifyAgencyFinancialChange]);
+
   useEffect(() => {
     if (!companyId || !agencyId) { setLoading(false); return; }
     const unsubs: Array<() => void> = [];
@@ -218,8 +303,9 @@ export default function ManagerFinancesPage({
       }
     });
 
-    // Le journal ledger est une donnée sensible non lisible par tous les profils chef d'agence.
-    // Ne pas ouvrir de listener ici : les KPI et validations utilisent leurs sources dédiées.
+    // Chargement initial des transferts
+    void loadPendingTransfers();
+
     setLedgerRows([]);
     unsubs.push(onSnapshot(
       query(collection(db, `companies/${companyId}/agences/${agencyId}/shifts`),
@@ -268,7 +354,16 @@ export default function ManagerFinancesPage({
 
     setLoading(false);
     return () => unsubs.forEach((u) => u());
-  }, [companyId, agencyId, company]);
+  }, [companyId, agencyId, company, loadPendingTransfers]);
+
+  // Rafraîchissement périodique des transferts
+  useEffect(() => {
+    if (!companyId || !agencyId) return;
+    const interval = setInterval(() => {
+      void loadPendingTransfers();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [companyId, agencyId, loadPendingTransfers]);
 
   useEffect(() => {
     if (!companyId || !agencyId) return;
@@ -571,6 +666,72 @@ export default function ManagerFinancesPage({
       />
       )}
 
+      {/* ✅ DÉPLACÉ : Incidents ouverts en haut (priorité) */}
+      {openIncidents.length > 0 && (
+        <SectionCard title="🚨 Incidents ouverts (supervision)" icon={CheckCircle2} className="mb-4">
+          <div className="space-y-2">
+            {openIncidents.slice(0, 8).map((i) => (
+              <div
+                key={i.id}
+                className={cn(
+                  "rounded-lg border px-3 py-2 text-sm",
+                  i.severity === "critical"
+                    ? "border-red-300 bg-red-50/70 dark:border-red-700 dark:bg-red-950/20"
+                    : "border-amber-300 bg-amber-50/70 dark:border-amber-700 dark:bg-amber-950/20"
+                )}
+              >
+                <div className="font-medium text-gray-900 dark:text-white">Session {i.relatedSessionId}</div>
+                <div className="text-xs text-gray-600 dark:text-slate-400">{i.reason}</div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      {/* ✅ NOUVEAU : Transferts en attente de validation */}
+      {pendingTransfers.length > 0 && (
+        <SectionCard
+          title="Transferts en attente de validation"
+          icon={ArrowRightLeft}
+          className="mb-4 border-2 border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20"
+        >
+          <div className="space-y-2">
+            {pendingTransfers.map((t) => (
+              <div key={t.id} className="flex flex-wrap items-center justify-between rounded-lg border border-amber-200 bg-white p-3 dark:border-amber-700 dark:bg-slate-900">
+                <div>
+                  <div className="font-semibold text-gray-900 dark:text-white">
+                    {money(t.amount)} {t.currency}
+                  </div>
+                  <div className="text-sm text-gray-600 dark:text-slate-300">
+                    {t.description || "Versement vers banque compagnie"}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    Initié par: {t.initiatedBy}
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-2 sm:mt-0">
+                  <ActionButton
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => handleRejectTransfer(t.id)}
+                    disabled={busyTransferId === t.id}
+                  >
+                    {busyTransferId === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refuser"}
+                  </ActionButton>
+                  <ActionButton
+                    size="sm"
+                    onClick={() => handleApproveTransfer(t.id)}
+                    disabled={busyTransferId === t.id}
+                  >
+                    {busyTransferId === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : "Valider"}
+                  </ActionButton>
+                </div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
       {!embedded && (
       <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs text-slate-700">
         Les blocs <strong>opérationnel</strong> et <strong>comptabilité</strong> ci-dessous ne sont pas comparés entre eux (contrat
@@ -591,31 +752,6 @@ export default function ManagerFinancesPage({
             {ledgerCashFromTransactions?.capped ? " · données partielles" : ""}
           </span>
         </div>
-      )}
-
-      {embedded && (
-        <SectionCard title="Incidents ouverts (supervision)" icon={CheckCircle2} className="mb-4">
-          {openIncidents.length === 0 ? (
-            <p className="text-sm text-gray-500 dark:text-slate-400">Aucun incident ouvert.</p>
-          ) : (
-            <div className="space-y-2">
-              {openIncidents.slice(0, 8).map((i) => (
-                <div
-                  key={i.id}
-                  className={cn(
-                    "rounded-lg border px-3 py-2 text-sm",
-                    i.severity === "critical"
-                      ? "border-red-300 bg-red-50/70 dark:border-red-700 dark:bg-red-950/20"
-                      : "border-amber-300 bg-amber-50/70 dark:border-amber-700 dark:bg-amber-950/20"
-                  )}
-                >
-                  <div className="font-medium text-gray-900 dark:text-white">Session {i.relatedSessionId}</div>
-                  <div className="text-xs text-gray-600 dark:text-slate-400">{i.reason}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </SectionCard>
       )}
 
       {embedded && (

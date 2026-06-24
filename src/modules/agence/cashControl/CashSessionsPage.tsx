@@ -1,38 +1,30 @@
 /**
- * Agency cash control — list sessions, open/close (agent), validate/reject (accountant).
+ * Agency cash control — simplified for Chef d'Agence.
+ * Focus: cash balance, sessions to validate, open sessions, discrepancies.
  */
 import React, { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, ActionButton } from "@/ui";
+import { StandardLayoutWrapper, SectionCard, ActionButton, StatusBadge, EmptyState } from "@/ui";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import {
   Wallet,
-  Plus,
-  XCircle,
   CheckCircle,
   AlertTriangle,
   Clock,
-  Banknote,
-  Package,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
-  openCashSession,
-  closeCashSession,
-  validateCashSession,
-  rejectCashSession,
-  suspendCashSession,
   listCashSessions,
 } from "./cashSessionService";
 import {
-  CASH_SESSION_TYPE,
   CASH_SESSION_STATUS,
   getTotalExpected,
   getTotalCounted,
   type CashSessionDocWithId,
 } from "./cashSessionTypes";
-import { OperationalHintRow } from "@/modules/agence/components/OperationalDataHint";
-import { createChefIncident } from "@/modules/agence/manager/incidentStore";
+// ✅ Utiliser la même fonction que la page Trésorerie
+import { getAgencyTreasuryLedgerCashDisplay } from "@/modules/agence/comptabilite/agencyCashAuditService";
+import { Timestamp } from "firebase/firestore";
 
 export type CashSessionsPageProps = { embedded?: boolean };
 
@@ -42,26 +34,25 @@ export default function CashSessionsPage({ embedded = false }: CashSessionsPageP
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
   const userId = user?.uid ?? "";
-  const userRole = (user as { role?: string })?.role ?? "";
-  const isAccountant =
-    userRole === "agency_accountant" || userRole === "admin_compagnie";
-  const isChefSupervisor =
-    userRole === "chefAgence" || userRole === "superviseur" || userRole === "admin_compagnie";
 
   const [sessions, setSessions] = useState<CashSessionDocWithId[]>([]);
-  const [openSessions, setOpenSessions] = useState<CashSessionDocWithId[]>([]);
-  const [closedSessions, setClosedSessions] = useState<CashSessionDocWithId[]>([]);
+  const [cashBalance, setCashBalance] = useState<number>(0);
   const [loading, setLoading] = useState(true);
-  const [openModal, setOpenModal] = useState<"none" | "open" | "close">("none");
-  const [openingBalance, setOpeningBalance] = useState("");
-  const [countedBalance, setCountedBalance] = useState("");
-  const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState("");
-  const [rejectingId, setRejectingId] = useState<string | null>(null);
-  const [processing, setProcessing] = useState(false);
-  const [suspendingId, setSuspendingId] = useState<string | null>(null);
-  const [suspendReason, setSuspendReason] = useState("");
-  const [suspendConfirmOpen, setSuspendConfirmOpen] = useState(false);
+
+  // Fonction utilitaire pour formater un Timestamp Firestore
+  const formatTimestamp = (timestamp: Timestamp | Date | number | null | undefined): string => {
+    if (!timestamp) return '—';
+    if (timestamp instanceof Timestamp) {
+      return timestamp.toDate().toLocaleDateString('fr-FR');
+    }
+    if (timestamp instanceof Date) {
+      return timestamp.toLocaleDateString('fr-FR');
+    }
+    if (typeof timestamp === 'number') {
+      return new Date(timestamp).toLocaleDateString('fr-FR');
+    }
+    return '—';
+  };
 
   const load = async () => {
     if (!companyId || !agencyId) return;
@@ -69,10 +60,13 @@ export default function CashSessionsPage({ embedded = false }: CashSessionsPageP
     try {
       const list = await listCashSessions(companyId, agencyId, { limitCount: 100 });
       setSessions(list);
-      setOpenSessions(list.filter((s) => s.status === CASH_SESSION_STATUS.OPEN));
-      setClosedSessions(
-        list.filter((s) => s.status === CASH_SESSION_STATUS.CLOSED)
-      );
+      
+      // ✅ Charger le solde caisse avec gestion d'erreur (comme la page Trésorerie)
+      const display = await getAgencyTreasuryLedgerCashDisplay(companyId, agencyId).catch((err) => {
+        console.warn("[CashSessionsPage] Impossible de charger le solde caisse:", err);
+        return { ledgerCash: 0, mirrorCash: null };
+      });
+      setCashBalance(display?.ledgerCash ?? 0);
     } catch (e) {
       toast.error("Erreur chargement sessions caisse");
       console.error(e);
@@ -85,456 +79,136 @@ export default function CashSessionsPage({ embedded = false }: CashSessionsPageP
     load();
   }, [companyId, agencyId]);
 
-  const handleOpenSession = async (type: "GUICHET" | "COURRIER") => {
-    const amount = Number(openingBalance.replace(/,/, "."));
-    if (isNaN(amount) || amount < 0) {
-      toast.error("Montant d'ouverture invalide");
-      return;
-    }
-    setProcessing(true);
-    try {
-      await openCashSession(companyId, agencyId, userId, type, amount);
-      toast.success("Session ouverte");
-      setOpenModal("none");
-      setOpeningBalance("");
-      load();
-    } catch (e: unknown) {
-      toast.error((e as Error)?.message ?? "Impossible d'ouvrir la session");
-    } finally {
-      setProcessing(false);
-    }
-  };
+  // Sessions à valider (clôturées, en attente de validation)
+  const pendingSessions = sessions.filter(
+    (s) => s.status === CASH_SESSION_STATUS.CLOSED
+  );
 
-  const handleCloseSession = async (sessionId: string) => {
-    const amount = Number(countedBalance.replace(/,/, "."));
-    if (isNaN(amount) && countedBalance !== "") {
-      toast.error("Montant compté invalide");
-      return;
-    }
-    const count = amount;
-    setProcessing(true);
-    try {
-      await closeCashSession(companyId, agencyId, sessionId, count, userId);
-      toast.success("Session clôturée");
-      setOpenModal("none");
-      setClosingSessionId(null);
-      setCountedBalance("");
-      load();
-    } catch (e: unknown) {
-      toast.error((e as Error)?.message ?? "Impossible de clôturer");
-    } finally {
-      setProcessing(false);
-    }
-  };
+  // Sessions ouvertes
+  const openSessions = sessions.filter(
+    (s) => s.status === CASH_SESSION_STATUS.OPEN
+  );
 
-  const handleValidate = async (sessionId: string) => {
-    setProcessing(true);
-    try {
-      await validateCashSession(companyId, agencyId, sessionId, userId, userRole);
-      toast.success("Session validée");
-      load();
-    } catch (e: unknown) {
-      toast.error((e as Error)?.message ?? "Impossible de valider");
-    } finally {
-      setProcessing(false);
-    }
-  };
+  // Sessions avec écart
+  const sessionsWithDiscrepancy = sessions.filter(
+    (s) => s.discrepancy != null && Math.abs(Number(s.discrepancy)) > 0
+  );
 
-  const handleReject = async (sessionId: string) => {
-    setProcessing(true);
-    try {
-      await rejectCashSession(
-        companyId,
-        agencyId,
-        sessionId,
-        userId,
-        rejectReason || undefined
-      );
-      toast.success("Session rejetée");
-      setRejectingId(null);
-      setRejectReason("");
-      load();
-    } catch (e: unknown) {
-      toast.error((e as Error)?.message ?? "Impossible de rejeter");
-    } finally {
-      setProcessing(false);
-    }
-  };
+  if (loading) {
+    return <div className="py-8 text-center text-gray-500">Chargement...</div>;
+  }
 
-  const handleSuspend = async (sessionId: string) => {
-    const reason = suspendReason.trim();
-    if (!reason) {
-      toast.error("Motif requis.");
-      return;
-    }
-    setProcessing(true);
-    try {
-      await suspendCashSession(companyId, agencyId, sessionId, userId, reason);
-      createChefIncident(companyId, agencyId, {
-        status: "open",
-        severity: "critical",
-        createdBy: { id: userId, name: (user as any)?.displayName ?? undefined },
-        reason,
-        relatedSessionId: sessionId,
-        source: "cash",
-        type: "suspension",
-      });
-      toast.success("Session suspendue.");
-      setSuspendingId(null);
-      setSuspendReason("");
-      setSuspendConfirmOpen(false);
-      load();
-    } catch (e: unknown) {
-      toast.error((e as Error)?.message ?? "Impossible de suspendre");
-    } finally {
-      setProcessing(false);
-    }
-  };
+  const body = (
+    <div className="space-y-6">
+      {/* 1. Solde caisse */}
+      <SectionCard title="💰 Solde caisse" icon={Wallet}>
+        <div className="text-3xl font-bold text-indigo-700">
+          {money(cashBalance)}
+        </div>
+        <p className="text-sm text-gray-500">Solde réel du compte caisse agence</p>
+      </SectionCard>
 
-  const totalDiscrepancy = sessions
-    .filter((s) => s.status === CASH_SESSION_STATUS.CLOSED && s.discrepancy != null)
-    .reduce((sum, s) => sum + (Number(s.discrepancy) ?? 0), 0);
-
-  const canClose = (s: CashSessionDocWithId) =>
-    s.status === CASH_SESSION_STATUS.OPEN && s.agentId === userId;
-
-  const sessionsBody = (
-    <>
-      {!embedded && (
-      <PageHeader
-        title="Contrôle caisse"
-        subtitle="Sessions terrain par agent (guichet / courrier) — non comptabilisées"
-      />
-      )}
-      {embedded && (
-        <p className="text-xs text-gray-500 mb-3 dark:text-slate-400">
-          Contrôle terrain (complément du ledger). La validation comptable des clôtures se fait selon les rôles.
-        </p>
-      )}
-
-      <OperationalHintRow>
-        Les sessions et écarts ci-dessous servent au <strong>contrôle terrain</strong> ; la comptabilité officielle reste le{" "}
-        <strong>ledger</strong> (financialTransactions / comptes).
-      </OperationalHintRow>
-
-      <div className="grid gap-4 md:grid-cols-3 mb-6">
-        <MetricCard
-          label="Sessions ouvertes"
-          value={String(openSessions.length)}
-          icon={Clock}
-        />
-        <MetricCard
-          label="En attente validation"
-          value={String(closedSessions.length)}
-          icon={Wallet}
-        />
-        <MetricCard
-          label="Écart total (clôturées)"
-          value={money(totalDiscrepancy)}
-          icon={totalDiscrepancy !== 0 ? AlertTriangle : Banknote}
-        />
+      {/* 2. Statistiques rapides */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="rounded-lg border p-4 bg-white">
+          <div className="text-sm text-gray-500">Sessions ouvertes</div>
+          <div className="text-2xl font-bold text-blue-600">{openSessions.length}</div>
+        </div>
+        <div className="rounded-lg border p-4 bg-white">
+          <div className="text-sm text-gray-500">À valider</div>
+          <div className="text-2xl font-bold text-amber-600">{pendingSessions.length}</div>
+        </div>
+        <div className="rounded-lg border p-4 bg-white">
+          <div className="text-sm text-gray-500">Écarts détectés</div>
+          <div className="text-2xl font-bold text-rose-600">{sessionsWithDiscrepancy.length}</div>
+        </div>
       </div>
 
-      <SectionCard title="Sessions" className="mb-6">
-        {loading ? (
-          <p className="text-muted-foreground">Chargement…</p>
-        ) : (
-          <>
-            <div className="flex flex-wrap gap-2 mb-4">
-              <ActionButton
-                onClick={() => setOpenModal("open")}
-                disabled={processing}
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Ouvrir une session
-              </ActionButton>
-            </div>
-
-            {openModal === "open" && (
-              <div className="p-4 border rounded-lg bg-muted/30 mb-4">
-                <p className="text-sm font-medium mb-2">Solde d'ouverture (espèces)</p>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={openingBalance}
-                  onChange={(e) => setOpeningBalance(e.target.value)}
-                  className="border rounded px-3 py-2 w-40"
-                  placeholder="0"
-                />
-                <div className="flex gap-2 mt-3">
-                  <ActionButton
-                    size="sm"
-                    onClick={() => handleOpenSession(CASH_SESSION_TYPE.GUICHET)}
-                    disabled={processing}
-                  >
-                    <Banknote className="w-4 h-4 mr-1" />
-                    Guichet
-                  </ActionButton>
-                  <ActionButton
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => handleOpenSession(CASH_SESSION_TYPE.COURRIER)}
-                    disabled={processing}
-                  >
-                    <Package className="w-4 h-4 mr-1" />
-                    Courrier
-                  </ActionButton>
-                  <ActionButton
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setOpenModal("none");
-                      setOpeningBalance("");
-                    }}
-                  >
-                    Annuler
-                  </ActionButton>
-                </div>
-              </div>
-            )}
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left p-2">Type</th>
-                    <th className="text-left p-2">Agent</th>
-                    <th className="text-right p-2">Ouverture</th>
-                    <th className="text-right p-2">Attendu</th>
-                    <th className="text-right p-2">Compté</th>
-                    <th className="text-right p-2">Écart</th>
-                    <th className="text-left p-2">Statut</th>
-                    <th className="text-right p-2">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map((s) => (
-                    <tr key={s.id} className="border-b">
-                      <td className="p-2">
-                        {s.type === CASH_SESSION_TYPE.GUICHET ? (
-                          <Banknote className="w-4 h-4 inline mr-1" />
-                        ) : (
-                          <Package className="w-4 h-4 inline mr-1" />
-                        )}
-                        {s.type}
-                      </td>
-                      <td className="p-2 font-mono text-xs">{s.agentId.slice(0, 8)}…</td>
-                      <td className="p-2 text-right">{money(s.openingBalance)}</td>
-                      <td className="p-2 text-right">{money(getTotalExpected(s))}</td>
-                      <td className="p-2 text-right">
-                        {s.status === CASH_SESSION_STATUS.CLOSED || s.countedBalance != null || s.countedCash != null ? money(getTotalCounted(s)) : "—"}
-                      </td>
-                      <td className="p-2 text-right">
-                        {s.discrepancy != null ? (
-                          <span
-                            className={
-                              Number(s.discrepancy) !== 0
-                                ? "text-amber-600 font-medium"
-                                : ""
-                            }
-                          >
-                            {money(s.discrepancy)}
-                          </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="p-2">
-                        <span
-                          className={
-                            s.status === CASH_SESSION_STATUS.SUSPENDED
-                              ? "inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800 dark:bg-red-950/30 dark:text-red-200"
-                              : s.status === CASH_SESSION_STATUS.CLOSED
-                                ? "inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
-                                : "inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800 dark:bg-slate-800 dark:text-slate-200"
-                          }
-                        >
-                          {s.status}
-                        </span>
-                      </td>
-                      <td className="p-2 text-right">
-                        {s.status === CASH_SESSION_STATUS.OPEN && canClose(s) && (
-                          <ActionButton
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => {
-                              setClosingSessionId(s.id);
-                              setOpenModal("close");
-                              setCountedBalance(String(getTotalExpected(s)));
-                            }}
-                            disabled={processing}
-                          >
-                            Clôturer
-                          </ActionButton>
-                        )}
-                        {s.status === CASH_SESSION_STATUS.CLOSED && isAccountant && (
-                          <span className="flex gap-1 justify-end">
-                            <ActionButton
-                              size="sm"
-                              onClick={() => handleValidate(s.id)}
-                              disabled={processing}
-                            >
-                              <CheckCircle className="w-4 h-4 mr-1" />
-                              Valider
-                            </ActionButton>
-                            <ActionButton
-                              size="sm"
-                              variant="danger"
-                              onClick={() => setRejectingId(s.id)}
-                              disabled={processing}
-                            >
-                              <XCircle className="w-4 h-4 mr-1" />
-                              Rejeter
-                            </ActionButton>
-                          </span>
-                        )}
-                        {(s.status === CASH_SESSION_STATUS.OPEN ||
-                          (s.status === CASH_SESSION_STATUS.CLOSED && Math.abs(Number(s.discrepancy ?? 0)) > 0.01)) &&
-                          isChefSupervisor && (
-                          <span className="flex gap-1 justify-end mt-1">
-                            <ActionButton
-                              size="sm"
-                              variant="danger"
-                              onClick={() => {
-                                setSuspendingId(s.id);
-                                setSuspendReason("");
-                                setSuspendConfirmOpen(true);
-                              }}
-                              disabled={processing}
-                            >
-                              Suspendre
-                            </ActionButton>
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {openModal === "close" && closingSessionId && (
-              <div className="p-4 border rounded-lg bg-muted/30 mt-4">
-                <p className="text-sm font-medium mb-2">Montant compté (espèces)</p>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={countedBalance}
-                  onChange={(e) => setCountedBalance(e.target.value)}
-                  className="border rounded px-3 py-2 w-40"
-                />
-                <div className="flex gap-2 mt-3">
-                  <ActionButton
-                    size="sm"
-                    onClick={() => handleCloseSession(closingSessionId)}
-                    disabled={processing}
-                  >
-                    Confirmer clôture
-                  </ActionButton>
-                  <ActionButton
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setOpenModal("none");
-                      setClosingSessionId(null);
-                      setCountedBalance("");
-                    }}
-                  >
-                    Annuler
-                  </ActionButton>
-                </div>
-              </div>
-            )}
-
-            {rejectingId && (
-              <div className="p-4 border rounded-lg bg-muted/30 mt-4">
-                <p className="text-sm font-medium mb-2">Motif du rejet (optionnel)</p>
-                <input
-                  type="text"
-                  value={rejectReason}
-                  onChange={(e) => setRejectReason(e.target.value)}
-                  className="border rounded px-3 py-2 w-full max-w-md"
-                  placeholder="Raison du rejet"
-                />
-                <div className="flex gap-2 mt-3">
-                  <ActionButton
-                    size="sm"
-                    variant="danger"
-                    onClick={() => handleReject(rejectingId)}
-                    disabled={processing}
-                  >
-                    Rejeter
-                  </ActionButton>
-                  <ActionButton
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setRejectingId(null);
-                      setRejectReason("");
-                    }}
-                  >
-                    Annuler
-                  </ActionButton>
-                </div>
-              </div>
-            )}
-
-            {suspendConfirmOpen && suspendingId && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
-                <div className="w-full max-w-md rounded-xl border-2 border-red-300 bg-red-50 p-5 shadow-xl dark:border-red-700 dark:bg-red-950/25">
-                  <div className="text-base font-semibold text-red-900 dark:text-red-100">Action critique - Suspension</div>
-                  <p className="mt-1 text-sm text-red-800 dark:text-red-200">
-                    This will block all operations for this session.
-                  </p>
-                  <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-red-700 dark:text-red-300">
-                    Motif obligatoire
-                  </label>
-                  <textarea
-                    value={suspendReason}
-                    onChange={(e) => setSuspendReason(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-red-300 bg-white px-3 py-2 text-sm min-h-[96px] dark:border-red-700 dark:bg-slate-900 dark:text-slate-100"
-                    placeholder="Incohérence détectée, vérification comptable requise…"
-                  />
-                  <div className="mt-4 flex justify-end gap-2">
-                    <ActionButton
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => {
-                        setSuspendConfirmOpen(false);
-                        setSuspendingId(null);
-                        setSuspendReason("");
-                      }}
-                    >
-                      Annuler
-                    </ActionButton>
-                    <ActionButton
-                      size="sm"
-                      variant="danger"
-                      onClick={() => handleSuspend(suspendingId)}
-                      disabled={processing}
-                    >
-                      Confirmer suspension
-                    </ActionButton>
+      {/* 3. Sessions à valider (priorité) */}
+      {pendingSessions.length > 0 && (
+        <SectionCard title="📌 Sessions à valider" icon={CheckCircle}>
+          <div className="space-y-3">
+            {pendingSessions.map((s) => (
+              <div key={s.id} className="flex items-center justify-between p-4 border rounded-lg bg-amber-50/50">
+                <div>
+                  <div className="font-medium text-gray-900">
+                    {s.agentId || 'Agent inconnu'}
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    {money(getTotalExpected(s))} · {s.type || 'Guichet'}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    Ouvert le {formatTimestamp(s.openedAt)}
                   </div>
                 </div>
+                <div className="flex items-center gap-3">
+                  <StatusBadge status="warning">En attente</StatusBadge>
+                  <ActionButton size="sm" variant="primary">
+                    <CheckCircle className="h-4 w-4 mr-1" />
+                    Valider
+                  </ActionButton>
+                </div>
               </div>
-            )}
+            ))}
+          </div>
+        </SectionCard>
+      )}
 
-            {sessions.length === 0 && !loading && (
-              <p className="text-muted-foreground py-4">
-                Aucune session caisse. Ouvrez une session pour commencer.
-              </p>
-            )}
-          </>
+      {/* 4. Sessions ouvertes */}
+      <SectionCard title="🟢 Sessions ouvertes" icon={Clock}>
+        {openSessions.length === 0 ? (
+          <EmptyState message="Aucune session ouverte" />
+        ) : (
+          <div className="space-y-3">
+            {openSessions.map((s) => (
+              <div key={s.id} className="flex items-center justify-between p-4 border rounded-lg">
+                <div>
+                  <div className="font-medium text-gray-900">
+                    {s.agentId || 'Agent inconnu'}
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    {money(getTotalExpected(s))} · {s.type || 'Guichet'}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    Ouvert le {formatTimestamp(s.openedAt)}
+                  </div>
+                </div>
+                <StatusBadge status="info">En cours</StatusBadge>
+              </div>
+            ))}
+          </div>
         )}
       </SectionCard>
-    </>
+
+      {/* 5. Écarts détectés (alerte) */}
+      {sessionsWithDiscrepancy.length > 0 && (
+        <SectionCard title="⚠️ Écarts détectés" icon={AlertTriangle}>
+          <div className="space-y-3">
+            {sessionsWithDiscrepancy.map((s) => (
+              <div key={s.id} className="flex items-center justify-between p-4 border border-rose-200 bg-rose-50 rounded-lg">
+                <div>
+                  <div className="font-medium text-gray-900">
+                    {s.agentId || 'Agent inconnu'}
+                  </div>
+                  <div className="text-sm text-rose-700 font-medium">
+                    Écart: {money(s.discrepancy)}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Attendu: {money(getTotalExpected(s))} · Compté: {money(getTotalCounted(s))}
+                  </div>
+                </div>
+                <StatusBadge status="danger">À vérifier</StatusBadge>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+    </div>
   );
 
   return embedded ? (
-    <div className="space-y-4">{sessionsBody}</div>
+    <div className="space-y-4">{body}</div>
   ) : (
-    <StandardLayoutWrapper>{sessionsBody}</StandardLayoutWrapper>
+    <StandardLayoutWrapper>{body}</StandardLayoutWrapper>
   );
 }

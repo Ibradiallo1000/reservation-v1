@@ -1,0 +1,1 @@
+function c(t,r){return`teliya:chef:incidents:${t}:${r}`}function i(t,r){try{const e=localStorage.getItem(c(t,r));if(!e)return[];const n=JSON.parse(e);return Array.isArray(n)?n:[]}catch{return[]}}export{i as l};

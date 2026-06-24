@@ -194,34 +194,44 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
   };
 
   useEffect(() => {
-    if (!companyId) return;
-    const q = query(
-      collection(db, `companies/${companyId}/financialTransactions`),
-      where("agencyId", "==", agencyId),
-      orderBy("performedAt", "desc"),
-      limit(50)
+  if (!companyId || !agencyId) return;
+  const q = query(
+    collection(db, `companies/${companyId}/financialTransactions`),
+    where("agencyId", "==", agencyId),
+    orderBy("performedAt", "desc"),
+    limit(50)
+  );
+  const unsub = onSnapshot(q, (snap) => {
+    setMovements(
+      snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          amount: Number(data.amount ?? 0),
+          movementType: data.type ?? "",
+          performedAt: data.performedAt,
+        };
+      })
     );
-    const unsub = onSnapshot(q, (snap) => {
-      setMovements(
-        snap.docs.map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            amount: Number(data.amount ?? 0),
-            movementType: data.type ?? "",
-            performedAt: data.performedAt,
-          };
-        })
-      );
-    }, () => {
+    // ✅ Effacer l'erreur si elle était affichée
+    setError(null);
+  }, (err) => {
+    // ✅ Ne pas afficher d'erreur si c'est une erreur de permission
+    // (le Chef d'Agence peut ne pas avoir accès aux transactions)
+    if (err.code === 'permission-denied') {
+      console.warn("[AgencyTreasury] Permission denied pour financialTransactions, ignoré.");
+      setMovements([]);
+      setError(null); // ✅ Pas d'erreur affichée
+    } else {
       setError(
         !isOnline
           ? "Connexion indisponible. Mouvements non synchronisés."
           : "Erreur lors du chargement des mouvements."
       );
-    });
-    return () => unsub();
-  }, [companyId, agencyId, isOnline]);
+    }
+  });
+  return () => unsub();
+}, [companyId, agencyId, isOnline]);
 
   useEffect(() => {
     if (!companyId) return;
