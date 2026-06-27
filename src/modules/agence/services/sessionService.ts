@@ -10,6 +10,7 @@ import {
   getDoc,
   getDocs,
   addDoc,
+  setDoc,
   updateDoc,
   runTransaction,
   query,
@@ -20,7 +21,7 @@ import {
   serverTimestamp,
   Timestamp,
 } from 'firebase/firestore';
-import { db } from '@/firebaseConfig';
+import { auth, db } from '@/firebaseConfig';
 import { normalizeReservation } from '@/lib/normalizeReservation';
 import {
   SHIFT_STATUS,
@@ -36,17 +37,15 @@ import {
 import { getDeviceFingerprint } from '@/utils/deviceFingerprint';
 import {
   updateDailyStatsOnSessionClosed,
-  updateDailyStatsOnSessionValidatedByAgency,
   updateDailyStatsOnSessionValidatedByCompany,
   timestampToDailyStatsDateKey,
   dailyStatsTimezoneFromAgencyData,
 } from '../aggregates/dailyStats';
-import { updateAgencyLiveStateOnSessionOpened, updateAgencyLiveStateOnSessionClosed, updateAgencyLiveStateOnSessionValidated } from '../aggregates/agencyLiveState';
+import { updateAgencyLiveStateOnSessionOpened, updateAgencyLiveStateOnSessionClosed } from '../aggregates/agencyLiveState';
 import {
   PENDING_CASH_LEDGER_SYSTEM_VERSION,
   type PendingCashRemittanceStatus,
 } from '@/modules/agence/comptabilite/pendingCashSafety';
-import { writeComptaEncaissementInTransaction } from '@/modules/agence/comptabilite/comptaEncaissementsService';
 import { fetchAgencyStaffProfile } from '@/modules/agence/services/agencyStaffProfileService';
 import { logAgentHistoryEvent } from '@/modules/agence/services/agentHistoryService';
 import {
@@ -657,9 +656,35 @@ export async function validateSessionByAccountant(params: {
   type AccountantTxOutcome = {
     computedDifference: number;
     accountantSessionLog: SessionAccountantHistoryLog | null;
+    dailyStatsRefresh: { date: string; ticketRevenueAgency: number } | null;
+    secondaryCashWrites: boolean;
   };
 
-  const { computedDifference, accountantSessionLog } = await runTransaction(db, async (tx): Promise<AccountantTxOutcome> => {
+  type ValidateSessionWriteStep = {
+    step: string;
+    operation: 'set' | 'update';
+    path: string;
+    payloadKeys: string[];
+  };
+  let lastStep: ValidateSessionWriteStep | null = null;
+  const markWriteStep = (
+    step: string,
+    operation: 'set' | 'update',
+    path: string,
+    payload: Record<string, unknown>
+  ) => {
+    lastStep = {
+      step,
+      operation,
+      path,
+      payloadKeys: Object.keys(payload),
+    };
+    console.info("[validateSessionByAccountant][write-step]", lastStep);
+  };
+
+  const { computedDifference, accountantSessionLog, dailyStatsRefresh, secondaryCashWrites } = await (async () => {
+    try {
+      return await runTransaction(db, async (tx): Promise<AccountantTxOutcome> => {
     const [sSnap, rSnap, agencySnap, cashAccountSnap, cashLedgerSnap, pendingSnap] = await Promise.all([
       tx.get(shiftRef),
       tx.get(reportRef),
@@ -672,10 +697,20 @@ export async function validateSessionByAccountant(params: {
     if (!rSnap.exists()) throw new Error('Rapport introuvable.');
     const s = sSnap.data() as Record<string, unknown>;
     if ((s.status as string) === SHIFT_STATUS.VALIDATED) {
-      return { computedDifference: 0, accountantSessionLog: null };
+      return {
+        computedDifference: 0,
+        accountantSessionLog: null,
+        dailyStatsRefresh: null,
+        secondaryCashWrites: false,
+      };
     }
     if ((s.status as string) === SHIFT_STATUS.VALIDATED_AGENCY) {
-      return { computedDifference: 0, accountantSessionLog: null };
+      return {
+        computedDifference: 0,
+        accountantSessionLog: null,
+        dailyStatsRefresh: null,
+        secondaryCashWrites: false,
+      };
     }
     if ((s.status as string) !== SHIFT_STATUS.CLOSED) throw new Error('Seuls les postes clôturés peuvent être validés.');
     if (!canProceedValidationWithDiscrepancy(Number(s.ecart ?? 0), false, Boolean(s.discrepancyOverrideConfirmed))) {
@@ -707,10 +742,31 @@ export async function validateSessionByAccountant(params: {
     const currentPending = pendingSnap.exists() ? Number(pendingSnap.data()?.balance ?? 0) : 0;
     const newPendingBalance = Math.max(0, currentPending - params.receivedCashAmount);
 
-    tx.update(pendingCashRef, {
-      balance: newPendingBalance,
-      updatedAt: serverTimestamp(),
-    });
+    if (pendingSnap.exists()) {
+      if (newPendingBalance !== currentPending) {
+        const pendingCashPayload = {
+          balance: newPendingBalance,
+          updatedAt: serverTimestamp(),
+        };
+        markWriteStep('update_pending_cash', 'update', pendingCashRef.path, pendingCashPayload);
+        tx.update(pendingCashRef, pendingCashPayload);
+      }
+    } else {
+      const pendingCashPayload = {
+        id: pendingCashRef.id,
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        type: "virtual_clearing",
+        label: "Caisse agence - en attente de remise",
+        balance: 0,
+        currency: "XOF",
+        includeInLiquidity: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      markWriteStep('set_pending_cash', 'set', pendingCashRef.path, pendingCashPayload);
+      tx.set(pendingCashRef, pendingCashPayload);
+    }
 
     const validationAudit: ValidationAudit = {
       validatedBy: params.validatedBy,
@@ -721,7 +777,7 @@ export async function validateSessionByAccountant(params: {
     };
 
     const nextLegacyStatus = SHIFT_STATUS.VALIDATED_AGENCY;
-    tx.update(shiftRef, stripUndefined({
+    const shiftPayload = stripUndefined({
       status: nextLegacyStatus,
       validatedAt: now,
       validationAudit,
@@ -735,8 +791,11 @@ export async function validateSessionByAccountant(params: {
       discrepancyOverrideBy: Math.abs(Number(s.ecart ?? 0)) > 0 ? params.validatedBy : (s.discrepancyOverrideBy ?? null),
       discrepancyOverrideAt: Math.abs(Number(s.ecart ?? 0)) > 0 ? now : (s.discrepancyOverrideAt ?? null),
       updatedAt: serverTimestamp(),
-    }));
-    tx.update(reportRef, stripUndefined({
+    });
+    markWriteStep('update_shift', 'update', shiftRef.path, shiftPayload);
+    tx.update(shiftRef, shiftPayload);
+
+    const reportPayload = stripUndefined({
       status: 'validated_agency',
       validationLevel: VALIDATION_LEVEL.AGENCY,
       validatedByAgencyAt: now,
@@ -745,46 +804,18 @@ export async function validateSessionByAccountant(params: {
       accountantValidated: true,
       accountantValidatedAt: now,
       updatedAt: serverTimestamp(),
-    }));
+    });
+    markWriteStep('update_shift_report', 'update', reportRef.path, reportPayload);
+    tx.update(reportRef, reportPayload);
 
-    // Enregistrer la remise de caisse comme entrée dans le journal de caisse d'agence
     if (params.receivedCashAmount > 0) {
-      const cashReceiptsRef = collection(db, base, 'cashReceipts');
-      const newReceiptRef = doc(cashReceiptsRef);
-      tx.set(newReceiptRef, {
-        cashReceived: params.receivedCashAmount,
-        shiftId: params.shiftId,
-        createdAt: serverTimestamp(),
-        validatedBy: params.validatedBy,
-      });
-      writeComptaEncaissementInTransaction(tx, params.companyId, params.agencyId, {
-        sessionId: params.shiftId,
-        montant: params.receivedCashAmount,
-        source: 'guichet',
-      });
       if (!cashLedgerSnap.exists()) {
-        if (cashAccountSnap.exists()) {
-          tx.update(cashAccountRef, {
-            balance: increment(params.receivedCashAmount),
-            lastAccountantValidationShiftId: params.shiftId,
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          tx.set(cashAccountRef, {
-            id: cashAccountRef.id,
-            companyId: params.companyId,
-            agencyId: params.agencyId,
-            type: 'cash',
-            label: 'Caisse physique agence',
-            balance: params.receivedCashAmount,
-            currency: 'XOF',
-            includeInLiquidity: true,
-            lastAccountantValidationShiftId: params.shiftId,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        }
-        tx.set(cashLedgerRef, {
+        const previousCashBalance = cashAccountSnap.exists()
+          ? Number(cashAccountSnap.data()?.balance ?? 0)
+          : 0;
+        const nextCashBalance = previousCashBalance + params.receivedCashAmount;
+        const deltaCashBalance = nextCashBalance - previousCashBalance;
+        const cashLedgerPayload = {
           companyId: params.companyId,
           agencyId: params.agencyId,
           shiftId: params.shiftId,
@@ -796,7 +827,46 @@ export async function validateSessionByAccountant(params: {
           createdAt: serverTimestamp(),
           createdBy: params.validatedBy.id,
           status: 'posted',
+        };
+        if (cashAccountSnap.exists()) {
+          const cashAccountPayload = {
+            balance: increment(params.receivedCashAmount),
+            lastAccountantValidationShiftId: params.shiftId,
+            updatedAt: serverTimestamp(),
+          };
+          markWriteStep('update_agency_cash_account', 'update', cashAccountRef.path, cashAccountPayload);
+          tx.update(cashAccountRef, cashAccountPayload);
+        } else {
+          const cashAccountPayload = {
+            id: cashAccountRef.id,
+            companyId: params.companyId,
+            agencyId: params.agencyId,
+            type: 'cash',
+            label: 'Caisse physique agence',
+            balance: params.receivedCashAmount,
+            currency: 'XOF',
+            includeInLiquidity: true,
+            lastAccountantValidationShiftId: params.shiftId,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          };
+          markWriteStep('set_agency_cash_account', 'set', cashAccountRef.path, cashAccountPayload);
+          tx.set(cashAccountRef, cashAccountPayload);
+        }
+        console.info('[validateSessionByAccountant][cash-balance-audit]', {
+          shiftId: params.shiftId,
+          previousCashBalance,
+          nextCashBalance,
+          deltaCashBalance,
+          receivedCashAmount: params.receivedCashAmount,
+          expectedCash,
+          computedDifference,
+          validatedById: params.validatedBy.id,
+          authUid: auth.currentUser?.uid ?? null,
+          cashLedgerPayload,
         });
+        markWriteStep('set_cash_ledger', 'set', cashLedgerRef.path, cashLedgerPayload);
+        tx.set(cashLedgerRef, cashLedgerPayload);
       }
     }
 
@@ -804,12 +874,13 @@ export async function validateSessionByAccountant(params: {
     const closedAt = (s.closedAt ?? s.endAt ?? now) as Timestamp;
     const agencyTz = dailyStatsTimezoneFromAgencyData(agencySnap.data() as { timezone?: string } | undefined);
     const statsDate = timestampToDailyStatsDateKey(closedAt, agencyTz);
-    updateDailyStatsOnSessionValidatedByAgency(tx, params.companyId, params.agencyId, statsDate, totalRevenue);
-    updateAgencyLiveStateOnSessionValidated(tx, params.companyId, params.agencyId);
-    // cashReceipts, comptaEncaissements et le crédit caisse restent atomiques avec la validation.
 
     return {
       computedDifference,
+      secondaryCashWrites: params.receivedCashAmount > 0,
+      dailyStatsRefresh: totalRevenue > 0
+        ? { date: statsDate, ticketRevenueAgency: totalRevenue }
+        : null,
       accountantSessionLog: {
         expectedCash,
         receivedCash: params.receivedCashAmount,
@@ -818,7 +889,85 @@ export async function validateSessionByAccountant(params: {
         sellerName: (s.userName ?? null) as string | null,
       },
     };
-  });
+      });
+    } catch (error) {
+      console.error("[validateSessionByAccountant][failed]", {
+        lastStep,
+        error,
+      });
+      throw error;
+    }
+  })();
+
+  if (secondaryCashWrites) {
+    try {
+      await addDoc(collection(db, base, 'cashReceipts'), {
+        cashReceived: params.receivedCashAmount,
+        shiftId: params.shiftId,
+        createdAt: serverTimestamp(),
+        validatedBy: params.validatedBy,
+      });
+    } catch (error) {
+      console.warn("[validateSessionByAccountant] cashReceipt write skipped", error);
+    }
+
+    try {
+      await setDoc(doc(db, base, 'comptaEncaissements', `shift_${params.shiftId}`), {
+        type: 'encaissement',
+        montant: params.receivedCashAmount,
+        source: 'guichet',
+        sessionId: params.shiftId,
+        agencyId: params.agencyId,
+        companyId: params.companyId,
+        createdAt: serverTimestamp(),
+      });
+    } catch (error) {
+      console.warn("[validateSessionByAccountant] comptaEncaissement write skipped", error);
+    }
+  }
+
+  if (dailyStatsRefresh) {
+    try {
+      await setDoc(doc(db, base, 'dailyStats', dailyStatsRefresh.date), {
+        companyId: params.companyId,
+        agencyId: params.agencyId,
+        date: dailyStatsRefresh.date,
+        totalRevenue: increment(0),
+        ticketRevenue: increment(0),
+        courierRevenue: increment(0),
+        ticketRevenueAgency: increment(dailyStatsRefresh.ticketRevenueAgency),
+        ticketRevenueCompany: increment(0),
+        courierRevenueAgency: increment(0),
+        courierRevenueCompany: increment(0),
+        totalPassengers: increment(0),
+        totalSeats: increment(0),
+        validatedSessions: increment(0),
+        activeSessions: increment(0),
+        closedSessions: increment(0),
+        boardingClosedCount: increment(0),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    } catch (error) {
+      console.warn("[validateSessionByAccountant] dailyStats refresh skipped", error);
+    }
+  }
+
+  try {
+    await setDoc(doc(db, base, 'agencyLiveState', 'current'), {
+      companyId: params.companyId,
+      agencyId: params.agencyId,
+      activeSessionsCount: increment(0),
+      closedPendingValidationCount: increment(-1),
+      activeCourierSessionsCount: increment(0),
+      closedCourierPendingValidationCount: increment(0),
+      vehiclesInTransitCount: increment(0),
+      boardingOpenCount: increment(0),
+      lastUpdatedAt: serverTimestamp(),
+    }, { merge: true });
+  } catch (error) {
+    console.warn("[validateSessionByAccountant] agencyLiveState refresh skipped", error);
+  }
 
   if (accountantSessionLog) {
     const v = params.validatedBy;

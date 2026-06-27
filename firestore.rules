@@ -986,6 +986,37 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           )
         );
     }
+    function agencyAccountantPendingCashAccountCreateOk(companyId, accountId) {
+      return isAuth()
+        && (
+          hasUserRole('agency_accountant')
+          || hasUserRole('comptable')
+          || hasUserRole('Comptable')
+        )
+        && userAgencyBelongsToCompany(companyId)
+        && accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
+        && request.resource.data.keys().hasOnly([
+          'id',
+          'companyId',
+          'agencyId',
+          'type',
+          'label',
+          'balance',
+          'currency',
+          'includeInLiquidity',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.get('id', '') == accountId
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && request.resource.data.get('type', '') == 'virtual_clearing'
+        && request.resource.data.get('balance', -1) == 0
+        && request.resource.data.get('currency', '') == 'XOF'
+        && request.resource.data.get('includeInLiquidity', true) == false
+        && request.resource.data.get('createdAt', null) == request.time
+        && request.resource.data.get('updatedAt', null) == request.time;
+    }
     function courierCashLedgerAccountUpdateOk(companyId, accountId) {
       return isCourierAgent()
         && userAgencyBelongsToCompany(companyId)
@@ -2313,7 +2344,12 @@ match /shiftReports/{reportId} {
             || getUserRole() == 'admin_platforme'
             || canReadOwnAgencyAccountingData(companyId, agencyId)
           );
-          allow create, update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
+          allow create: if isAuth() && (
+            userCompanyId() == companyId
+            || getUserRole() == 'admin_platforme'
+            || canReadOwnAgencyAccountingData(companyId, agencyId)
+          );
+          allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
           allow delete: if false;
         }
 
@@ -2740,6 +2776,7 @@ match /accounts/{accountId} {
   );
   allow list: if canReadOwnAgencyLedgerAccount(companyId);
   allow create: if courierCashLedgerAccountCreateOk(companyId, accountId)
+    || agencyAccountantPendingCashAccountCreateOk(companyId, accountId)
     || canAccessSensitiveCompanyFinance(companyId)
     || (
       agencyAccountantCanPostCashBalance(companyId, accountId, true)
@@ -2751,6 +2788,24 @@ match /accounts/{accountId} {
       && request.resource.data.get('includeInLiquidity', false) == true
     );
 
+  allow update: if isAuth()
+    && (
+      hasUserRole('agency_accountant')
+      || hasUserRole('comptable')
+      || hasUserRole('Comptable')
+    )
+    && userAgencyBelongsToCompany(companyId)
+    && accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
+    && resource.data.get('companyId', '') == companyId
+    && resource.data.get('agencyId', '') == getUserAgencyId()
+    && resource.data.get('type', '') == 'virtual_clearing'
+    && request.resource.data.get('companyId', '') == companyId
+    && request.resource.data.get('agencyId', '') == getUserAgencyId()
+    && request.resource.data.get('type', '') == 'virtual_clearing'
+    && request.resource.data.get('currency', 'XOF') == resource.data.get('currency', 'XOF')
+    && request.resource.data.get('updatedAt', null) == request.time
+    && request.resource.data.get('balance', 0) is number
+    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'updatedAt']);
   allow update: if isComptable()
     && userAgencyBelongsToCompany(companyId)
     && accountId == 'agency_' + getUserAgencyId() + '_cash'
@@ -2814,6 +2869,30 @@ match /accounts/{accountId} {
       && getAfter(/databases/$(database)/documents/companies/$(companyId)/agences/$(request.resource.data.agencyId)/shifts/$(request.resource.data.shiftId)).data.get('status', '') == 'validated_agency'
       && getAfter(/databases/$(database)/documents/companies/$(companyId)/agences/$(request.resource.data.agencyId)/shifts/$(request.resource.data.shiftId)).data.get('validationAudit', {}).get('receivedCashAmount', 0) == request.resource.data.get('amount', 0)
       && getAfter(/databases/$(database)/documents/companies/$(companyId)/agences/$(request.resource.data.agencyId)/shifts/$(request.resource.data.shiftId)).data.get('validationAudit', {}).get('validatedBy', {}).get('id', '') == request.auth.uid;
+    allow create: if isAuth()
+      && hasUserRole('agency_accountant')
+      && userCompanyId() == companyId
+      && userAgencyBelongsToCompany(companyId)
+      && request.resource.data.get('agencyId', '') == getUserAgencyId()
+      && accountId == 'agency_' + getUserAgencyId() + '_cash'
+      && ledgerId == 'session_' + request.resource.data.get('shiftId', '') + '_accountant_validation'
+      && request.resource.data.keys().hasOnly([
+        'companyId', 'agencyId', 'shiftId', 'type', 'source', 'amount',
+        'expectedAmount', 'differenceAmount', 'createdAt', 'createdBy', 'status'
+      ])
+      && request.resource.data.get('companyId', '') == companyId
+      && request.resource.data.get('shiftId', '') is string
+      && request.resource.data.get('shiftId', '').size() > 0
+      && request.resource.data.get('type', '') == 'cash_in'
+      && request.resource.data.get('source', '') == 'shift_accountant_validation'
+      && request.resource.data.get('createdAt', null) == request.time
+      && request.resource.data.get('amount', 0) is number
+      && request.resource.data.get('amount', 0) > 0
+      && request.resource.data.get('amount', 0) < 100000000
+      && request.resource.data.get('expectedAmount', 0) is number
+      && request.resource.data.get('differenceAmount', 0) is number
+      && request.resource.data.get('createdBy', '') == request.auth.uid
+      && request.resource.data.get('status', '') == 'posted';
     allow update, delete: if false;
   }
 }
