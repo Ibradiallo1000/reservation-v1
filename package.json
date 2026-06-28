@@ -18,7 +18,8 @@
     "backfill:trip-instance-remaining-seats": "npx ts-node scripts/backfillTripInstanceRemainingSeats.ts",
     "migrate:trip-assignment-live-status": "npx ts-node scripts/migrateTripAssignmentLiveStatus.ts",
     "test:unit": "vitest run",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "test:rules:agency-expense": "firebase emulators:exec --only firestore \"node tests/firestore/agencyExpenseDirect.rules.test.cjs\""
   },
   "dependencies": {
     "@emotion/babel-plugin": "^11.13.5",
@@ -85,6 +86,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
     "@netlify/edge-functions": "^3.0.7",
     "@types/connect-history-api-fallback": "^1.5.4",
     "@types/file-saver": "^2.0.7",

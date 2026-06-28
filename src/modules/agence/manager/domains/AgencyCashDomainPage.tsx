@@ -78,7 +78,7 @@ export default function AgencyCashDomainPage() {
 
       <div
         className={cn(
-          "mb-4 hidden gap-1 rounded-xl border border-gray-200 bg-gray-100/90 p-1 dark:border-slate-700 dark:bg-slate-800/80",
+          "mb-5 hidden gap-1.5 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm dark:border-slate-700 dark:bg-slate-900",
           "md:sticky md:top-0 md:z-20 md:flex"
         )}
         role="tablist"
@@ -95,10 +95,10 @@ export default function AgencyCashDomainPage() {
               aria-selected={active}
               onClick={() => goTab(t.id)}
               className={cn(
-                "flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition-colors",
+                "flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold transition-colors",
                 active
-                  ? "bg-white text-gray-900 shadow-sm dark:bg-slate-900 dark:text-white"
-                  : "text-gray-600 hover:bg-white/60 dark:text-slate-300 dark:hover:bg-slate-900/50"
+                  ? "border-indigo-200 bg-indigo-50 text-indigo-800 shadow-sm dark:border-indigo-500/50 dark:bg-indigo-500/15 dark:text-indigo-100"
+                  : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:bg-slate-800 dark:hover:text-white"
               )}
             >
               <Icon className="h-4 w-4 shrink-0 opacity-80" aria-hidden />
@@ -110,7 +110,7 @@ export default function AgencyCashDomainPage() {
 
       <div
         className={cn(
-          "fixed inset-x-0 bottom-0 z-30 flex gap-1 border-t border-gray-200 bg-white/98 p-1.5 pb-[max(0.35rem,env(safe-area-inset-bottom))] shadow-[0_-4px_20px_rgba(0,0,0,0.08)] dark:border-slate-700 dark:bg-slate-900/98",
+          "fixed inset-x-0 bottom-0 z-30 flex gap-1 border-t border-slate-200 bg-white/98 p-1.5 pb-[max(0.35rem,env(safe-area-inset-bottom))] shadow-[0_-4px_20px_rgba(0,0,0,0.08)] dark:border-slate-700 dark:bg-slate-950/98",
           "md:hidden"
         )}
         role="tablist"
@@ -127,8 +127,10 @@ export default function AgencyCashDomainPage() {
               aria-selected={active}
               onClick={() => goTab(t.id)}
               className={cn(
-                "flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-[10px] font-semibold leading-tight",
-                active ? "bg-indigo-600 text-white" : "text-gray-700 dark:text-slate-200"
+                "flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg border px-1 text-[10px] font-semibold leading-tight transition-colors",
+                active
+                  ? "border-indigo-600 bg-indigo-600 text-white shadow-sm dark:border-indigo-400 dark:bg-indigo-500/20 dark:text-indigo-100"
+                  : "border-transparent text-slate-600 dark:text-slate-300"
               )}
             >
               <Icon className="h-4 w-4 shrink-0" aria-hidden />
@@ -138,7 +140,7 @@ export default function AgencyCashDomainPage() {
         })}
       </div>
 
-      <div className="min-h-[50vh]">
+      <div className="min-h-[50vh] rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4 dark:border-slate-700 dark:bg-slate-950">
         {tab === "caisse-tresorerie" && (
           <section id="caisse-tresorerie" className="scroll-mt-28">
             <AgencyTreasuryPage embedded />

@@ -27,7 +27,7 @@ export type AccountantShift = {
 export type AccountantCourierSession = CourierSession & { id: string };
 
 const COMPTA_POST_CARD_3D = cn(
-  "group relative min-w-0 overflow-hidden rounded-xl border p-4 outline-none transition-colors duration-200",
+  "accountant-night-card group relative min-w-0 overflow-hidden rounded-xl border p-4 outline-none transition-colors duration-200",
   "bg-white shadow-sm hover:border-slate-300 hover:shadow-md"
 );
 
@@ -39,7 +39,7 @@ function comptaPostCardTintStyle(theme: AccountantTheme): React.CSSProperties {
 }
 
 const COMPTA_AMOUNT_PANEL_3D = cn(
-  "mb-4 rounded-lg border bg-white/85 p-3 shadow-[inset_0_1px_0_rgb(255_255_255/0.8)]"
+  "accountant-night-card-detail mb-4 rounded-lg border bg-white/85 p-3 shadow-[inset_0_1px_0_rgb(255_255_255/0.8)]"
 );
 
 const courierStatusToBadge: Record<string, "active" | "pending" | "success" | "warning" | "neutral"> = {
@@ -81,7 +81,7 @@ export const InfoCard: React.FC<{ label: string; value: string; emphasis?: boole
   value,
   emphasis = false,
 }) => (
-  <div className="min-w-0 rounded-lg bg-slate-50 px-3 py-2">
+  <div className="accountant-night-card-detail min-w-0 rounded-lg bg-slate-50 px-3 py-2">
     <div className={cn(typography.mutedSm, "mb-1 truncate")}>{label}</div>
     <div className={cn("break-words text-sm font-semibold", emphasis ? "text-gray-900 dark:text-gray-100" : "text-gray-700 dark:text-gray-300")}>{value}</div>
   </div>

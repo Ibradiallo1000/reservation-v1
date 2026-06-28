@@ -62,6 +62,8 @@ export interface InternalLayoutProps {
   headerLeft?: React.ReactNode;
   /** Content rendered in the header's right area before logout (e.g. notification bell) */
   headerRight?: React.ReactNode;
+  /** Keep only custom actions and the theme toggle in the header. */
+  headerActionsOnly?: boolean;
   /** Render Outlet (default) or children */
   children?: React.ReactNode;
   /** Optional class for main content area (e.g. agency-content-transition) */
@@ -106,6 +108,7 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
   secondaryColor,
   headerLeft,
   headerRight,
+  headerActionsOnly = false,
   onLogout,
   banner,
   children,
@@ -135,6 +138,7 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
       secondary={secondary}
       headerLeft={headerLeft}
       headerRight={headerRight}
+      headerActionsOnly={headerActionsOnly}
       onLogout={onLogout}
       banner={banner}
       mainClassName={mainClassName}
@@ -157,6 +161,7 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
       secondary={secondary}
       headerLeft={headerLeft}
       headerRight={headerRight}
+      headerActionsOnly={headerActionsOnly}
       onLogout={onLogout}
       banner={banner}
       mainClassName={mainClassName}
@@ -184,6 +189,7 @@ interface LayoutVariantProps {
   secondary: string;
   headerLeft?: React.ReactNode;
   headerRight?: React.ReactNode;
+  headerActionsOnly?: boolean;
   onLogout: () => void;
   banner?: React.ReactNode;
   children?: React.ReactNode;
@@ -289,6 +295,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
   secondary,
   headerLeft,
   headerRight,
+  headerActionsOnly = false,
   onLogout,
   banner,
   children,
@@ -587,7 +594,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
 
             {/* Top-right */}
             <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
-              {!headerLeft && (
+              {!headerActionsOnly && !headerLeft && (
                 <div className="hidden sm:block text-right mr-1">
                   <p className="text-sm font-medium text-gray-900 dark:text-white leading-tight">
                     {displayName}
@@ -605,13 +612,15 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
               >
                 {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
               </button>
-              <button
-                onClick={onLogout}
-                className="p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
-                title="Se déconnecter"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
+              {!headerActionsOnly && (
+                <button
+                  onClick={onLogout}
+                  className="p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
+                  title="Se déconnecter"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </header>
 

@@ -12,6 +12,7 @@ import {
   FileCheck,
   Users,
   ShieldCheck,
+  Building2,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -33,7 +34,7 @@ import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { SubscriptionBanner } from "@/shared/subscription";
 import type { SubscriptionStatus } from "@/shared/subscription";
 import { Timestamp } from "firebase/firestore";
-import { useOnlineStatus, useAgencyDarkMode, useAgencyKeyboardShortcuts, AgencyHeaderExtras } from "@/modules/agence/shared";
+import { useAgencyDarkMode, useAgencyKeyboardShortcuts } from "@/modules/agence/shared";
 import { listExpenses } from "@/modules/compagnie/treasury/expenses";
 import NotificationsBell from "@/modules/compagnie/notifications/NotificationsBell";
 import {
@@ -54,8 +55,7 @@ interface Company {
 const CompagnieLayout: React.FC = () => {
   const params = useParams();
   const { user, logout, company, loading, refreshUser } = useAuth();
-  const isOnline = useOnlineStatus();
-  const [darkMode, toggleDarkMode] = useAgencyDarkMode();
+  const [darkMode] = useAgencyDarkMode();
 
   const urlCompanyId = params.companyId;
   const userCompanyId = user?.companyId;
@@ -210,6 +210,7 @@ const CompagnieLayout: React.FC = () => {
         badge: onlineProofsCount,
       },
       { label: "Finances", icon: DollarSign, path: `${basePath}/finances` },
+      { label: "Agences", icon: Building2, path: `${basePath}/agences` },
       {
         label: "Audit & contrôle",
         icon: FileCheck,
@@ -330,16 +331,14 @@ const CompagnieLayout: React.FC = () => {
           primaryColor={theme.colors.primary}
           secondaryColor={theme.colors.secondary}
           onLogout={logout}
+          headerActionsOnly
           banner={bannerContent}
           headerRight={
-            <div className="flex items-center gap-2">
-              <NotificationsBell
-                companyId={currentCompanyId}
-                userId={user?.uid}
-                role={user?.role}
-              />
-              <AgencyHeaderExtras isOnline={isOnline} darkMode={darkMode} onDarkModeToggle={toggleDarkMode} showThemeToggle={false} />
-            </div>
+            <NotificationsBell
+              companyId={currentCompanyId}
+              userId={user?.uid}
+              role={user?.role}
+            />
           }
           mainClassName="agency-content-transition"
         />

@@ -95,32 +95,32 @@ export default function CashSessionsPage({ embedded = false }: CashSessionsPageP
   );
 
   if (loading) {
-    return <div className="py-8 text-center text-gray-500">Chargement...</div>;
+    return <div className="py-8 text-center text-gray-500 dark:text-slate-400">Chargement...</div>;
   }
 
   const body = (
     <div className="space-y-6">
       {/* 1. Solde caisse */}
       <SectionCard title="💰 Solde caisse" icon={Wallet}>
-        <div className="text-3xl font-bold text-indigo-700">
+        <div className="text-3xl font-bold text-indigo-700 dark:text-indigo-300">
           {money(cashBalance)}
         </div>
-        <p className="text-sm text-gray-500">Solde réel du compte caisse agence</p>
+        <p className="text-sm text-gray-500 dark:text-slate-400">Solde réel du compte caisse agence</p>
       </SectionCard>
 
       {/* 2. Statistiques rapides */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="rounded-lg border p-4 bg-white">
-          <div className="text-sm text-gray-500">Sessions ouvertes</div>
-          <div className="text-2xl font-bold text-blue-600">{openSessions.length}</div>
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
+          <div className="text-sm text-gray-600 dark:text-slate-300">Sessions ouvertes</div>
+          <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">{openSessions.length}</div>
         </div>
-        <div className="rounded-lg border p-4 bg-white">
-          <div className="text-sm text-gray-500">À valider</div>
-          <div className="text-2xl font-bold text-amber-600">{pendingSessions.length}</div>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
+          <div className="text-sm text-gray-600 dark:text-slate-300">À valider</div>
+          <div className="text-2xl font-bold text-amber-700 dark:text-amber-300">{pendingSessions.length}</div>
         </div>
-        <div className="rounded-lg border p-4 bg-white">
-          <div className="text-sm text-gray-500">Écarts détectés</div>
-          <div className="text-2xl font-bold text-rose-600">{sessionsWithDiscrepancy.length}</div>
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 dark:border-rose-500/30 dark:bg-rose-500/10">
+          <div className="text-sm text-gray-600 dark:text-slate-300">Écarts détectés</div>
+          <div className="text-2xl font-bold text-rose-700 dark:text-rose-300">{sessionsWithDiscrepancy.length}</div>
         </div>
       </div>
 
@@ -129,19 +129,19 @@ export default function CashSessionsPage({ embedded = false }: CashSessionsPageP
         <SectionCard title="📌 Sessions à valider" icon={CheckCircle}>
           <div className="space-y-3">
             {pendingSessions.map((s) => (
-              <div key={s.id} className="flex items-center justify-between p-4 border rounded-lg bg-amber-50/50">
+              <div key={s.id} className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-amber-500/30 dark:bg-amber-500/10">
                 <div>
-                  <div className="font-medium text-gray-900">
+                  <div className="font-medium text-gray-900 dark:text-white">
                     {s.agentId || 'Agent inconnu'}
                   </div>
-                  <div className="text-sm text-gray-600">
+                  <div className="text-sm text-gray-600 dark:text-slate-300">
                     {money(getTotalExpected(s))} · {s.type || 'Guichet'}
                   </div>
-                  <div className="text-xs text-gray-400">
+                  <div className="text-xs text-gray-500 dark:text-slate-400">
                     Ouvert le {formatTimestamp(s.openedAt)}
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <StatusBadge status="warning">En attente</StatusBadge>
                   <ActionButton size="sm" variant="primary">
                     <CheckCircle className="h-4 w-4 mr-1" />
@@ -161,15 +161,15 @@ export default function CashSessionsPage({ embedded = false }: CashSessionsPageP
         ) : (
           <div className="space-y-3">
             {openSessions.map((s) => (
-              <div key={s.id} className="flex items-center justify-between p-4 border rounded-lg">
+              <div key={s.id} className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-700 dark:bg-slate-900">
                 <div>
-                  <div className="font-medium text-gray-900">
+                  <div className="font-medium text-gray-900 dark:text-white">
                     {s.agentId || 'Agent inconnu'}
                   </div>
-                  <div className="text-sm text-gray-600">
+                  <div className="text-sm text-gray-600 dark:text-slate-300">
                     {money(getTotalExpected(s))} · {s.type || 'Guichet'}
                   </div>
-                  <div className="text-xs text-gray-400">
+                  <div className="text-xs text-gray-500 dark:text-slate-400">
                     Ouvert le {formatTimestamp(s.openedAt)}
                   </div>
                 </div>
@@ -185,15 +185,15 @@ export default function CashSessionsPage({ embedded = false }: CashSessionsPageP
         <SectionCard title="⚠️ Écarts détectés" icon={AlertTriangle}>
           <div className="space-y-3">
             {sessionsWithDiscrepancy.map((s) => (
-              <div key={s.id} className="flex items-center justify-between p-4 border border-rose-200 bg-rose-50 rounded-lg">
+              <div key={s.id} className="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-rose-500/30 dark:bg-rose-500/10">
                 <div>
-                  <div className="font-medium text-gray-900">
+                  <div className="font-medium text-gray-900 dark:text-white">
                     {s.agentId || 'Agent inconnu'}
                   </div>
-                  <div className="text-sm text-rose-700 font-medium">
+                  <div className="text-sm font-medium text-rose-700 dark:text-rose-300">
                     Écart: {money(s.discrepancy)}
                   </div>
-                  <div className="text-xs text-gray-500">
+                  <div className="text-xs text-gray-500 dark:text-slate-400">
                     Attendu: {money(getTotalExpected(s))} · Compté: {money(getTotalCounted(s))}
                   </div>
                 </div>

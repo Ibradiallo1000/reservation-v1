@@ -54,7 +54,7 @@ export const AccountantKpiCards: React.FC<{
       target: "receptions",
     },
     {
-      label: "Postes en service",
+      label: "Service billetterie actif",
       value: activeShiftsCount.toString(),
       icon: Play,
       hint: "Services ouverts maintenant",
@@ -72,7 +72,7 @@ export const AccountantKpiCards: React.FC<{
   ];
 
   return (
-    <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+    <section className="accountant-night-surface min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
       <div className="mb-4 flex min-w-0 flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Priorités</div>
@@ -91,7 +91,7 @@ export const AccountantKpiCards: React.FC<{
               type="button"
               key={card.label}
               onClick={() => onNavigate?.(card.target)}
-              className="min-w-0 rounded-xl border border-slate-200 bg-slate-50/70 p-4 text-left shadow-[inset_0_1px_0_rgb(255_255_255/0.8)] transition hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-offset-2"
+              className="accountant-night-card min-w-0 rounded-xl border border-slate-200 bg-slate-50/70 p-4 text-left shadow-[inset_0_1px_0_rgb(255_255_255/0.8)] transition hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-md focus:outline-none focus:ring-2 focus:ring-offset-2"
               style={{ outlineColor: theme.primary }}
             >
               <div className="flex min-w-0 items-start justify-between gap-3">
@@ -105,7 +105,7 @@ export const AccountantKpiCards: React.FC<{
                   </div>
                 </div>
                 <div
-                  className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border"
+                  className="accountant-night-card-icon grid h-10 w-10 shrink-0 place-items-center rounded-lg border"
                   style={{
                     borderColor: isPrimary ? `${theme.primary}55` : "#e2e8f0",
                     backgroundColor: isPrimary ? `${theme.secondary}66` : "#ffffff",

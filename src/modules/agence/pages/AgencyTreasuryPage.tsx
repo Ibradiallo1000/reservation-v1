@@ -487,15 +487,15 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
       {/* Carte résumé compacte */}
       <SectionCard title="Résumé" icon={Wallet}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 dark:border-indigo-900/30 dark:bg-indigo-900/20">
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 dark:border-indigo-500/30 dark:bg-indigo-500/10">
             <div className="text-xs text-indigo-700 dark:text-indigo-300">Solde disponible</div>
             <div className="text-lg font-semibold text-indigo-800 dark:text-indigo-200">{money(ledgerCashDisplay)}</div>
           </div>
-          <div className="rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2 dark:border-amber-900/30 dark:bg-amber-900/20">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-500/30 dark:bg-amber-500/10">
             <div className="text-xs text-amber-700 dark:text-amber-300">Demandes en attente</div>
             <div className="text-lg font-semibold text-amber-800 dark:text-amber-200">{pendingExpenses.length}</div>
           </div>
-          <div className="rounded-lg border border-rose-100 bg-rose-50/60 px-3 py-2 dark:border-rose-900/30 dark:bg-rose-900/20">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 dark:border-rose-500/30 dark:bg-rose-500/10">
             <div className="text-xs text-rose-700 dark:text-rose-300">Montant en attente</div>
             <div className="text-lg font-semibold text-rose-800 dark:text-rose-200">{money(pendingExpensesTotal)}</div>
           </div>
@@ -558,7 +558,7 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
             {pendingExpenses.map((e) => (
               <li
                 key={e.id}
-                className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"
+                className="flex flex-col gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between dark:border-slate-700 dark:bg-slate-900"
               >
                 <span className="font-medium">{CATEGORY_LABELS[e.category] ?? e.category}</span>
                 <span className="text-gray-600 dark:text-gray-400">

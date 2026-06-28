@@ -733,7 +733,7 @@ export default function ManagerFinancesPage({
       )}
 
       {!embedded && (
-      <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs text-slate-700">
+      <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
         Les blocs <strong>opérationnel</strong> et <strong>comptabilité</strong> ci-dessous ne sont pas comparés entre eux (contrat
         de temps).
       </div>
@@ -800,14 +800,14 @@ export default function ManagerFinancesPage({
                       </tr>
                       <tr className={tableRowClassName()}>
                         <td className={table.td} colSpan={5}>
-                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
                             <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-slate-700">
                               <span className="font-semibold">Détails activité session</span>
                               <span>Billets: <b>{shiftReportsById[s.id]?.billets ?? 0}</b></span>
                               <span>Montant à verser: <b>{money(shiftReportsById[s.id]?.montant ?? 0)}</b></span>
                             </div>
                             {shiftReportsById[s.id]?.details && shiftReportsById[s.id]!.details!.length > 0 ? (
-                              <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
+                              <div className="overflow-x-auto rounded-md border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950">
                                 <table className="w-full text-xs">
                                   <thead className="bg-slate-100">
                                     <tr>
@@ -854,7 +854,7 @@ export default function ManagerFinancesPage({
                       </tr>
                       <tr className={tableRowClassName()}>
                         <td className={table.td} colSpan={5}>
-                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                             <div className="flex flex-wrap items-center gap-3">
                               <span className="font-semibold">Détails activité session</span>
                               <span>Montant à verser (référence comptable): <b>{money(courierExpectedBySessionId[s.id] ?? 0)}</b></span>
@@ -880,14 +880,14 @@ export default function ManagerFinancesPage({
                       </tr>
                       <tr className={tableRowClassName()}>
                         <td className={table.td} colSpan={5}>
-                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
                             <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-slate-700">
                               <span className="font-semibold">Détails activité session</span>
                               <span>Billets: <b>{shiftReportsById[s.id]?.billets ?? 0}</b></span>
                               <span>Montant: <b>{money(shiftReportsById[s.id]?.montant ?? 0)}</b></span>
                             </div>
                             {shiftReportsById[s.id]?.details && shiftReportsById[s.id]!.details!.length > 0 ? (
-                              <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
+                              <div className="overflow-x-auto rounded-md border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950">
                                 <table className="w-full text-xs">
                                   <thead className="bg-slate-100">
                                     <tr>
@@ -963,7 +963,7 @@ export default function ManagerFinancesPage({
                       </tr>
                       <tr className={tableRowClassName()}>
                         <td className={table.td} colSpan={5}>
-                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                             <div className="flex flex-wrap items-center gap-3">
                               <span className="font-semibold">Session courrier</span>
                               <span>Montant compté (comptable): <b>{money(Number(s.validatedAmount ?? 0))}</b></span>
@@ -983,7 +983,7 @@ export default function ManagerFinancesPage({
 
       {!embedded && (
       <>
-      <div className="rounded-lg border border-blue-100 bg-blue-50/30 p-4 mb-4 dark:border-blue-900/30 dark:bg-blue-950/20">
+      <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
         <p className="text-xs font-semibold text-blue-900 dark:text-blue-200 mb-3">Opérationnel (période filtre, Bamako)</p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-3">
           <MetricCard
@@ -1009,7 +1009,7 @@ export default function ManagerFinancesPage({
           />
         </div>
       </div>
-      <div className="rounded-lg border border-emerald-100 bg-emerald-50/30 p-4 mb-4 dark:border-emerald-900/30 dark:bg-emerald-950/20">
+      <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-500/30 dark:bg-emerald-500/10">
         <p className="text-xs font-semibold text-emerald-900 dark:text-emerald-200 mb-3">Comptabilité</p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-3">
           <MetricCard
@@ -1057,7 +1057,7 @@ export default function ManagerFinancesPage({
             Synthèse chiffrée (ventes &amp; ledger)
           </summary>
           <div className="space-y-4 border-t border-gray-100 px-3 pb-4 pt-3 dark:border-gray-800">
-            <div className="rounded-lg border border-blue-100 bg-blue-50/30 p-4 dark:border-blue-900/30 dark:bg-blue-950/20">
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/30 dark:bg-blue-500/10">
               <p className="mb-3 text-xs font-semibold text-blue-900 dark:text-blue-200">Opérationnel (période filtre)</p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <MetricCard
@@ -1083,7 +1083,7 @@ export default function ManagerFinancesPage({
                 />
               </div>
             </div>
-            <div className="rounded-lg border border-emerald-100 bg-emerald-50/30 p-4 dark:border-emerald-900/30 dark:bg-emerald-950/20">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-500/30 dark:bg-emerald-500/10">
               <p className="mb-3 text-xs font-semibold text-emerald-900 dark:text-emerald-200">Comptabilité</p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <MetricCard
@@ -1222,14 +1222,14 @@ export default function ManagerFinancesPage({
                     </tr>
                     <tr className={tableRowClassName()}>
                       <td className={table.td} colSpan={5}>
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
                           <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-slate-700">
                             <span className="font-semibold">Détails activité session</span>
                             <span>Billets: <b>{shiftReportsById[s.id]?.billets ?? 0}</b></span>
                             <span>Montant à verser: <b>{money(shiftReportsById[s.id]?.montant ?? 0)}</b></span>
                           </div>
                           {shiftReportsById[s.id]?.details && shiftReportsById[s.id]!.details!.length > 0 ? (
-                            <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
+                            <div className="overflow-x-auto rounded-md border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950">
                               <table className="w-full text-xs">
                                 <thead className="bg-slate-100">
                                   <tr>
@@ -1276,7 +1276,7 @@ export default function ManagerFinancesPage({
                     </tr>
                     <tr className={tableRowClassName()}>
                       <td className={table.td} colSpan={5}>
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                           <div className="flex flex-wrap items-center gap-3">
                             <span className="font-semibold">Détails activité session</span>
                             <span>Montant à verser (référence comptable): <b>{money(courierExpectedBySessionId[s.id] ?? 0)}</b></span>
@@ -1302,14 +1302,14 @@ export default function ManagerFinancesPage({
                     </tr>
                     <tr className={tableRowClassName()}>
                       <td className={table.td} colSpan={5}>
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
                           <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-slate-700">
                             <span className="font-semibold">Détails activité session</span>
                             <span>Billets: <b>{shiftReportsById[s.id]?.billets ?? 0}</b></span>
                             <span>Montant: <b>{money(shiftReportsById[s.id]?.montant ?? 0)}</b></span>
                           </div>
                           {shiftReportsById[s.id]?.details && shiftReportsById[s.id]!.details!.length > 0 ? (
-                            <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
+                            <div className="overflow-x-auto rounded-md border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-950">
                               <table className="w-full text-xs">
                                 <thead className="bg-slate-100">
                                   <tr>
@@ -1385,7 +1385,7 @@ export default function ManagerFinancesPage({
                     </tr>
                     <tr className={tableRowClassName()}>
                       <td className={table.td} colSpan={5}>
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                           <div className="flex flex-wrap items-center gap-3">
                             <span className="font-semibold">Session courrier</span>
                             <span>Montant compté (comptable): <b>{money(Number(s.validatedAmount ?? 0))}</b></span>

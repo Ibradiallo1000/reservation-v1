@@ -87,6 +87,7 @@ import {
 import { AccountantKpiCards } from '@/modules/agence/comptabilite/components/phase1/AccountantKpiCards';
 import { ActivePostsPanel } from '@/modules/agence/comptabilite/components/phase1/ActivePostsPanel';
 import { AccountantControlLayout } from '@/modules/agence/comptabilite/components/phase1/AccountantControlLayout';
+import AgencyCashStatement from '@/modules/agence/cashStatement/AgencyCashStatement';
 import { TodayHistoryTimeline } from '@/modules/agence/comptabilite/components/phase1/TodayHistoryTimeline';
 import {
   CourierComptaSessionCard,
@@ -2054,6 +2055,9 @@ const AgenceComptabilitePage: React.FC = () => {
     [pendingCourierSessions, activeCourierSessions, closedCourierSessions, validatedCourierSessions]
   );
 
+  const activePhaseMeta =
+    ACCOUNTANT_PHASE_NAV.find((item) => item.key === phaseView) ?? ACCOUNTANT_PHASE_NAV[0];
+
   /* ============================================================================
      SECTION : RENDU PRINCIPAL
      Description : Interface utilisateur de la page de comptabilité
@@ -2061,7 +2065,7 @@ const AgenceComptabilitePage: React.FC = () => {
   
   return (
     <div
-      className={`min-h-screen min-w-0 w-full overflow-x-hidden ${darkMode ? 'agency-dark' : ''}`}
+      className={`accountant-workspace min-h-screen min-w-0 w-full overflow-x-hidden ${darkMode ? 'agency-dark' : ''}`}
       style={comptaRootChromeStyle}
     >
       {/* ============================================================================
@@ -2224,13 +2228,13 @@ const AgenceComptabilitePage: React.FC = () => {
               <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                 <div className="min-w-0">
                   <h1 className="break-words text-2xl font-bold tracking-normal text-slate-950 sm:text-3xl">
-                    Tableau de bord comptable
+                    {activePhaseMeta.title}
                   </h1>
                   <p className="mt-1 text-sm text-slate-600">
-                    Suivi des postes, réceptions et caisse de l’agence
+                    {activePhaseMeta.subtitle}
                   </p>
                 </div>
-                <StatusBadge status="neutral">{ACCOUNTANT_PHASE_NAV.find((item) => item.key === phaseView)?.label}</StatusBadge>
+                <StatusBadge status="neutral">{activePhaseMeta.label}</StatusBadge>
               </div>
             </div>
         {userRole === 'agency_accountant' &&
@@ -2460,7 +2464,7 @@ const AgenceComptabilitePage: React.FC = () => {
 
         {phaseView === 'rapports' && (
           <div className="hidden">
-            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+            <div className="accountant-night-surface rounded-xl border border-gray-200 shadow-sm p-4 sm:p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-3">
                 <div className="flex items-center gap-3">
                   <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center">
@@ -3011,8 +3015,8 @@ const AgenceComptabilitePage: React.FC = () => {
 
                     return (
                       <div key={s.id} className="group relative">
-                        <div className="absolute inset-0 bg-gradient-to-br from-white to-gray-50 rounded-xl transform group-hover:scale-[1.02] transition-all duration-300"></div>
-                        <div className="relative rounded-xl border border-gray-200 bg-white/80 p-5 shadow-sm hover:shadow-md transition-all duration-300">
+                        <div className="accountant-night-card absolute inset-0 bg-gradient-to-br from-white to-gray-50 rounded-xl transform group-hover:scale-[1.02] transition-all duration-300"></div>
+                        <div className="accountant-night-card relative rounded-xl border border-gray-200 bg-white/80 p-4 shadow-sm transition-all duration-300 hover:shadow-md sm:p-5">
                           {/* En-tête du poste */}
                           <div className="flex items-start justify-between gap-3 mb-4">
                             <div className="min-w-0">
@@ -3038,7 +3042,7 @@ const AgenceComptabilitePage: React.FC = () => {
                           </div>
 
                           {/* Période */}
-                          <div className="mb-4 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50">
+                          <div className="accountant-night-card-detail mb-4 p-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50">
                               <div className="text-xs text-gray-600 mb-1">Période</div>
                             <div className="text-sm font-medium text-gray-900">
                               {s.startTime ? fmtDT(new Date(s.startTime.toDate?.() ?? s.startTime)) : '—'} 
@@ -3070,7 +3074,7 @@ const AgenceComptabilitePage: React.FC = () => {
                               </div>
                             </div>
 
-                            <div className={`p-3 rounded-xl border ${hasDifference ? 'ring-2 ring-red-400' : ''}`} style={{ 
+                            <div className={`accountant-night-status-panel p-3 rounded-xl border ${hasDifference ? 'ring-2 ring-red-400' : ''}`} style={{
                               borderColor: ecart === 0 ? '#d1fae5' : ecart > 0 ? '#bbf7d0' : '#fecaca',
                               backgroundColor: ecart === 0 ? '#f0fdf4' : ecart > 0 ? '#dcfce7' : '#fef2f2'
                             }}>
@@ -3237,13 +3241,7 @@ const AgenceComptabilitePage: React.FC = () => {
         )}
 
         {phaseView === 'historique' && (
-          <TodayHistoryTimeline
-            days={days}
-            loadingCash={loadingCash}
-            totIn={totIn}
-            totOut={totOut}
-            money={money}
-          />
+          <AgencyCashStatement />
         )}
 
         {/* ============================================================================
@@ -3257,7 +3255,7 @@ const AgenceComptabilitePage: React.FC = () => {
             {/* ============================================================================
                SECTION 1 : RÉSUMÉ AUTOMATIQUE (ventes vs caisse)
                ============================================================================ */}
-            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+            <div className="accountant-night-surface rounded-xl border border-gray-200 shadow-sm p-4 sm:p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
                 <div className="flex items-center gap-3">
                   <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center">
@@ -3581,7 +3579,7 @@ const AgenceComptabilitePage: React.FC = () => {
               )}
             </div>
 
-            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-slate-50/50">
+            <div className="accountant-night-surface rounded-xl border border-gray-200 p-4 shadow-sm sm:p-5 bg-gradient-to-r from-white to-slate-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
                 <div className="flex items-center gap-3">
                   <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center">
@@ -3618,7 +3616,7 @@ const AgenceComptabilitePage: React.FC = () => {
               )}
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="space-y-4 rounded-lg border border-gray-200 bg-white p-4">
+                <div className="accountant-night-card space-y-4 rounded-lg border border-gray-200 bg-white p-4">
                   <div className="text-sm font-semibold text-gray-800">SECTION 3 — VALIDATION</div>
                   <p className="text-[11px] text-slate-500">Montant attendu (ventes) sur la période sélectionnée.</p>
                   {loadingLedgerCash ? (
@@ -3685,7 +3683,7 @@ const AgenceComptabilitePage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-gray-200 bg-white p-4 min-h-[200px]">
+                <div className="accountant-night-card rounded-lg border border-gray-200 bg-white p-4 min-h-[200px]">
                   <div className="text-sm font-semibold text-gray-800 mb-3">Historique des contrôles</div>
                   {loadingCashAudits ? (
                     <div className="text-sm text-gray-500">Chargement…</div>
@@ -3758,7 +3756,7 @@ const AgenceComptabilitePage: React.FC = () => {
               </div>
             )}
             {/* En-tête et filtres */}
-            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+            <div className="accountant-night-surface rounded-xl border border-gray-200 shadow-sm p-4 sm:p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
                 <div className="flex items-center gap-3">
                   <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-emerald-50 to-green-50 flex items-center justify-center">
@@ -3975,7 +3973,7 @@ const AgenceComptabilitePage: React.FC = () => {
         {phaseView === 'rapports' && (
           <div className="space-y-6">
             {/* En-tête et sélecteur de date */}
-            <div className="rounded-xl border border-gray-200 shadow-sm p-5 bg-gradient-to-r from-white to-gray-50/50">
+            <div className="accountant-night-surface rounded-xl border border-gray-200 shadow-sm p-4 sm:p-5 bg-gradient-to-r from-white to-gray-50/50">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-5">
                 <div className="flex items-center gap-3">
                   <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center">
@@ -4022,7 +4020,7 @@ const AgenceComptabilitePage: React.FC = () => {
               <UIEmptyState message="Choisissez une date pour afficher la comparaison." />
             ) : (
               <>
-                <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs text-slate-700">
+                <div className="accountant-night-card rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs text-slate-700">
                   <span className="font-semibold">Ventes billets (guichet + en ligne)</span> — même calcul que l&apos;activité réseau.{" "}
                   <span className="font-semibold">Courrier :</span> {AGENCY_KPI_TIME.WORKFLOW_PAIEMENT}.{" "}
                   <span className="font-semibold">Écart caisse :</span> {AGENCY_KPI_TIME.SESSION_POSTE} — ce sont trois lectures différentes.
@@ -4041,7 +4039,7 @@ const AgenceComptabilitePage: React.FC = () => {
                 </p>
 
                 {/* Tableau détaillé */}
-                <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                <div className="accountant-night-surface rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
                   <div className="text-lg font-bold text-gray-900 mb-5">Détail de la journée</div>
                   
                   <div className="min-w-0 overflow-hidden rounded-xl border border-gray-200">
@@ -4259,7 +4257,7 @@ const AgenceComptabilitePage: React.FC = () => {
                   </div>
                   
                   {/* Résumé */}
-                  <div className="mt-6 p-4 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50 border border-gray-200">
+                  <div className="accountant-night-card mt-6 p-4 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100/50 border border-gray-200">
                     <div className="text-sm font-medium text-gray-700 mb-2">Résumé de la journée</div>
                     <div className="text-sm text-gray-600 space-y-1">
                       <div>• <span className="font-medium">{reconciliationData.ventesGuichet.reservations + reconciliationData.ventesEnLigne.reservations}</span> réservations billets</div>
@@ -4303,7 +4301,7 @@ const AgenceComptabilitePage: React.FC = () => {
               <div className="sticky top-0 z-10 flex flex-col gap-2 border-b border-gray-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
                 <div className="min-w-0 text-sm font-semibold text-gray-900 sm:text-base">
                   {treasuryModalView === 'new-operation' && 'Dépense caisse'}
-                  {treasuryModalView === 'transfer' && 'Versement vers la compagnie'}
+                  {treasuryModalView === 'transfer' && 'Transfert'}
                   {treasuryModalView === 'new-payable' && 'Paiement fournisseur'}
                   {treasuryModalView === 'payables' && 'Payables fournisseurs'}
                 </div>
@@ -4336,14 +4334,52 @@ const AgenceComptabilitePage: React.FC = () => {
 const ACCOUNTANT_PHASE_NAV: Array<{
   key: AccountantPhaseView;
   label: string;
+  title: string;
+  subtitle: string;
   icon: React.ReactNode;
 }> = [
-  { key: 'dashboard', label: 'Tableau de bord', icon: <BarChart3 className="h-4 w-4" /> },
-  { key: 'postes', label: 'Postes', icon: <Play className="h-4 w-4" /> },
-  { key: 'receptions', label: 'Réceptions', icon: <HandIcon className="h-4 w-4" /> },
-  { key: 'caisse', label: 'Caisse', icon: <Banknote className="h-4 w-4" /> },
-  { key: 'historique', label: 'Historique', icon: <Clock4 className="h-4 w-4" /> },
-  { key: 'rapports', label: 'Rapports', icon: <FileText className="h-4 w-4" /> },
+  {
+    key: 'dashboard',
+    label: 'Tableau de bord',
+    title: 'Tableau de bord comptable',
+    subtitle: 'Suivi des postes, réceptions et caisse de l’agence',
+    icon: <BarChart3 className="h-4 w-4" />,
+  },
+  {
+    key: 'postes',
+    label: 'Postes',
+    title: 'Postes',
+    subtitle: 'Suivi des services billetterie et courrier',
+    icon: <Play className="h-4 w-4" />,
+  },
+  {
+    key: 'receptions',
+    label: 'Réceptions',
+    title: 'Réceptions',
+    subtitle: 'Réceptions à valider et encaissements associés',
+    icon: <HandIcon className="h-4 w-4" />,
+  },
+  {
+    key: 'caisse',
+    label: 'Finances',
+    title: 'Finances',
+    subtitle: 'Suivi des fonds, dépenses et mouvements de l’agence',
+    icon: <Banknote className="h-4 w-4" />,
+  },
+  {
+    key: 'historique',
+    label: 'Historique',
+    title: 'Historique',
+    subtitle: 'Historique des mouvements de caisse',
+    icon: <Clock4 className="h-4 w-4" />,
+  },
+  {
+    key: 'rapports',
+    label: 'Rapports',
+    title: 'Rapports',
+    subtitle: 'Comparaison des ventes et encaissements',
+    icon: <FileText className="h-4 w-4" />,
+  },
 ];
 
 const AccountantPhaseSidebar: React.FC<{
@@ -4360,7 +4396,7 @@ const AccountantPhaseSidebar: React.FC<{
 }> = ({ activeView, onChange, theme, pendingPostsCount, pendingReceiptsCount, variant, onClose, userName, userRoleLabel, onLogout }) => (
   <aside
     className={cn(
-      'min-w-0 bg-white shadow-xl',
+      'accountant-night-sidebar min-w-0 bg-white shadow-xl',
       variant === 'desktop'
         ? 'fixed bottom-0 left-0 top-16 z-30 hidden w-72 border-r border-slate-200 lg:flex lg:flex-col'
         : 'absolute left-0 top-0 h-full w-[min(20rem,86vw)] border-r border-slate-200'
@@ -4422,26 +4458,27 @@ const AccountantPhaseSidebar: React.FC<{
         })}
       </div>
       <div className="mt-4 border-t border-slate-200 pt-4">
-        <div className="flex min-w-0 items-center gap-3 rounded-xl bg-slate-50 px-3 py-3">
+        <div className="accountant-night-user flex min-w-0 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
           <div
             className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white"
             style={{ backgroundColor: theme.primary }}
           >
             {(userName || 'U').charAt(0).toUpperCase()}
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold text-slate-950">{userName}</div>
             <div className="truncate text-xs text-slate-500">{userRoleLabel}</div>
           </div>
+          <button
+            type="button"
+            onClick={onLogout}
+            className="accountant-night-logout grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-950"
+            aria-label="Déconnexion"
+            title="Déconnexion"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onLogout}
-          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-        >
-          <LogOut className="h-4 w-4" />
-          Déconnexion
-        </button>
       </div>
     </nav>
   </aside>

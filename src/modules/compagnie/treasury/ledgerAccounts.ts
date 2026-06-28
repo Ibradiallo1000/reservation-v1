@@ -57,6 +57,10 @@ export function agencyCashAccountDocId(agencyId: string): string {
   return `agency_${safeSegment(agencyId)}_cash`;
 }
 
+export function agencyExpenseClearingAccountDocId(agencyId: string): string {
+  return `agency_${safeSegment(agencyId)}_expense_clearing`;
+}
+
 /**
  * Contrepartie ventes guichet/courrier espèces avant remise physique validée par le comptable.
  * `type: virtual_clearing`, exclu des agrégats liquidité — la caisse réelle n'augmente qu'à la remise.
@@ -238,6 +242,23 @@ export function specForLedgerDocId(accountDocId: string, agencyIdForAgencyAccoun
   }
   if (accountDocId === "company_mobile_money") {
     return { type: "mobile_money", agencyId: null, label: "Mobile money (compagnie)", includeInLiquidity: true };
+  }
+  const expenseClearingPrefix = "agency_";
+  const expenseClearingSuffix = "_expense_clearing";
+  if (
+    accountDocId.startsWith(expenseClearingPrefix)
+    && accountDocId.endsWith(expenseClearingSuffix)
+  ) {
+    const agencyId = accountDocId.slice(
+      expenseClearingPrefix.length,
+      -expenseClearingSuffix.length
+    );
+    return {
+      type: "virtual_clearing",
+      agencyId,
+      label: "Contrepartie dépenses agence",
+      includeInLiquidity: false,
+    };
   }
   if (accountDocId.includes("_pending_cash")) {
     return {

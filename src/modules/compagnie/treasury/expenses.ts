@@ -17,13 +17,19 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { financialAccountRef } from "./financialAccounts";
-import { ledgerDocIdFromFinancialAccountData } from "./ledgerAccounts";
+import {
+  agencyCashAccountDocId,
+  agencyExpenseClearingAccountDocId,
+  ledgerAccountDocRef,
+  ledgerDocIdFromFinancialAccountData,
+} from "./ledgerAccounts";
 import {
   getExpenseApprovalThresholds,
   getInitialExpenseStatus,
 } from "@/modules/compagnie/settings/expenseApprovalSettings";
 import { createCompanyNotification, notifyCompanyRoles } from "@/shared/services/companyNotifications";
 import { formatCurrency } from "@/shared/utils/formatCurrency";
+import type { FinancialTransactionDoc } from "./types";
 import {
   applyFinancialTransactionInExistingFirestoreTransaction,
 } from "./financialTransactions";
@@ -80,6 +86,8 @@ export interface ExpenseDoc {
   rejectedAt: Timestamp | null;
   rejectionReason: string | null;
   paidAt: Timestamp | null;
+  transactionId?: string | null;
+  idempotencyKey?: string | null;
   createdBy: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -213,6 +221,311 @@ export async function createExpense(params: {
     // Notification failures must not block expense creation.
   }
   return ref.id;
+}
+
+export interface RecordAgencyCashExpenseParams {
+  companyId: string;
+  agencyId: string;
+  category: string;
+  description?: string | null;
+  amount: number;
+  createdBy: string;
+  currency?: string;
+  accountId?: string;
+  expenseId?: string;
+}
+
+export interface RecordAgencyCashExpenseResult {
+  expenseId: string;
+  status: "paid" | "pending_manager";
+  transactionId: string | null;
+  idempotent: boolean;
+}
+
+/**
+ * Dépense caisse agence Spark : écriture atomique équilibrée sur le compte
+ * technique propre à l'agence, sans passer par le moteur financier global.
+ */
+export async function recordAgencyCashExpense(
+  params: RecordAgencyCashExpenseParams
+): Promise<RecordAgencyCashExpenseResult> {
+  const companyId = params.companyId.trim();
+  const agencyId = params.agencyId.trim();
+  const createdBy = params.createdBy.trim();
+  const category = params.category.trim();
+  const description = params.description?.trim() ?? "";
+  const currency = params.currency?.trim() || "XOF";
+  const amount = Number(params.amount);
+
+  if (!companyId || !agencyId || !createdBy) {
+    throw new Error("Contexte compagnie, agence ou utilisateur manquant.");
+  }
+  if (!category) throw new Error("Catégorie de dépense requise.");
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Le montant doit être strictement positif.");
+  }
+
+  const generatedExpenseRef = doc(expensesRef(companyId));
+  const expenseId = params.expenseId?.trim() || generatedExpenseRef.id;
+  if (!expenseId || expenseId.includes("/")) {
+    throw new Error("Identifiant de dépense invalide.");
+  }
+
+  const transactionId = `expense_${expenseId}`;
+  const idempotencyKey = transactionId;
+  const expenseDocumentRef = expenseRef(companyId, expenseId);
+  const settingsRef = doc(db, "companies", companyId, "financialSettings", "current");
+  const transactionRef = doc(db, "companies", companyId, "financialTransactions", transactionId);
+  const idempotencyRef = doc(
+    db,
+    "companies",
+    companyId,
+    "financialTransactionIdempotency",
+    idempotencyKey
+  );
+  const cashAccountId = agencyCashAccountDocId(agencyId);
+  const clearingAccountId = agencyExpenseClearingAccountDocId(agencyId);
+  const cashAccountRef = ledgerAccountDocRef(companyId, cashAccountId);
+  const clearingAccountRef = ledgerAccountDocRef(companyId, clearingAccountId);
+  const expenseAccountId = cashAccountId;
+
+  return runTransaction(db, async (tx): Promise<RecordAgencyCashExpenseResult> => {
+    const [settingsSnap, existingExpenseSnap, existingIdempotencySnap] = await Promise.all([
+      tx.get(settingsRef),
+      tx.get(expenseDocumentRef),
+      tx.get(idempotencyRef),
+    ]);
+
+    if (!settingsSnap.exists()) {
+      throw new Error("Seuil des dépenses agence non configuré par l'admin compagnie.");
+    }
+    const rawThreshold = settingsSnap.data().expenseApprovalThresholds?.agencyManagerLimit;
+    const agencyManagerLimit = Number(rawThreshold);
+    if (!Number.isFinite(agencyManagerLimit) || agencyManagerLimit < 0) {
+      throw new Error("Seuil des dépenses agence invalide.");
+    }
+
+    if (existingExpenseSnap.exists()) {
+      const existing = existingExpenseSnap.data() as ExpenseDoc;
+      if (
+        existing.companyId !== companyId
+        || existing.agencyId !== agencyId
+        || Number(existing.amount) !== amount
+        || existing.createdBy !== createdBy
+      ) {
+        throw new Error("Identifiant de dépense déjà utilisé avec un autre payload.");
+      }
+
+      if (existing.status === "pending_manager") {
+        if (existingIdempotencySnap.exists()) {
+          throw new Error("État incohérent : une dépense en attente possède une idempotence financière.");
+        }
+        return {
+          expenseId,
+          status: "pending_manager",
+          transactionId: null,
+          idempotent: true,
+        };
+      }
+
+      if (existing.status === "paid") {
+        if (!existingIdempotencySnap.exists()) {
+          throw new Error("État incohérent : idempotence financière absente.");
+        }
+        const existingIdempotency = existingIdempotencySnap.data() as {
+          expenseId?: string;
+          transactionId?: string;
+          agencyId?: string;
+          amount?: number;
+        };
+        if (
+          existingIdempotency.expenseId !== expenseId
+          || existingIdempotency.transactionId !== transactionId
+          || existingIdempotency.agencyId !== agencyId
+          || Number(existingIdempotency.amount) !== amount
+        ) {
+          throw new Error("État incohérent : idempotence liée à une autre dépense.");
+        }
+        const existingTransactionSnap = await tx.get(transactionRef);
+        if (!existingTransactionSnap.exists()) {
+          throw new Error("État incohérent : transaction financière absente.");
+        }
+        return {
+          expenseId,
+          status: "paid",
+          transactionId,
+          idempotent: true,
+        };
+      }
+
+      throw new Error(`Dépense existante dans un statut incompatible : ${existing.status}.`);
+    }
+
+    if (existingIdempotencySnap.exists()) {
+      throw new Error("État incohérent : idempotence présente sans dépense.");
+    }
+
+    const now = Timestamp.now();
+    const commonExpensePayload = {
+      companyId,
+      agencyId,
+      expenseType: "agency" as const,
+      category,
+      description,
+      amount,
+      accountId: expenseAccountId,
+      approvedBy: null,
+      approvedAt: null,
+      rejectedBy: null,
+      rejectedAt: null,
+      rejectionReason: null,
+      createdBy,
+      createdAt: now,
+      updatedAt: serverTimestamp(),
+    };
+
+    if (amount > agencyManagerLimit) {
+      tx.set(expenseDocumentRef, {
+        ...commonExpensePayload,
+        status: "pending_manager",
+        paidAt: null,
+        transactionId: null,
+        idempotencyKey: null,
+      });
+      return {
+        expenseId,
+        status: "pending_manager",
+        transactionId: null,
+        idempotent: false,
+      };
+    }
+
+    const [cashAccountSnap, clearingAccountSnap, existingTransactionSnap] = await Promise.all([
+      tx.get(cashAccountRef),
+      tx.get(clearingAccountRef),
+      tx.get(transactionRef),
+    ]);
+    if (existingTransactionSnap.exists()) {
+      throw new Error("État incohérent : transaction présente sans idempotence.");
+    }
+    if (!cashAccountSnap.exists()) throw new Error("Caisse agence introuvable.");
+
+    const cashAccount = cashAccountSnap.data() as Record<string, unknown>;
+    if (
+      cashAccount.companyId !== companyId
+      || cashAccount.agencyId !== agencyId
+      || cashAccount.type !== "cash"
+    ) {
+      throw new Error("Compte caisse agence incohérent.");
+    }
+    const previousCashBalance = Number(cashAccount.balance);
+    if (!Number.isFinite(previousCashBalance)) {
+      throw new Error("Solde caisse agence invalide.");
+    }
+    if (previousCashBalance < amount) {
+      throw new Error("Solde caisse insuffisant.");
+    }
+    const nextCashBalance = previousCashBalance - amount;
+
+    let previousClearingBalance = 0;
+    if (clearingAccountSnap.exists()) {
+      const clearingAccount = clearingAccountSnap.data() as Record<string, unknown>;
+      if (
+        clearingAccount.companyId !== companyId
+        || clearingAccount.agencyId !== agencyId
+        || clearingAccount.type !== "virtual_clearing"
+        || clearingAccount.includeInLiquidity !== false
+      ) {
+        throw new Error("Compte de contrepartie agence incohérent.");
+      }
+      previousClearingBalance = Number(clearingAccount.balance);
+      if (!Number.isFinite(previousClearingBalance)) {
+        throw new Error("Solde du compte de contrepartie invalide.");
+      }
+    }
+    const nextClearingBalance = previousClearingBalance + amount;
+
+    const paidExpensePayload = {
+      ...commonExpensePayload,
+      status: "paid",
+      paidAt: now,
+      transactionId,
+      idempotencyKey,
+    };
+    const financialTransactionPayload: FinancialTransactionDoc = {
+      type: "expense",
+      source: "cash",
+      amount,
+      currency,
+      companyId,
+      agencyId,
+      reservationId: null,
+      debitAccountId: cashAccountId,
+      creditAccountId: clearingAccountId,
+      debitAccountType: "cash",
+      balanceAfter: nextClearingBalance,
+      status: "confirmed",
+      performedAt: now,
+      createdAt: now,
+      metadata: {
+        expenseId,
+        performedBy: createdBy,
+        executionMode: "agency_cash_expense_direct",
+        debitAfter: nextCashBalance,
+        creditAfter: nextClearingBalance,
+      },
+      referenceType: "expense",
+      referenceId: expenseId,
+      uniqueReferenceKey: idempotencyKey,
+      paymentChannel: "cash",
+      paymentMethod: "cash",
+      paymentProvider: null,
+    };
+
+    tx.set(expenseDocumentRef, paidExpensePayload);
+    tx.update(cashAccountRef, {
+      balance: nextCashBalance,
+      updatedAt: serverTimestamp(),
+      lastDirectExpenseId: expenseId,
+    });
+    if (clearingAccountSnap.exists()) {
+      tx.update(clearingAccountRef, {
+        balance: nextClearingBalance,
+        updatedAt: serverTimestamp(),
+        lastDirectExpenseId: expenseId,
+      });
+    } else {
+      tx.set(clearingAccountRef, {
+        id: clearingAccountId,
+        companyId,
+        agencyId,
+        type: "virtual_clearing",
+        label: "Contrepartie dépenses agence",
+        balance: amount,
+        currency,
+        includeInLiquidity: false,
+        lastDirectExpenseId: expenseId,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    tx.set(transactionRef, financialTransactionPayload);
+    tx.set(idempotencyRef, {
+      expenseId,
+      transactionId,
+      agencyId,
+      amount,
+      createdBy,
+      createdAt: serverTimestamp(),
+    });
+
+    return {
+      expenseId,
+      status: "paid",
+      transactionId,
+      idempotent: false,
+    };
+  });
 }
 
 /** Roles that can approve at each level. */

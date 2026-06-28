@@ -5,6 +5,20 @@
 
 import React, { useEffect, useState } from 'react';
 import { useParams } from "react-router-dom";
+import {
+  BadgeDollarSign,
+  Banknote,
+  CreditCard,
+  FileText,
+  Globe2,
+  Image,
+  Package,
+  Share2,
+  Shield,
+  Sparkles,
+  Users,
+  WalletCards,
+} from "lucide-react";
 
 import ParametresVitrine from '@/modules/compagnie/components/parametres/ParametresVitrine';
 import ParametresPersonnel from '@/modules/compagnie/components/parametres/ParametresPersonnel';
@@ -16,9 +30,11 @@ import ParametresServices from '@/modules/compagnie/components/parametres/Parame
 import BibliothequeImagesPage from '@/modules/compagnie/pages/BibliothequeImagesPage';
 import CompanyPaymentSettingsPage from '@/modules/compagnie/pages/CompanyPaymentSettingsPage';
 import ParametresBanques from '@/modules/compagnie/components/parametres/ParametresBanques';
-import CompagnieAgencesPage from '@/modules/compagnie/pages/CompagnieAgencesPage';
 import FinancialSettingsPage from '@/modules/compagnie/settings/FinancialSettingsPage';
 import ParametresCourierColis from '@/modules/compagnie/components/parametres/ParametresCourierColis';
+import CompanySettingsLayout, {
+  type CompanySettingsSection,
+} from '@/modules/compagnie/settings/CompanySettingsLayout';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { StandardLayoutWrapper, PageHeader } from '@/ui';
@@ -30,7 +46,6 @@ import useCompanyTheme from '@/shared/hooks/useCompanyTheme';
 import { Company } from '@/types/companyTypes';
 
 type TabKey =
-  | 'agences'
   | 'plan'
   | 'vitrine'
   | 'personnel'
@@ -44,20 +59,19 @@ type TabKey =
   | 'seuils-depenses'
   | 'courrier-colis';
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: 'agences', label: 'Agences' },
-  { key: 'plan', label: 'Plan & abonnement' },
-  { key: 'vitrine', label: 'Vitrine publique' },
-  { key: 'personnel', label: 'Personnel' },
-  { key: 'securite', label: 'Sécurité' },
-  { key: 'reseaux', label: 'Réseaux sociaux' },
-  { key: 'legaux', label: 'Mentions & politique' },
-  { key: 'services', label: 'Services proposés' },
-  { key: 'medias', label: 'Médias' },
-  { key: 'moyens-paiement', label: 'Moyens de paiement' },
-  { key: 'banques', label: 'Banques' },
-  { key: 'seuils-depenses', label: 'Seuil de dépenses' },
-  { key: 'courrier-colis', label: 'Courrier & colis' },
+const TABS: CompanySettingsSection<TabKey>[] = [
+  { key: 'plan', label: 'Plan & abonnement', icon: BadgeDollarSign },
+  { key: 'vitrine', label: 'Vitrine publique', icon: Globe2 },
+  { key: 'personnel', label: 'Personnel', icon: Users },
+  { key: 'securite', label: 'Sécurité', icon: Shield },
+  { key: 'reseaux', label: 'Réseaux sociaux', icon: Share2 },
+  { key: 'legaux', label: 'Mentions & politique', icon: FileText },
+  { key: 'services', label: 'Services proposés', icon: Sparkles },
+  { key: 'medias', label: 'Médias', icon: Image },
+  { key: 'moyens-paiement', label: 'Moyens de paiement', icon: CreditCard },
+  { key: 'banques', label: 'Banques', icon: Banknote },
+  { key: 'seuils-depenses', label: 'Seuil de dépenses', icon: WalletCards },
+  { key: 'courrier-colis', label: 'Courrier & colis', icon: Package },
 ];
 
 const CompagnieParametresTabsPage: React.FC = () => {
@@ -113,9 +127,6 @@ const CompagnieParametresTabsPage: React.FC = () => {
   ========================= */
   const renderTab = () => {
     switch (selectedTab) {
-      case 'agences':
-        return <CompagnieAgencesPage />;
-
       case 'plan':
         return <ParametresPlan companyId={companyId} />;
 
@@ -163,39 +174,20 @@ const CompagnieParametresTabsPage: React.FC = () => {
         title="Configuration"
         subtitle="Réglages structurels de la compagnie : organisation, vitrine, sécurité, paiements et conformité."
       />
-      <div className="flex flex-wrap gap-2 md:gap-3 mb-6">
-        {TABS.map(tab => {
-          const active = selectedTab === tab.key;
-
-          return (
-            <button
-              key={tab.key}
-              onClick={() => setSelectedTab(tab.key)}
-              className={[
-                'px-4 py-2 rounded-full text-sm font-medium transition-all border',
-                active ? 'shadow-sm' : 'hover:bg-gray-50',
-              ].join(' ')}
-              style={{
-                backgroundColor: active ? theme.colors.primary : '#fff',
-                color: active ? '#fff' : '#1f2937',
-                borderColor: active
-                  ? `${theme.colors.primary}55`
-                  : '#e5e7eb',
-              }}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {loading ? (
-        <div className="bg-white dark:bg-slate-800 rounded-xl border dark:border-slate-700 p-8 text-center text-gray-600 dark:text-slate-400">
-          Chargement…
-        </div>
-      ) : (
-        renderTab()
-      )}
+      <CompanySettingsLayout<TabKey>
+        sections={TABS}
+        activeSection={selectedTab}
+        onSectionChange={setSelectedTab}
+        accentColor={theme.colors.primary}
+      >
+        {loading ? (
+          <div className="rounded-xl border bg-white p-8 text-center text-gray-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+            Chargement…
+          </div>
+        ) : (
+          renderTab()
+        )}
+      </CompanySettingsLayout>
     </StandardLayoutWrapper>
   );
 };

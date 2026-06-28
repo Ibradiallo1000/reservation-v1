@@ -132,4 +132,82 @@ Faire d’abord :
 5. correction minimale,
 6. test complet.
 
+## 11. Phase 1 — Dépenses directes agence sur Firebase Spark
+
+### Décision d’architecture
+
+La Phase 1 des dépenses agence doit être compatible avec Firebase Spark.
+
+- aucune Cloud Function ne doit être utilisée ;
+- le compte global `company_clearing` ne doit pas être utilisé pour ce flux ;
+- toute dépense exécutée doit conserver une contrepartie comptable ;
+- le compte technique de contrepartie est propre à l’agence :
+  `companies/{companyId}/accounts/agency_{agencyId}_expense_clearing`.
+
+Une dépense sans contrepartie est interdite.
+
+### Dépense sous le seuil
+
+Pour une dépense inférieure ou égale au seuil défini par l’admin compagnie, un commit atomique doit :
+
+1. créer la dépense avec le statut `paid` ;
+2. diminuer `agency_{agencyId}_cash` du montant exact ;
+3. augmenter `agency_{agencyId}_expense_clearing` du même montant ;
+4. créer une `financialTransaction` équilibrée ;
+5. créer le document d’idempotence correspondant.
+
+Les identifiants sont déterministes :
+
+- `expenseId` est généré avant le commit ;
+- `transactionId = expense_{expenseId}` ;
+- `idempotencyKey = expense_{expenseId}`.
+
+Un simple update de `balance` non vérifié par les règles atomiques est interdit.
+
+### Dépense au-dessus du seuil
+
+Pour une dépense supérieure au seuil défini par l’admin compagnie :
+
+- la dépense est créée avec le statut `pending_manager` ;
+- aucun compte n’est débité ou crédité ;
+- aucune `financialTransaction` n’est créée ;
+- aucun document d’idempotence financière n’est créé.
+
+### Validation obligatoire avant exposition UI
+
+Le commit complet doit être testé avec Firebase Rules Emulator avant toute activation dans l’interface.
+
+Les tests doivent vérifier ensemble :
+
+- la dépense ;
+- le débit de `agency_cash` ;
+- le crédit de `agency_expense_clearing` ;
+- la `financialTransaction` ;
+- l’idempotence ;
+- l’isolation stricte par compagnie et par agence.
+
+Tester les écritures séparément ne suffit pas.
+
+### Conditions no-go
+
+L’implémentation doit être arrêtée si :
+
+- le commit dépasse les limites d’évaluation des Firestore Rules ;
+- le seuil admin compagnie est absent ou invalide ;
+- un double clic peut générer deux dépenses ou deux mouvements ;
+- un solde peut être modifié sans dépense et transaction correspondantes ;
+- une divergence apparaît entre `expenses`, `accounts` et `financialTransactions`.
+
+### Fichiers critiques de cette phase
+
+Les fichiers suivants sont protégés et exigent audit, validation humaine et tests ciblés avant modification :
+
+- `src/modules/agence/services/sessionService.ts`
+- `firestore.rules`
+- `src/modules/compagnie/treasury/expenses.ts`
+- `src/modules/compagnie/treasury/ledgerAccounts.ts`
+- `src/modules/agence/treasury/pages/AgencyTreasuryNewOperationPage.tsx`
+- `src/modules/agence/manager/ManagerExpensesPage.tsx`
+- `src/modules/compagnie/finances/pages/DepensesPage.tsx`
+
 Fin du protocole.

@@ -76,7 +76,7 @@ export default function ManagerExpensesPage({ embedded: _embedded = false }: Man
         ) : rows.length === 0 ? (
           <EmptyState message="Aucune demande en attente côté chef d'agence." />
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
             <table className={table.base}>
               <thead className={table.head}>
                 <tr>

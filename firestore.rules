@@ -1017,6 +1017,228 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
         && request.resource.data.get('createdAt', null) == request.time
         && request.resource.data.get('updatedAt', null) == request.time;
     }
+    function isAgencyAccountantForCompany(companyId) {
+      let role = getUserRole();
+      return isAuth()
+        && (role == 'agency_accountant' || role == 'comptable' || role == 'Comptable')
+        && getUserAgencyId() != ''
+        && userAgencyBelongsToCompany(companyId);
+    }
+    function agencyDirectExpenseThresholdOk(companyId, amount, direct) {
+      let settingsPath = /databases/$(database)/documents/companies/$(companyId)/financialSettings/current;
+      return amount is number
+        && amount > 0
+        && exists(settingsPath)
+        && get(settingsPath).data.get('expenseApprovalThresholds', {}).get('agencyManagerLimit', -1) is number
+        && (
+          (direct && amount <= get(settingsPath).data.get('expenseApprovalThresholds', {}).get('agencyManagerLimit', -1))
+          || (!direct && amount > get(settingsPath).data.get('expenseApprovalThresholds', {}).get('agencyManagerLimit', -1))
+        );
+    }
+    function agencyDirectPaidExpenseCreateOk(companyId, expenseId) {
+      let agencyId = getUserAgencyId();
+      let amount = request.resource.data.get('amount', 0);
+      let transactionId = 'expense_' + expenseId;
+      let cashAccountId = 'agency_' + agencyId + '_cash';
+      let clearingAccountId = 'agency_' + agencyId + '_expense_clearing';
+      let cashPath = /databases/$(database)/documents/companies/$(companyId)/accounts/$(cashAccountId);
+      let clearingPath = /databases/$(database)/documents/companies/$(companyId)/accounts/$(clearingAccountId);
+      let transactionPath = /databases/$(database)/documents/companies/$(companyId)/financialTransactions/$(transactionId);
+      let idempotencyPath = /databases/$(database)/documents/companies/$(companyId)/financialTransactionIdempotency/$(transactionId);
+      return request.resource.data.get('status', '') == 'paid'
+        && isAgencyAccountantForCompany(companyId)
+        && request.resource.data.keys().hasOnly([
+          'companyId', 'agencyId', 'expenseType', 'category', 'description', 'amount',
+          'accountId', 'approvedBy', 'approvedAt', 'rejectedBy', 'rejectedAt',
+          'rejectionReason', 'createdBy', 'createdAt', 'updatedAt', 'status',
+          'paidAt', 'transactionId', 'idempotencyKey'
+        ])
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == agencyId
+        && request.resource.data.get('expenseType', '') == 'agency'
+        && request.resource.data.get('category', '') is string
+        && request.resource.data.get('category', '').size() > 0
+        && request.resource.data.get('description', '') is string
+        && request.resource.data.get('accountId', '') == cashAccountId
+        && request.resource.data.get('createdBy', '') == request.auth.uid
+        && request.resource.data.get('transactionId', '') == transactionId
+        && request.resource.data.get('idempotencyKey', '') == transactionId
+        && request.resource.data.get('paidAt', null) is timestamp
+        && request.resource.data.get('createdAt', null) is timestamp
+        && request.resource.data.get('updatedAt', null) == request.time
+        && agencyDirectExpenseThresholdOk(companyId, amount, true)
+        && exists(cashPath)
+        && !exists(transactionPath)
+        && !exists(idempotencyPath)
+        && existsAfter(transactionPath)
+        && existsAfter(idempotencyPath)
+        && getAfter(transactionPath).data.get('referenceId', '') == expenseId
+        && getAfter(transactionPath).data.get('amount', 0) == amount
+        && getAfter(idempotencyPath).data.get('expenseId', '') == expenseId
+        && getAfter(idempotencyPath).data.get('transactionId', '') == transactionId
+        && getAfter(cashPath).data.get('lastDirectExpenseId', '') == expenseId
+        && getAfter(cashPath).data.get('balance', 0) == get(cashPath).data.get('balance', 0) - amount
+        && getAfter(clearingPath).data.get('lastDirectExpenseId', '') == expenseId
+        && getAfter(clearingPath).data.get('balance', 0)
+          == (exists(clearingPath) ? get(clearingPath).data.get('balance', 0) : 0) + amount;
+    }
+    function agencyPendingManagerExpenseCreateOk(companyId, expenseId) {
+      let amount = request.resource.data.get('amount', 0);
+      let transactionId = 'expense_' + expenseId;
+      let transactionPath = /databases/$(database)/documents/companies/$(companyId)/financialTransactions/$(transactionId);
+      let idempotencyPath = /databases/$(database)/documents/companies/$(companyId)/financialTransactionIdempotency/$(transactionId);
+      return request.resource.data.get('status', '') == 'pending_manager'
+        && isAgencyAccountantForCompany(companyId)
+        && request.resource.data.keys().hasOnly([
+          'companyId', 'agencyId', 'expenseType', 'category', 'description', 'amount',
+          'accountId', 'approvedBy', 'approvedAt', 'rejectedBy', 'rejectedAt',
+          'rejectionReason', 'createdBy', 'createdAt', 'updatedAt', 'status',
+          'paidAt', 'transactionId', 'idempotencyKey'
+        ])
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && request.resource.data.get('expenseType', '') == 'agency'
+        && request.resource.data.get('accountId', '') == 'agency_' + getUserAgencyId() + '_cash'
+        && request.resource.data.get('createdBy', '') == request.auth.uid
+        && request.resource.data.get('paidAt', 'invalid') == null
+        && request.resource.data.get('transactionId', 'invalid') == null
+        && request.resource.data.get('idempotencyKey', 'invalid') == null
+        && request.resource.data.get('createdAt', null) is timestamp
+        && request.resource.data.get('updatedAt', null) == request.time
+        && agencyDirectExpenseThresholdOk(companyId, amount, false)
+        && !existsAfter(transactionPath)
+        && !existsAfter(idempotencyPath);
+    }
+    function agencyDirectCashExpenseUpdateOk(companyId, accountId) {
+      let expenseId = request.resource.data.get('lastDirectExpenseId', '');
+      let expensePath = /databases/$(database)/documents/companies/$(companyId)/expenses/$(expenseId);
+      return accountId == 'agency_' + getUserAgencyId() + '_cash'
+        && isAgencyAccountantForCompany(companyId)
+        && expenseId is string
+        && expenseId.size() > 0
+        && resource.data.get('companyId', '') == companyId
+        && resource.data.get('agencyId', '') == getUserAgencyId()
+        && resource.data.get('type', '') == 'cash'
+        && request.resource.data.get('companyId', '') == resource.data.get('companyId', '')
+        && request.resource.data.get('agencyId', '') == resource.data.get('agencyId', '')
+        && request.resource.data.get('type', '') == resource.data.get('type', '')
+        && request.resource.data.get('updatedAt', null) == request.time
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['balance', 'updatedAt', 'lastDirectExpenseId'])
+        && !exists(expensePath)
+        && existsAfter(expensePath)
+        && getAfter(expensePath).data.get('status', '') == 'paid'
+        && getAfter(expensePath).data.get('agencyId', '') == getUserAgencyId()
+        && getAfter(expensePath).data.get('amount', 0) is number
+        && getAfter(expensePath).data.get('amount', 0) > 0
+        && request.resource.data.get('balance', -1)
+          == resource.data.get('balance', 0) - getAfter(expensePath).data.get('amount', 0)
+        && request.resource.data.get('balance', -1) >= 0;
+    }
+    function agencyExpenseClearingWriteOk(companyId, accountId, isCreate) {
+      let expenseId = request.resource.data.get('lastDirectExpenseId', '');
+      let expensePath = /databases/$(database)/documents/companies/$(companyId)/expenses/$(expenseId);
+      let previousBalance = isCreate ? 0 : resource.data.get('balance', 0);
+      return accountId == 'agency_' + getUserAgencyId() + '_expense_clearing'
+        && isAgencyAccountantForCompany(companyId)
+        && expenseId is string
+        && expenseId.size() > 0
+        && request.resource.data.get('id', accountId) == accountId
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && request.resource.data.get('type', '') == 'virtual_clearing'
+        && request.resource.data.get('currency', '') == 'XOF'
+        && request.resource.data.get('includeInLiquidity', true) == false
+        && request.resource.data.get('updatedAt', null) == request.time
+        && request.resource.data.get('balance', 0)
+          == previousBalance + getAfter(expensePath).data.get('amount', 0)
+        && (
+          (
+            isCreate
+            && request.resource.data.keys().hasOnly([
+              'id', 'companyId', 'agencyId', 'type', 'label', 'balance', 'currency',
+              'includeInLiquidity', 'lastDirectExpenseId', 'createdAt', 'updatedAt'
+            ])
+            && request.resource.data.get('createdAt', null) == request.time
+          )
+          || (
+            !isCreate
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['balance', 'updatedAt', 'lastDirectExpenseId'])
+            && request.resource.data.get('id', '') == resource.data.get('id', '')
+            && request.resource.data.get('companyId', '') == resource.data.get('companyId', '')
+            && request.resource.data.get('agencyId', '') == resource.data.get('agencyId', '')
+            && request.resource.data.get('type', '') == resource.data.get('type', '')
+            && request.resource.data.get('currency', '') == resource.data.get('currency', '')
+            && request.resource.data.get('includeInLiquidity', true)
+              == resource.data.get('includeInLiquidity', true)
+          )
+        )
+        && !exists(expensePath)
+        && existsAfter(expensePath)
+        && getAfter(expensePath).data.get('status', '') == 'paid'
+        && getAfter(expensePath).data.get('amount', 0) is number
+        && getAfter(expensePath).data.get('amount', 0) > 0;
+    }
+    function agencyDirectExpenseTransactionCreateOk(companyId, transactionId) {
+      let expenseId = request.resource.data.get('referenceId', '');
+      let expensePath = /databases/$(database)/documents/companies/$(companyId)/expenses/$(expenseId);
+      return request.resource.data.get('type', '') == 'expense'
+        && transactionId == 'expense_' + expenseId
+        && isAgencyAccountantForCompany(companyId)
+        && expenseId is string
+        && expenseId.size() > 0
+        && request.resource.data.keys().hasOnly([
+          'type', 'source', 'amount', 'currency', 'companyId', 'agencyId',
+          'reservationId', 'debitAccountId', 'creditAccountId', 'debitAccountType',
+          'balanceAfter', 'status', 'performedAt', 'createdAt', 'metadata',
+          'referenceType', 'referenceId', 'uniqueReferenceKey', 'paymentChannel',
+          'paymentMethod', 'paymentProvider'
+        ])
+        && request.resource.data.get('companyId', '') == companyId
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && request.resource.data.get('source', '') == 'cash'
+        && request.resource.data.get('status', '') == 'confirmed'
+        && request.resource.data.get('amount', 0) == getAfter(expensePath).data.get('amount', 0)
+        && request.resource.data.get('debitAccountId', '')
+          == 'agency_' + getUserAgencyId() + '_cash'
+        && request.resource.data.get('creditAccountId', '')
+          == 'agency_' + getUserAgencyId() + '_expense_clearing'
+        && request.resource.data.get('referenceType', '') == 'expense'
+        && request.resource.data.get('uniqueReferenceKey', '') == transactionId
+        && request.resource.data.get('paymentChannel', '') == 'cash'
+        && request.resource.data.get('paymentMethod', '') == 'cash'
+        && request.resource.data.get('performedAt', null) is timestamp
+        && request.resource.data.get('createdAt', null) is timestamp
+        && request.resource.data.get('metadata', {}).keys().hasOnly([
+          'expenseId', 'performedBy', 'executionMode', 'debitAfter', 'creditAfter'
+        ])
+        && request.resource.data.get('metadata', {}).get('expenseId', '') == expenseId
+        && request.resource.data.get('metadata', {}).get('performedBy', '') == request.auth.uid
+        && request.resource.data.get('metadata', {}).get('executionMode', '')
+          == 'agency_cash_expense_direct'
+        && !exists(expensePath)
+        && existsAfter(expensePath)
+        && getAfter(expensePath).data.get('status', '') == 'paid';
+    }
+    function agencyDirectExpenseIdempotencyCreateOk(companyId, key) {
+      let expenseId = request.resource.data.get('expenseId', '');
+      let expensePath = /databases/$(database)/documents/companies/$(companyId)/expenses/$(expenseId);
+      return key == 'expense_' + expenseId
+        && isAgencyAccountantForCompany(companyId)
+        && expenseId is string
+        && expenseId.size() > 0
+        && request.resource.data.keys().hasOnly([
+          'expenseId', 'transactionId', 'agencyId', 'amount', 'createdBy', 'createdAt'
+        ])
+        && request.resource.data.get('transactionId', '') == key
+        && request.resource.data.get('agencyId', '') == getUserAgencyId()
+        && request.resource.data.get('createdBy', '') == request.auth.uid
+        && request.resource.data.get('createdAt', null) == request.time
+        && !exists(expensePath)
+        && existsAfter(expensePath)
+        && request.resource.data.get('amount', 0) == getAfter(expensePath).data.get('amount', 0);
+    }
     function courierCashLedgerAccountUpdateOk(companyId, accountId) {
       return isCourierAgent()
         && userAgencyBelongsToCompany(companyId)
@@ -1347,6 +1569,11 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
       /* Company banks (used by agency accounting transfer flow and CEO settings). */
       match /companyBanks/{bankId} {
         allow get, list: if canAccessSensitiveCompanyFinance(companyId);
+        allow get, list: if isAuth()
+          && isComptable()
+          && userCompanyId() == companyId
+          && userAgencyBelongsToCompany(companyId)
+          && resource.data.get('isActive', false) == true;
         allow create, update: if canAccessSensitiveCompanyFinance(companyId);
         allow delete: if false;
       }
@@ -2487,16 +2714,29 @@ match /shiftReports/{reportId} {
       }
       match /expenses/{expenseId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
-        allow create: if isAuth() && (
+        allow create: if agencyDirectPaidExpenseCreateOk(companyId, expenseId)
+          || agencyPendingManagerExpenseCreateOk(companyId, expenseId)
+          || (isAuth() && (
           getUserRole() == 'admin_platforme' ||
           (userCompanyId() == companyId && (
             getUserRole() == 'admin_compagnie' ||
-            ((getUserRole() == 'chefAgence' || isComptable())
+            (getUserRole() == 'chefAgence'
               && request.resource.data.get('agencyId', '') == getUserAgencyId()) ||
+            (
+              isComptable()
+              && !isAgencyAccountantForCompany(companyId)
+              && request.resource.data.get('agencyId', '') == getUserAgencyId()
+            ) ||
+            (
+              isAgencyAccountantForCompany(companyId)
+              && request.resource.data.get('agencyId', '') == getUserAgencyId()
+              && request.resource.data.get('status', '') != 'paid'
+              && !request.resource.data.keys().hasAny(['transactionId', 'idempotencyKey'])
+            ) ||
             ((getUserRole() == 'company_accountant' || getUserRole() == 'financial_director')
               && (request.resource.data.get('agencyId', '') == '' || request.resource.data.agencyId == null))
           ))
-        );
+        ));
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow delete: if false;
       }
@@ -2651,6 +2891,8 @@ match /shiftReports/{reportId} {
       */
       match /financialTransactions/{transactionId} {
         allow get: if courierCashFinancialTxReadOk(companyId);
+        allow get: if isAgencyAccountantForCompany(companyId)
+          && transactionId.matches('expense_.+');
         allow get: if canAccessSensitiveCompanyFinance(companyId)
           || (
             isAuth()
@@ -2671,9 +2913,17 @@ match /shiftReports/{reportId} {
           );
         allow list: if canAccessSensitiveCompanyFinance(companyId)
           || agencyAccountantCanListCompanyScopedAccounting(companyId);
-        allow create: if courierCashFinancialTxCreateOk(companyId)
+        allow create: if agencyDirectExpenseTransactionCreateOk(companyId, transactionId)
+          || courierCashFinancialTxCreateOk(companyId)
           || canAccessSensitiveCompanyFinance(companyId)
-          || (canWriteAgencyScopedFinance(companyId) && financialTxAgencyStaffPayload(companyId))
+          || (
+            canWriteAgencyScopedFinance(companyId)
+            && financialTxAgencyStaffPayload(companyId)
+            && (
+              request.resource.data.get('type', '') != 'expense'
+              || !isAgencyAccountantForCompany(companyId)
+            )
+          )
           || (
             isOperatorDigitalForCompany(companyId)
             && request.resource.data.get('companyId', '') == companyId
@@ -2687,6 +2937,8 @@ match /shiftReports/{reportId} {
       }
 
       match /financialTransactionIdempotency/{key} {
+        allow get: if key.matches('expense_.+')
+          && isAgencyAccountantForCompany(companyId);
         allow get: if isAuth()
           && userAgencyBelongsToCompany(companyId)
           && (
@@ -2700,16 +2952,19 @@ match /shiftReports/{reportId} {
           || (isCourierAgent() && userAgencyBelongsToCompany(companyId))
           || agencyAccountantCanListCompanyScopedAccounting(companyId)
           || isOperatorDigitalForCompany(companyId);
-        allow create: if courierCashFinancialIdempotencyOk(companyId)
+        allow create: if agencyDirectExpenseIdempotencyCreateOk(companyId, key)
+          || courierCashFinancialIdempotencyOk(companyId)
           || canAccessSensitiveCompanyFinance(companyId)
           || (
             agencyAccountantCanListCompanyScopedAccounting(companyId)
+            && !key.matches('expense_.+')
             && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
             && request.resource.data.get('transactionId', '').size() > 0
             && request.resource.data.get('createdAt') is timestamp
           )
           || (
             canWriteAgencyScopedFinance(companyId)
+            && (!isAgencyAccountantForCompany(companyId) || !key.matches('expense_.+'))
             && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
             && request.resource.data.get('transactionId', '').size() > 0
             && request.resource.data.get('createdAt') is timestamp
@@ -2743,6 +2998,7 @@ match /accounts/{accountId} {
     && (
       accountId == 'agency_' + getUserAgencyId() + '_cash'
       || accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
+      || accountId == 'agency_' + getUserAgencyId() + '_expense_clearing'
     );
 
   // ✅ Lecture LIST pour le Chef d'Agence (quand il fait getDocs)
@@ -2775,7 +3031,8 @@ match /accounts/{accountId} {
     && resource.data.get('agencyId', '') == getUserAgencyId()
   );
   allow list: if canReadOwnAgencyLedgerAccount(companyId);
-  allow create: if courierCashLedgerAccountCreateOk(companyId, accountId)
+  allow create: if agencyExpenseClearingWriteOk(companyId, accountId, true)
+    || courierCashLedgerAccountCreateOk(companyId, accountId)
     || agencyAccountantPendingCashAccountCreateOk(companyId, accountId)
     || canAccessSensitiveCompanyFinance(companyId)
     || (
@@ -2788,14 +3045,14 @@ match /accounts/{accountId} {
       && request.resource.data.get('includeInLiquidity', false) == true
     );
 
-  allow update: if isAuth()
+  allow update: if accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
+    && isAuth()
     && (
       hasUserRole('agency_accountant')
       || hasUserRole('comptable')
       || hasUserRole('Comptable')
     )
     && userAgencyBelongsToCompany(companyId)
-    && accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
     && resource.data.get('companyId', '') == companyId
     && resource.data.get('agencyId', '') == getUserAgencyId()
     && resource.data.get('type', '') == 'virtual_clearing'
@@ -2806,15 +3063,9 @@ match /accounts/{accountId} {
     && request.resource.data.get('updatedAt', null) == request.time
     && request.resource.data.get('balance', 0) is number
     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'updatedAt']);
-  allow update: if isComptable()
-    && userAgencyBelongsToCompany(companyId)
-    && accountId == 'agency_' + getUserAgencyId() + '_cash'
-    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-      'balance',
-      'lastAccountantValidationShiftId',
-      'updatedAt'
-    ]);
-  allow update: if courierCashLedgerAccountUpdateOk(companyId, accountId)
+  allow update: if agencyDirectCashExpenseUpdateOk(companyId, accountId)
+    || agencyExpenseClearingWriteOk(companyId, accountId, false)
+    || courierCashLedgerAccountUpdateOk(companyId, accountId)
     || agencyAccountantRemittanceLedgerAccountUpdateOk(companyId, accountId)
     || (
       canAccessSensitiveCompanyFinance(companyId)

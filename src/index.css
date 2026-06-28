@@ -264,6 +264,84 @@ img.hero, img.logo {
 /* Inputs dark : bg-slate-900, text-white, border-slate-600 */
 .agency-dark input, .agency-dark select { background-color: #0f172a !important; color: #ffffff !important; border-color: #475569 !important; }
 
+/* Comptabilité agence : surfaces explicitement harmonisées pour le mode nuit. */
+.agency-dark .accountant-night-surface {
+  background-color: #171717 !important;
+  background-image: none !important;
+  border-color: #404040 !important;
+  color: #e5e7eb;
+}
+.agency-dark .accountant-night-card {
+  background-color: #0f172a !important;
+  background-image: none !important;
+  border-color: #334155 !important;
+  box-shadow: none !important;
+}
+.agency-dark .accountant-night-card:hover {
+  background-color: #1e293b !important;
+  border-color: #475569 !important;
+}
+.agency-dark .accountant-night-card-detail,
+.agency-dark .accountant-night-card-icon,
+.agency-dark .accountant-night-logout {
+  background-color: #171717 !important;
+  border-color: #404040 !important;
+  box-shadow: none !important;
+}
+.agency-dark .accountant-night-sidebar {
+  background-color: #0a0a0a !important;
+  border-color: #262626 !important;
+}
+.agency-dark .accountant-night-user {
+  background-color: #171717 !important;
+  border-color: #404040 !important;
+}
+.agency-dark .accountant-night-user .text-slate-950,
+.agency-dark .accountant-night-surface .text-slate-950,
+.agency-dark .accountant-night-card .text-slate-900 {
+  color: #f8fafc !important;
+}
+.agency-dark .accountant-night-user .text-slate-500,
+.agency-dark .accountant-night-surface .text-slate-500,
+.agency-dark .accountant-night-surface .text-slate-600,
+.agency-dark .accountant-night-surface .text-slate-700,
+.agency-dark .accountant-night-card .text-slate-500,
+.agency-dark .accountant-night-card .text-slate-600 {
+  color: #cbd5e1 !important;
+}
+.agency-dark .accountant-night-logout {
+  color: #cbd5e1 !important;
+}
+.agency-dark .accountant-night-logout:hover {
+  background-color: #262626 !important;
+  color: #ffffff !important;
+}
+.agency-dark.accountant-workspace [class*="from-white"],
+.agency-dark.accountant-workspace [class*="bg-white/"],
+.agency-dark.accountant-workspace [class*="bg-slate-50"],
+.agency-dark.accountant-workspace [class*="bg-gray-50"] {
+  background-color: #171717 !important;
+  background-image: none !important;
+}
+.agency-dark.accountant-workspace [class*="border-slate-200"],
+.agency-dark.accountant-workspace [class*="border-gray-200"] {
+  border-color: #404040 !important;
+}
+.agency-dark.accountant-workspace [class*="text-slate-950"],
+.agency-dark.accountant-workspace [class*="text-slate-900"],
+.agency-dark.accountant-workspace [class*="text-slate-800"] {
+  color: #f8fafc !important;
+}
+.agency-dark.accountant-workspace [class*="text-slate-500"],
+.agency-dark.accountant-workspace [class*="text-slate-600"],
+.agency-dark.accountant-workspace [class*="text-slate-700"] {
+  color: #cbd5e1 !important;
+}
+.agency-dark .accountant-night-status-panel {
+  background-color: #0f172a !important;
+  border-color: #475569 !important;
+}
+
 /* ===== RÉSERVATION PUBLIQUE : TOUJOURS MODE JOUR, TOUS LES TEXTES LISIBLES =====
    De la page compagnie jusqu'au billet : fond clair, texte foncé, pas de mode nuit. */
 .public-booking {

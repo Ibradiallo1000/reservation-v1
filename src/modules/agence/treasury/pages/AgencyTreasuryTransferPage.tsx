@@ -3,15 +3,13 @@ import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, SectionCard, ActionButton } from "@/ui";
 import {
-  ensureCompanyBankAccount,
-  getAccount,
-  listAccounts,
-} from "@/modules/compagnie/treasury/financialAccounts";
-import { getAgencyTreasuryLedgerCashDisplay } from "@/modules/agence/comptabilite/agencyCashAuditService";
-import { listCompanyBanks } from "@/modules/compagnie/treasury/companyBanks";
-import { agencyCashAccountId } from "@/modules/compagnie/treasury/types";
-import { getFinancialAccountDisplayName } from "@/modules/compagnie/treasury/accountDisplay";
-import { collection, getDocs } from "firebase/firestore";
+  agencyCashAccountDocId,
+  ledgerAccountDocRef,
+} from "@/modules/compagnie/treasury/ledgerAccounts";
+import {
+  companyBankAccountId,
+} from "@/modules/compagnie/treasury/types";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
@@ -26,10 +24,7 @@ import {
 
 type AccountRow = {
   id: string;
-  agencyId: string | null;
-  accountType: string;
   accountName: string;
-  currentBalance: number;
   currency: string;
 };
 
@@ -48,6 +43,7 @@ export default function AgencyTreasuryTransferPage() {
   const { user } = useAuth() as any;
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
+  const fallbackAgencyName = user?.agencyNom ?? user?.agencyName ?? "Agence";
   const roles: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
   const hasRole = (role: string) => roles.includes(role);
 
@@ -58,14 +54,12 @@ export default function AgencyTreasuryTransferPage() {
     currency: string;
   } | null>(null);
   const [availableAgencyCash, setAvailableAgencyCash] = useState<number>(0);
-  const [mirrorCashSecondary, setMirrorCashSecondary] = useState<number | null>(null);
+  const [agencyDisplayName, setAgencyDisplayName] = useState(fallbackAgencyName);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [toAccountId, setToAccountId] = useState("");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
-  const [bankReference, setBankReference] = useState("");
-  const [depositSlipUrl, setDepositSlipUrl] = useState("");
   const [companyBankNameById, setCompanyBankNameById] = useState<Record<string, string>>({});
   const [requests, setRequests] = useState<TransferRequestRow[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(false);
@@ -79,28 +73,50 @@ export default function AgencyTreasuryTransferPage() {
     let cancelled = false;
     (async () => {
       try {
-        /** Banques configurées dans companyBanks : garantir le compte miroir financialAccounts (id company_bank_<id>). */
-        const metaBanks = await listCompanyBanks(companyId);
-        await Promise.all(
-          metaBanks.map((b) =>
-            ensureCompanyBankAccount(
-              companyId,
-              b.id,
-              b.name,
-              b.currency?.trim() ? b.currency : "XOF"
+        const [cashAccountDoc, banksSnapshot, agencyDoc] = await Promise.all([
+          getDoc(ledgerAccountDocRef(companyId, agencyCashAccountDocId(agencyId))),
+          getDocs(
+            query(
+              collection(db, "companies", companyId, "companyBanks"),
+              where("isActive", "==", true)
             )
-          )
-        );
-        const [cashAccount, banks, primary] = await Promise.all([
-          getAccount(companyId, agencyCashAccountId(agencyId)),
-          listAccounts(companyId, { agencyId: null, accountType: "company_bank" }),
-          getAgencyTreasuryLedgerCashDisplay(companyId, agencyId).catch(() => null),
+          ),
+          getDoc(doc(db, "companies", companyId, "agences", agencyId)).catch(() => null),
         ]);
+        const banks = banksSnapshot.docs.map((bankDoc) => {
+          const data = bankDoc.data() as { name?: string; currency?: string };
+          return {
+            id: companyBankAccountId(bankDoc.id),
+            accountName: data.name?.trim() || "Banque compagnie",
+            currency: data.currency?.trim() || "XOF",
+          };
+        });
+        const cashData = cashAccountDoc.exists()
+          ? (cashAccountDoc.data() as { balance?: number; currency?: string })
+          : null;
+        const cashAccount = cashData
+          ? {
+              id: agencyCashAccountDocId(agencyId),
+              currentBalance: Number(cashData.balance ?? 0) || 0,
+              currency: cashData.currency?.trim() || "XOF",
+            }
+          : null;
+        const bankNames = Object.fromEntries(
+          banksSnapshot.docs.map((bankDoc) => [
+            bankDoc.id,
+            (bankDoc.data() as { name?: string }).name?.trim() || bankDoc.id,
+          ])
+        );
         if (!cancelled) {
           setAgencyCashAccount(cashAccount);
           setCompanyBankAccounts(banks);
-          setAvailableAgencyCash(primary != null ? primary.ledgerCash : 0);
-          setMirrorCashSecondary(primary?.mirrorCash ?? null);
+          setAvailableAgencyCash(cashAccount?.currentBalance ?? 0);
+          setCompanyBankNameById(bankNames);
+          if (agencyDoc?.exists()) {
+            const agencyData = agencyDoc.data() as { nom?: string; nomAgence?: string; name?: string };
+            const officialName = agencyData.nom ?? agencyData.nomAgence ?? agencyData.name;
+            if (officialName?.trim()) setAgencyDisplayName(officialName.trim());
+          }
         }
       } catch (e) {
         console.error("[AgencyTreasuryTransferPage] chargement comptes", e);
@@ -130,19 +146,8 @@ export default function AgencyTreasuryTransferPage() {
   }, [companyId, agencyId]);
 
   useEffect(() => {
-    if (!companyId) return;
-    getDocs(collection(db, "companies", companyId, "companyBanks"))
-      .then((snap) => {
-        const names: Record<string, string> = {};
-        snap.docs.forEach((d) => {
-          const data = d.data() as { name?: string; isActive?: boolean };
-          if (data.isActive === false) return;
-          names[d.id] = data.name ?? d.id;
-        });
-        setCompanyBankNameById(names);
-      })
-      .catch(() => setCompanyBankNameById({}));
-  }, [companyId]);
+    setAgencyDisplayName(fallbackAgencyName);
+  }, [fallbackAgencyName]);
 
   const canInitiateTransfer = hasRole("agency_accountant") || hasRole("admin_compagnie");
   const canValidateTransfer = hasRole("chefAgence") || hasRole("superviseur") || hasRole("admin_compagnie");
@@ -217,15 +222,11 @@ export default function AgencyTreasuryTransferPage() {
         currency,
         initiatedBy: user.uid,
         initiatedByRoles: roles,
-        description: description.trim() || "Versement caisse agence vers banque compagnie",
-        bankReference,
-        depositSlipUrl,
+        description: description.trim() || "Transfert caisse agence vers banque",
       });
-      toast.success("Demande de versement créée. En attente de validation chef d'agence.");
+      toast.success("Demande de transfert créée. En attente de validation chef d'agence.");
       setAmount("");
       setDescription("");
-      setBankReference("");
-      setDepositSlipUrl("");
       const list = await listTransferRequests(companyId, { agencyId, limitCount: 50 });
       setRequests(list);
     } catch (error) {
@@ -294,30 +295,25 @@ export default function AgencyTreasuryTransferPage() {
 
   const body = (
     <div className="min-w-0 space-y-6">
-      <SectionCard title="Versement caisse agence vers banque compagnie" icon={ArrowRightLeft}>
+      <SectionCard title="Transfert caisse agence vers banque" icon={ArrowRightLeft}>
         {loading ? (
           <div className="py-8 text-center text-gray-500">Chargement des comptes...</div>
         ) : (
           <div className="space-y-4">
             {!canInitiateTransfer && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                Mode consultation: seul le comptable agence peut initier ce versement.
+                Mode consultation : seul le comptable agence peut initier ce transfert.
               </div>
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Caisse agence (automatique)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Source agence</label>
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-700">
                   {agencyCashAccount
-                    ? `Caisse agence (ledger) : ${formatCurrency(availableAgencyCash, agencyCashAccount.currency)}`
-                    : "Aucune caisse agence configurée"}
+                    ? `${agencyDisplayName} — Caisse agence : ${formatCurrency(availableAgencyCash, agencyCashAccount.currency)}`
+                    : "Caisse agence introuvable"}
                 </div>
-                {mirrorCashSecondary != null && agencyCashAccount ? (
-                  <p className="mt-1 text-xs text-gray-500">
-                    Compte miroir (référence) : {formatCurrency(mirrorCashSecondary, agencyCashAccount.currency)}
-                  </p>
-                ) : null}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Destination (banque compagnie)</label>
@@ -329,7 +325,7 @@ export default function AgencyTreasuryTransferPage() {
                   <option value="">Sélectionner</option>
                   {companyBankAccounts.map((a) => (
                     <option key={a.id} value={a.id}>
-                      {getFinancialAccountDisplayName(a, { companyBankNameById })}
+                      {a.accountName}
                     </option>
                   ))}
                 </select>
@@ -351,7 +347,7 @@ export default function AgencyTreasuryTransferPage() {
                 </p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Motif facultatif</label>
                 <input
                   type="text"
                   value={description}
@@ -362,32 +358,9 @@ export default function AgencyTreasuryTransferPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Reference depot bancaire</label>
-                <input
-                  type="text"
-                  value={bankReference}
-                  onChange={(e) => setBankReference(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  placeholder="Ref. bordereau / banque"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">URL bordereau</label>
-                <input
-                  type="url"
-                  value={depositSlipUrl}
-                  onChange={(e) => setDepositSlipUrl(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  placeholder="https://..."
-                />
-              </div>
-            </div>
-
             {canInitiateTransfer ? (
               <ActionButton type="button" onClick={() => void handleSubmit()} disabled={submitting}>
-                {submitting ? "Traitement..." : "Initier le versement"}
+                {submitting ? "Traitement..." : "Enregistrer le transfert"}
               </ActionButton>
             ) : null}
           </div>
