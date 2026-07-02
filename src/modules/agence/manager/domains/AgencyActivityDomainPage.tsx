@@ -13,7 +13,6 @@ import {
   TrendingDown,
   X,
 } from "lucide-react";
-import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
 import { ActionButton, StandardLayoutWrapper } from "@/ui";
@@ -434,18 +433,12 @@ function OverlayPanel({
   );
 }
 
-function PendingExpenseCard({
+function DailyExpenseCard({
   expense,
   money,
-  busy,
-  onApprove,
-  onReject,
 }: {
   expense: AgencyPendingExpenseItem;
   money: (value: number) => string;
-  busy: boolean;
-  onApprove: (expenseId: string) => void;
-  onReject: (expenseId: string) => void;
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
@@ -458,13 +451,10 @@ function PendingExpenseCard({
         </div>
         <p className="text-sm font-semibold text-slate-900 dark:text-white">{money(Number(expense.amount || 0))}</p>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <ActionButton size="sm" disabled={busy} onClick={() => onApprove(expense.id)}>
-          Approuver
-        </ActionButton>
-        <ActionButton size="sm" variant="secondary" disabled={busy} onClick={() => onReject(expense.id)}>
-          Refuser
-        </ActionButton>
+      <div className="mt-3">
+        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200">
+          Payée
+        </span>
       </div>
     </div>
   );
@@ -489,9 +479,6 @@ export default function AgencyActivityDomainPage() {
     departuresToValidate,
     activePosts,
     pendingExpenses,
-    processingExpenseId,
-    approvePendingExpense,
-    rejectPendingExpense,
   } = useAgencyActionCockpit();
 
   const [openPanel, setOpenPanel] = useState<AgencyActionPanel | null>(null);
@@ -549,26 +536,6 @@ export default function AgencyActivityDomainPage() {
 
   const showPremiumSection =
     (isPremium && recommendations.length > 0) || (!isPremium && weeklyLeakEstimate > 0);
-
-  const handleApproveExpense = async (expenseId: string) => {
-    try {
-      await approvePendingExpense(expenseId);
-      toast.success("Dépense approuvée.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Approbation impossible.");
-    }
-  };
-
-  const handleRejectExpense = async (expenseId: string) => {
-    const reason = window.prompt("Motif du refus", "Refusé depuis le dashboard agence");
-    if (!reason || !reason.trim()) return;
-    try {
-      await rejectPendingExpense(expenseId, reason.trim());
-      toast.success("Dépense refusée.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Refus impossible.");
-    }
-  };
 
   const alertMeta = (alert: AgencyAlertItem) => {
     if (alert.id.startsWith("long-session-")) {
@@ -760,12 +727,12 @@ export default function AgencyActivityDomainPage() {
                 badge={weakTrips.length > 0 ? "À surveiller" : "OK"}
               />
               <CompactKpiCard
-                title="Dépenses en attente"
+                title="Dépenses du jour"
                 value={pendingExpenses.length}
-                subtitle={pendingExpenses.length > 0 ? "Validation requise" : "Aucune en attente"}
+                subtitle={pendingExpenses.length > 0 ? "Dépenses payées aujourd'hui" : "Aucune dépense payée"}
                 icon={<Receipt className="h-4 w-4" />}
-                tone={pendingExpenses.length > 0 ? "warning" : "neutral"}
-                actionLabel={pendingExpenses.length > 0 ? "Traiter" : undefined}
+                tone="neutral"
+                actionLabel={pendingExpenses.length > 0 ? "Consulter" : undefined}
                 onAction={pendingExpenses.length > 0 ? () => setOpenPanel("expenses") : undefined}
               />
               <CompactKpiCard
@@ -959,23 +926,20 @@ export default function AgencyActivityDomainPage() {
       <OverlayPanel
         open={openPanel === "expenses"}
         onClose={() => setOpenPanel(null)}
-        title="Dépenses en attente"
-        subtitle="Validez rapidement ce qui bloque le terrain."
+        title="Dépenses du jour"
+        subtitle="Dépenses payées enregistrées pour cette agence."
       >
         <div className="space-y-4">
           {pendingExpenses.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-              Aucune dépense en attente pour cette agence.
+              Aucune dépense payée aujourd'hui pour cette agence.
             </div>
           ) : (
             pendingExpenses.map((expense) => (
-              <PendingExpenseCard
+              <DailyExpenseCard
                 key={expense.id}
                 expense={expense}
                 money={money}
-                busy={processingExpenseId === expense.id}
-                onApprove={(expenseId) => void handleApproveExpense(expenseId)}
-                onReject={(expenseId) => void handleRejectExpense(expenseId)}
               />
             ))
           )}

@@ -2122,117 +2122,22 @@ const AgenceComptabilitePage: React.FC = () => {
       className={`accountant-workspace min-h-screen min-w-0 w-full overflow-x-hidden ${darkMode ? 'agency-dark' : ''}`}
       style={comptaRootChromeStyle}
     >
-      {/* ============================================================================
-         HEADER : EN-TÊTE AVEC BRANDING ET NAVIGATION
-         Description : Logo, nom d'entreprise, onglets et informations comptable
-         ============================================================================ */}
-      
-      <div className="fixed inset-x-0 top-0 z-40 shadow-sm print:static">
-        <div
-          className="h-16 border-b border-gray-200/60"
-          style={{ backgroundImage: 'var(--agency-gradient-header)' }}
-        >
-          <div className="min-w-0 h-full px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 sm:gap-3">
-            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-              <button
-                type="button"
-                onClick={() => setMobileNavOpen(true)}
-                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-50 lg:hidden"
-                aria-label="Ouvrir le menu comptable"
-              >
-                <Menu className="h-5 w-5" />
-              </button>
-              {companyLogo ? (
-                <img
-                  src={companyLogo}
-                  alt="Logo compagnie"
-                  className="h-10 w-10 rounded-lg object-contain border border-gray-200 bg-white p-0.5"
-                />
-              ) : (
-                <div className="h-10 w-10 rounded-lg border border-gray-200 bg-white grid place-items-center">
-                  <Building2 className="h-5 w-5 text-gray-500" />
-                </div>
-              )}
-              <div className="min-w-0">
-                <div
-                  className="text-xs sm:text-sm font-semibold text-gray-900 truncate"
-                  style={{ color: theme?.primary }}
-                  title={companyName}
-                >
-                  {companyName}
-                </div>
-                <div className="hidden sm:flex text-xs text-gray-500 items-center gap-1.5 truncate">
-                  <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
-                  <span className="truncate">{agencyName}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-1 sm:gap-2">
-              <button
-                type="button"
-                className="relative inline-flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
-                title="Notifications"
-              >
-                <Bell className="h-4 w-4" />
-                {userRole === 'agency_accountant' &&
-                  allowedTabs.includes('versements') &&
-                  pendingCourierSessions.length > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-[1rem] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-4 text-center">
-                    {pendingCourierSessions.length > 99 ? '99+' : pendingCourierSessions.length}
-                  </span>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={toggleDarkMode}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-sm text-gray-700 transition-colors hover:bg-gray-50 sm:h-9 sm:w-9"
-                title={darkMode ? 'Mode jour' : 'Mode nuit'}
-              >
-                <span aria-hidden>{darkMode ? '☀️' : '🌙'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {false && tab !== 'ventes' && (
-          <div
-            className="border-b border-gray-200/60"
-            style={{ backgroundImage: 'var(--agency-gradient-subheader)' }}
-          >
-            <div className="max-w-7xl mx-auto min-w-0 px-4 sm:px-6 py-2">
-              <div className="flex min-w-0 gap-2 overflow-x-auto whitespace-nowrap pb-1 [-webkit-overflow-scrolling:touch]">
-              {allowedTabs.includes('versements') && (
-                <TabButton
-                  active={tab === 'versements'}
-                  onClick={() => setComptaTab('versements')}
-                  label="Versements"
-                  icon={<HandIcon className="h-4 w-4" />}
-                  theme={theme}
-                  badgeCount={userRole === 'agency_accountant' ? receptionsPendingTotal : 0}
-                />
-              )}
-              {allowedTabs.includes('caisse') && (
-                <TabButton
-                  active={tab === 'caisse'}
-                  onClick={() => setComptaTab('caisse')}
-                  label="Caisse"
-                  icon={<Banknote className="h-4 w-4" />}
-                  theme={theme}
-                />
-              )}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
       <AccountantPhaseSidebar
         activeView={phaseView}
         onChange={setPhaseView}
         theme={theme}
+        companyName={companyName}
+        agencyName={agencyName}
+        companyLogo={companyLogo}
         pendingPostsCount={pendingShifts.length + pendingCourierSessions.length}
         pendingReceiptsCount={receptionsPendingTotal}
+        notificationCount={
+          userRole === 'agency_accountant' && allowedTabs.includes('versements')
+            ? pendingCourierSessions.length
+            : 0
+        }
+        darkMode={darkMode}
+        onToggleDarkMode={toggleDarkMode}
         variant="desktop"
         userName={accountant?.displayName || accountant?.email || user?.email || 'Utilisateur'}
         userRoleLabel={accountantCode || 'Comptable'}
@@ -2255,8 +2160,18 @@ const AgenceComptabilitePage: React.FC = () => {
             activeView={phaseView}
             onChange={setPhaseView}
             theme={theme}
+            companyName={companyName}
+            agencyName={agencyName}
+            companyLogo={companyLogo}
             pendingPostsCount={pendingShifts.length + pendingCourierSessions.length}
             pendingReceiptsCount={receptionsPendingTotal}
+            notificationCount={
+              userRole === 'agency_accountant' && allowedTabs.includes('versements')
+                ? pendingCourierSessions.length
+                : 0
+            }
+            darkMode={darkMode}
+            onToggleDarkMode={toggleDarkMode}
             variant="mobile"
             onClose={() => setMobileNavOpen(false)}
             userName={accountant?.displayName || accountant?.email || user?.email || 'Utilisateur'}
@@ -2275,20 +2190,25 @@ const AgenceComptabilitePage: React.FC = () => {
          Description : Contenu des différents onglets
          ============================================================================ */}
       
-      <div className="min-w-0 pt-16 lg:pl-72">
-        <main className="min-w-0 px-3 py-5 sm:px-6 lg:px-8">
-          <div className="mx-auto min-w-0 max-w-[1600px] space-y-6">
-            <div className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-5">
-              <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                <div className="min-w-0">
-                  <h1 className="break-words text-2xl font-bold tracking-normal text-slate-950 sm:text-3xl">
-                    {activePhaseMeta.title}
-                  </h1>
-                  <p className="mt-1 text-sm text-slate-600">
-                    {activePhaseMeta.subtitle}
-                  </p>
-                </div>
-                <StatusBadge status="neutral">{activePhaseMeta.label}</StatusBadge>
+      <div className="min-w-0 lg:pl-72">
+        <main className="min-w-0 px-3 py-4 sm:px-6 lg:px-8">
+          <div className="mx-auto min-w-0 max-w-[1600px] space-y-5">
+            <div className="flex min-w-0 items-start gap-3">
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(true)}
+                className="mt-0.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-50 lg:hidden"
+                aria-label="Ouvrir le menu comptable"
+              >
+                <Menu className="h-5 w-5" />
+              </button>
+              <div className="min-w-0">
+                <h1 className="break-words text-2xl font-bold tracking-normal text-slate-950 sm:text-3xl">
+                  {activePhaseMeta.title}
+                </h1>
+                <p className="mt-1 text-sm text-slate-600">
+                  {activePhaseMeta.subtitle}
+                </p>
               </div>
             </div>
         {userRole === 'agency_accountant' &&
@@ -2452,15 +2372,15 @@ const AgenceComptabilitePage: React.FC = () => {
               title="Service courrier actif"
               icon={Package}
               right={
-                <StatusBadge status="neutral">
-                  {activeCourierSessions.length} poste{activeCourierSessions.length > 1 ? 's' : ''}
+                <StatusBadge status="success">
+                  {activeCourierSessions.length} service{activeCourierSessions.length > 1 ? 's' : ''} actif{activeCourierSessions.length > 1 ? 's' : ''}
                 </StatusBadge>
               }
             >
               {activeCourierSessions.length === 0 ? (
                 <UIEmptyState message="Aucun poste courrier actif." />
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                   {activeCourierSessions.map((s) => (
                     <CourierComptaSessionCard
                       key={s.id}
@@ -2490,7 +2410,7 @@ const AgenceComptabilitePage: React.FC = () => {
               {pendingShifts.length === 0 && pendingCourierSessions.length === 0 ? (
                 <UIEmptyState message="Aucune demande d'ouverture en attente." />
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                   {pendingCourierSessions.map((s) => (
                     <CourierComptaSessionCard
                       key={s.id}
@@ -4690,27 +4610,68 @@ const AccountantPhaseSidebar: React.FC<{
   activeView: AccountantPhaseView;
   onChange: (view: AccountantPhaseView) => void;
   theme: { primary: string; secondary: string };
+  companyName: string;
+  agencyName: string;
+  companyLogo: string | null;
   pendingPostsCount: number;
   pendingReceiptsCount: number;
+  notificationCount: number;
+  darkMode: boolean;
+  onToggleDarkMode: () => void;
   variant: 'desktop' | 'mobile';
   onClose?: () => void;
   userName: string;
   userRoleLabel: string;
   onLogout: () => Promise<void>;
-}> = ({ activeView, onChange, theme, pendingPostsCount, pendingReceiptsCount, variant, onClose, userName, userRoleLabel, onLogout }) => (
+}> = ({
+  activeView,
+  onChange,
+  theme,
+  companyName,
+  agencyName,
+  companyLogo,
+  pendingPostsCount,
+  pendingReceiptsCount,
+  notificationCount,
+  darkMode,
+  onToggleDarkMode,
+  variant,
+  onClose,
+  userName,
+  userRoleLabel,
+  onLogout,
+}) => (
   <aside
     className={cn(
       'accountant-night-sidebar min-w-0 bg-white shadow-xl',
       variant === 'desktop'
-        ? 'fixed bottom-0 left-0 top-16 z-30 hidden w-72 border-r border-slate-200 lg:flex lg:flex-col'
+        ? 'fixed bottom-0 left-0 top-0 z-30 hidden w-72 border-r border-slate-200 lg:flex lg:flex-col'
         : 'absolute left-0 top-0 h-full w-[min(20rem,86vw)] border-r border-slate-200'
     )}
   >
     <nav className="flex min-h-0 flex-1 flex-col p-3">
-      <div className="flex items-center justify-between gap-3 px-3 py-3">
-        <div className="min-w-0">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Navigation</div>
-          <div className="truncate text-sm font-bold text-slate-950">Comptable agence</div>
+      <div className="flex items-start justify-between gap-3 px-3 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          {companyLogo ? (
+            <img
+              src={companyLogo}
+              alt={companyName}
+              className="h-11 w-11 shrink-0 rounded-xl border border-slate-200 bg-white object-contain p-1"
+            />
+          ) : (
+            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-slate-200 bg-slate-50">
+              <Building2 className="h-5 w-5 text-slate-500" />
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="truncate text-sm font-bold text-slate-950" title={companyName}>
+              {companyName}
+            </div>
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-slate-500">
+              <MapPin className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate" title={agencyName}>{agencyName}</span>
+            </div>
+          </div>
         </div>
         {variant === 'mobile' ? (
           <button
@@ -4761,7 +4722,30 @@ const AccountantPhaseSidebar: React.FC<{
           );
         })}
       </div>
-      <div className="mt-4 border-t border-slate-200 pt-4">
+      <div className="mt-4 border-t border-slate-200 pt-3">
+        <div className="mb-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            className="relative inline-flex min-w-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+            title="Notifications"
+          >
+            <Bell className="h-4 w-4" />
+            <span className="truncate">Notifications</span>
+            {notificationCount > 0 ? (
+              <span className="absolute -right-1 -top-1 min-w-[1rem] rounded-full bg-red-500 px-1 py-0.5 text-[10px] font-bold leading-none text-white">
+                {notificationCount > 99 ? '99+' : notificationCount}
+              </span>
+            ) : null}
+          </button>
+          <button
+            type="button"
+            onClick={onToggleDarkMode}
+            className="inline-flex min-w-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+            title={darkMode ? 'Mode jour' : 'Mode nuit'}
+          >
+            {darkMode ? 'Mode jour' : 'Mode nuit'}
+          </button>
+        </div>
         <div className="accountant-night-user flex min-w-0 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
           <div
             className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-bold text-white"

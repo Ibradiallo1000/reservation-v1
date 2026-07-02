@@ -1,5 +1,5 @@
 import React from "react";
-import { Clock4, Pause, Play } from "lucide-react";
+import { Clock4, Pause, Ticket } from "lucide-react";
 import { SectionShifts, type AccountantShift, type AccountantTheme, type ComptaUserCacheEntry } from "./AccountantSharedUi";
 
 export const ActivePostsPanel: React.FC<{
@@ -21,63 +21,45 @@ export const ActivePostsPanel: React.FC<{
   renderPendingAction,
   renderPausedAction,
 }) => (
-  <section className="accountant-night-surface min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-    <div className="mb-4 flex min-w-0 flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-      <div className="min-w-0">
-        <h2 className="text-lg font-bold text-slate-950 sm:text-xl">Service billetterie actif</h2>
-      </div>
-      <div className="accountant-night-card grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-2 text-center">
-        <div className="accountant-night-card-detail min-w-0 rounded-lg bg-white px-3 py-2">
-          <div className="text-lg font-bold leading-tight" style={{ color: theme.primary }}>{activeShifts.length}</div>
-          <div className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500">Service</div>
-        </div>
-        <div className="accountant-night-card-detail min-w-0 rounded-lg bg-white px-3 py-2">
-          <div className="text-lg font-bold leading-tight text-amber-700">{pendingShifts.length}</div>
-          <div className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500">Attente</div>
-        </div>
-        <div className="accountant-night-card-detail min-w-0 rounded-lg bg-white px-3 py-2">
-          <div className="text-lg font-bold leading-tight text-slate-700">{pausedShifts.length}</div>
-          <div className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500">Pause</div>
-        </div>
-      </div>
-    </div>
+  <div className="min-w-0 space-y-4">
+    <SectionShifts
+      title="Service billetterie actif"
+      icon={Ticket}
+      list={activeShifts}
+      usersCache={usersCache}
+      liveStats={liveStats}
+      theme={theme}
+      actions={() => null}
+      badgeStatus="success"
+      badgeLabel={`${activeShifts.length} guichet${activeShifts.length > 1 ? "s" : ""} actif${activeShifts.length > 1 ? "s" : ""}`}
+    />
 
-    <div className="min-w-0 space-y-4">
+    {pendingShifts.length > 0 ? (
       <SectionShifts
-        title="Service billetterie actif"
-        icon={Play}
-        list={activeShifts}
+        title="Postes en attente d'activation"
+        hint="Le service est prêt et attend l'activation."
+        icon={Clock4}
+        list={pendingShifts}
+        usersCache={usersCache}
+        liveStats={{}}
+        theme={theme}
+        actions={renderPendingAction}
+        badgeStatus="pending"
+      />
+    ) : null}
+
+    {pausedShifts.length > 0 ? (
+      <SectionShifts
+        title="Postes en pause"
+        hint="Peuvent être remis en service. Clôture par le vendeur uniquement."
+        icon={Pause}
+        list={pausedShifts}
         usersCache={usersCache}
         liveStats={liveStats}
         theme={theme}
-        actions={() => null}
+        actions={renderPausedAction}
+        badgeStatus="warning"
       />
-
-      {pendingShifts.length > 0 ? (
-        <SectionShifts
-          title="Postes en attente d'activation"
-          hint="Le service est prêt et attend l'activation."
-          icon={Clock4}
-          list={pendingShifts}
-          usersCache={usersCache}
-          liveStats={{}}
-          theme={theme}
-          actions={renderPendingAction}
-        />
-      ) : null}
-
-      {pausedShifts.length > 0 ? (
-        <SectionShifts
-          title="Postes en pause"
-          hint="Peuvent être remis en service. Clôture par le vendeur uniquement."
-          icon={Pause}
-          list={pausedShifts}
-          usersCache={usersCache}
-          liveStats={liveStats}
-          theme={theme}
-          actions={renderPausedAction}
-        />
-      ) : null}
-    </div>
-  </section>
+    ) : null}
+  </div>
 );

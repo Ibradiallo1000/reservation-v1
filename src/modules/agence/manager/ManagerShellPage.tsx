@@ -142,7 +142,7 @@ const FULL_SECTIONS: Array<
     moduleKey: "planning",
   },
   {
-    label: "Validation départs",
+    label: "Suivi départs",
     icon: ClipboardCheck,
     path: "/agence/validation-departs",
     end: true,
@@ -255,7 +255,7 @@ const ManagerShellInner: React.FC = () => {
 
     const list: NavSection[] = visibleBaseSections
       .map((s) => {
-        if (s.label === "Validation départs" && !has("chefAgence") && !has("chefagence")) {
+        if (s.label === "Suivi départs" && !has("chefAgence") && !has("chefagence")) {
           return null;
         }
         if (s.label === "Arrivées attendues" && !has("chefAgence") && !has("chefagence")) {

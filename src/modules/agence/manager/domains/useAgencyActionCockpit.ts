@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -17,7 +17,7 @@ import {
   belongsToGuichetSession,
   isOnlinePaymentChannel,
 } from "@/modules/agence/guichet/guichetSessionReservationModel";
-import { approveExpense, listExpenses, rejectExpense, type ExpenseDoc } from "@/modules/compagnie/treasury/expenses";
+import { listExpenses, type ExpenseDoc } from "@/modules/compagnie/treasury/expenses";
 import {
   tripInstanceArrival,
   tripInstanceDeparture,
@@ -32,6 +32,10 @@ import {
   getAgencyCashPosition,
 } from "@/modules/agence/comptabilite/agencyCashAuditService";
 import { getLedgerBalances } from "@/modules/compagnie/treasury/financialTransactions";
+import {
+  subscribeTripAssignmentsForDate,
+  type TripAssignmentDoc,
+} from "@/modules/agence/planning/tripAssignmentService";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -107,6 +111,34 @@ type DepartureWorkflowDoc = {
   date?: string | null;
   agencyId?: string | null;
   companyId?: string | null;
+};
+
+type WeeklyTripDoc = {
+  id: string;
+  departure: string;
+  arrival: string;
+  horaires: Record<string, string[]>;
+  active: boolean;
+  tripDurationMinutes?: number;
+  places?: number;
+  seats?: number;
+  capacity?: number;
+  capacitySeats?: number;
+  seatCapacity?: number;
+  price?: number | null;
+};
+
+type PlannedDepartureSlot = {
+  id: string;
+  tripId: string;
+  date: string;
+  heure: string;
+  departure: string;
+  arrival: string;
+  assignment?: (TripAssignmentDoc & { id: string }) | null;
+  tripInstance?: TripInstanceDocWithId | null;
+  capacity: number;
+  price: number;
 };
 
 export type AgencyLiveActivityMetric = {
@@ -246,6 +278,27 @@ function formatDuration(from: Date | null, now: Date): string {
 
 function normalizeText(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
+}
+
+function weekdayFRFromIso(iso: string): string {
+  const parts = iso.split("-").map(Number);
+  const year = parts[0] ?? 0;
+  const month = parts[1] ?? 1;
+  const day = parts[2] ?? 1;
+  const date = new Date(year, month - 1, day);
+  return date.toLocaleDateString("fr-FR", { weekday: "long" }).toLowerCase();
+}
+
+function normHeure(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function planningSlotKey(tripId: unknown, date: string, heure: unknown): string {
+  return `${String(tripId ?? "").trim()}|${date}|${normHeure(heure)}`;
+}
+
+function routeSlotKey(departure: unknown, arrival: unknown, date: string, heure: unknown): string {
+  return `${normalizeText(departure)}|${normalizeText(arrival)}|${date}|${normHeure(heure)}`;
 }
 
 function isReservationCancelled(normalizedStatus: string): boolean {
@@ -394,7 +447,15 @@ function tripHasArrived(trip: TripInstanceDocWithId): boolean {
 }
 
 function expenseLabel(expense: AgencyPendingExpenseItem): string {
-  return String(expense.description ?? "").trim() || "Dépense en attente";
+  return String(expense.description ?? "").trim() || "Dépense du jour";
+}
+
+function expenseDateForDashboard(expense: AgencyPendingExpenseItem): Date | null {
+  return (
+    toDateOrNull(expense.paidAt) ??
+    toDateOrNull(expense.expenseDate) ??
+    toDateOrNull(expense.createdAt)
+  );
 }
 
 function getLiveActivity(sources: RawLiveSources): {
@@ -553,7 +614,8 @@ function getTripReservationAggregates(reservationRows: ReservationRow[]): Map<st
 }
 
 function getTripsAnalysis(params: {
-  tripsToday: TripInstanceDocWithId[];
+  plannedDeparturesToday: PlannedDepartureSlot[];
+  extraTripsToday: TripInstanceDocWithId[];
   destinationTripsToday: TripInstanceDocWithId[];
   reservationAggregates: Map<string, TripReservationAggregate>;
   averageTicketPrice: number;
@@ -567,29 +629,36 @@ function getTripsAnalysis(params: {
   operations: { departuresToday: number; arrivalsExpected: number };
   weeklyLeakEstimate: number;
 } {
-  const liveTrips = params.tripsToday
-    .map<AgencyLiveTripItem>((trip) => {
-      const capacity = Math.max(1, tripInstanceSeatCapacity(trip) || 50);
-      const reservationAggregate = params.reservationAggregates.get(trip.id) ?? {
+  const fromPlannedSlots = params.plannedDeparturesToday.map<AgencyLiveTripItem>((slot) => {
+      const trip = slot.tripInstance ?? null;
+      const capacity = Math.max(1, trip ? tripInstanceSeatCapacity(trip) || slot.capacity : slot.capacity || 50);
+      const reservationAggregate = trip
+        ? params.reservationAggregates.get(trip.id) ?? {
+            reservations: 0,
+            reservedSeats: 0,
+            revenue: 0,
+          }
+        : {
         reservations: 0,
         reservedSeats: 0,
         revenue: 0,
       };
       const fillRate = Math.max(0, Math.min(1, reservationAggregate.reservedSeats / capacity));
-      const scheduledAt = tripScheduledAt(trip.date, tripInstanceTime(trip), params.agencyTimezone);
+      const scheduledAt = tripScheduledAt(slot.date, slot.heure, params.agencyTimezone);
       
       // Récupérer le workflow de départ depuis la map
       const workflow =
-        params.departureWorkflowsByKey.get(trip.id) ??
-        params.departureWorkflowsByKey.get(String((trip as any).tripInstanceId ?? "")) ??
-        params.departureWorkflowsByKey.get(String((trip as any).tripAssignmentId ?? ""));
+        (trip ? params.departureWorkflowsByKey.get(trip.id) : undefined) ??
+        params.departureWorkflowsByKey.get(String(slot.assignment?.id ?? "")) ??
+        (trip ? params.departureWorkflowsByKey.get(String((trip as any).tripInstanceId ?? "")) : undefined) ??
+        (trip ? params.departureWorkflowsByKey.get(String((trip as any).tripAssignmentId ?? "")) : undefined);
       
       // Statut effectif priorisant le workflow
       const effectiveStatus = String(
         workflow?.tripStatus ??
-        (trip as any).tripStatus ??
-        trip.status ??
-        trip.statutMetier ??
+        (trip as any)?.tripStatus ??
+        trip?.status ??
+        trip?.statutMetier ??
         ""
       ).toUpperCase();
       
@@ -600,42 +669,99 @@ function getTripsAnalysis(params: {
         Boolean(workflow?.departureConfirmedBy) ||
         Boolean(workflow?.departedAt);
       
-      const departed = workflowDeparted || tripHasDeparted(trip);
+      const departed = workflowDeparted || (trip ? tripHasDeparted(trip) : false);
       
       const isLate =
         scheduledAt != null &&
         scheduledAt.getTime() < params.now.getTime() - DEPARTURE_LATE_THRESHOLD_MINUTES * 60000 &&
         !departed;
       
-      const needsValidation = normalizeText(trip.statutMetier) === "validation_agence_requise";
+      const needsValidation = !departed;
       const tone: AgencyTripTone =
         fillRate < 0.4 ? "critical" : fillRate < 0.7 ? "warning" : "healthy";
-      const routeLabel = `${tripInstanceDeparture(trip) || "Départ"} → ${tripInstanceArrival(trip) || "Arrivée"}`;
+      const routeLabel = `${slot.departure || "Départ"} → ${slot.arrival || "Arrivée"}`;
       const avgPrice =
         reservationAggregate.reservedSeats > 0
           ? reservationAggregate.revenue / reservationAggregate.reservedSeats
-          : Math.max(0, Number(trip.price ?? 0)) || params.averageTicketPrice;
+          : Math.max(0, Number(slot.price ?? 0)) || params.averageTicketPrice;
       const estimatedLoss = Math.max(0, Math.round((capacity - reservationAggregate.reservedSeats) * avgPrice));
 
       return {
-        id: trip.id,
-        tripInstanceId: trip.id,
+        id: trip?.id ?? slot.id,
+        tripInstanceId: trip?.id ?? slot.id,
         routeLabel,
-        departureTime: tripInstanceTime(trip) || "—",
+        departureTime: slot.heure || "—",
         reservedSeats: reservationAggregate.reservedSeats,
         capacity,
         fillRate,
         tone,
         needsValidation,
         isLate,
-        statusLabel: departed ? "Départ confirmé" : needsValidation ? "À surveiller" : isLate ? "En retard" : "En cours",
+        statusLabel: departed ? "Départ confirmé" : isLate ? "En retard" : "À surveiller",
         estimatedLoss,
         departureConfirmed: departed,
-        departureConfirmedAt: workflow?.departureConfirmedAt ?? (trip as any).departureConfirmedAt,
-        departedAt: workflow?.departedAt ?? (trip as any).departedAt,
-        confirmedAt: workflow?.departureConfirmedAt ?? (trip as any).confirmedAt,
+        departureConfirmedAt: workflow?.departureConfirmedAt ?? (trip as any)?.departureConfirmedAt,
+        departedAt: workflow?.departedAt ?? (trip as any)?.departedAt,
+        confirmedAt: workflow?.departureConfirmedAt ?? (trip as any)?.confirmedAt,
       };
-    })
+    });
+
+  const fromExtraTripInstances = params.extraTripsToday.map<AgencyLiveTripItem>((trip) => {
+    const capacity = Math.max(1, tripInstanceSeatCapacity(trip) || 50);
+    const reservationAggregate = params.reservationAggregates.get(trip.id) ?? {
+      reservations: 0,
+      reservedSeats: 0,
+      revenue: 0,
+    };
+    const fillRate = Math.max(0, Math.min(1, reservationAggregate.reservedSeats / capacity));
+    const scheduledAt = tripScheduledAt(trip.date, tripInstanceTime(trip), params.agencyTimezone);
+    const workflow =
+      params.departureWorkflowsByKey.get(trip.id) ??
+      params.departureWorkflowsByKey.get(String((trip as any).tripInstanceId ?? "")) ??
+      params.departureWorkflowsByKey.get(String((trip as any).tripAssignmentId ?? ""));
+    const effectiveStatus = String(
+      workflow?.tripStatus ??
+      (trip as any).tripStatus ??
+      trip.status ??
+      trip.statutMetier ??
+      ""
+    ).toUpperCase();
+    const departed =
+      effectiveStatus === "DEPARTED" ||
+      Boolean(workflow?.departureConfirmedAt) ||
+      Boolean(workflow?.departureConfirmedBy) ||
+      Boolean(workflow?.departedAt) ||
+      tripHasDeparted(trip);
+    const isLate =
+      scheduledAt != null &&
+      scheduledAt.getTime() < params.now.getTime() - DEPARTURE_LATE_THRESHOLD_MINUTES * 60000 &&
+      !departed;
+    const routeLabel = `${tripInstanceDeparture(trip) || "Départ"} → ${tripInstanceArrival(trip) || "Arrivée"}`;
+    const avgPrice =
+      reservationAggregate.reservedSeats > 0
+        ? reservationAggregate.revenue / reservationAggregate.reservedSeats
+        : Math.max(0, Number(trip.price ?? 0)) || params.averageTicketPrice;
+    return {
+      id: trip.id,
+      tripInstanceId: trip.id,
+      routeLabel,
+      departureTime: tripInstanceTime(trip) || "—",
+      reservedSeats: reservationAggregate.reservedSeats,
+      capacity,
+      fillRate,
+      tone: fillRate < 0.4 ? "critical" : fillRate < 0.7 ? "warning" : "healthy",
+      needsValidation: !departed,
+      isLate,
+      statusLabel: departed ? "Départ confirmé" : isLate ? "En retard" : "À surveiller",
+      estimatedLoss: Math.max(0, Math.round((capacity - reservationAggregate.reservedSeats) * avgPrice)),
+      departureConfirmed: departed,
+      departureConfirmedAt: workflow?.departureConfirmedAt ?? (trip as any).departureConfirmedAt,
+      departedAt: workflow?.departedAt ?? (trip as any).departedAt,
+      confirmedAt: workflow?.departureConfirmedAt ?? (trip as any).confirmedAt,
+    };
+  });
+
+  const liveTrips = [...fromPlannedSlots, ...fromExtraTripInstances]
     .sort((left, right) => left.departureTime.localeCompare(right.departureTime));
 
   const weakTrips = liveTrips
@@ -660,7 +786,7 @@ function getTripsAnalysis(params: {
     weakTrips,
     departuresToValidate,
     operations: {
-      departuresToday: params.tripsToday.length,
+      departuresToday: liveTrips.length,
       arrivalsExpected,
     },
     weeklyLeakEstimate,
@@ -697,14 +823,14 @@ function getTodoItems(params: {
     },
     {
       id: "expenses",
-      title: "Dépenses en attente",
+      title: "Dépenses du jour",
       count: params.pendingExpenses.length,
       detail:
         params.pendingExpenses.length > 0
-          ? "Traitez rapidement les validations qui bloquent le terrain."
-          : "Aucune dépense en attente de votre validation.",
-      tone: params.pendingExpenses.length > 0 ? "warning" : "neutral",
-      actionLabel: "Traiter maintenant",
+          ? "Consultez les sorties caisse déjà enregistrées."
+          : "Aucune dépense payée aujourd'hui.",
+      tone: params.pendingExpenses.length > 0 ? "neutral" : "neutral",
+      actionLabel: "Consulter",
     },
   ];
 }
@@ -749,15 +875,6 @@ function getAlerts(params: {
       title: "🚨 Départ en retard",
       detail: `${trip.routeLabel} devait partir à ${trip.departureTime}. Consultez le départ maintenant.`,
       tone: "critical",
-    });
-  }
-
-  if (params.pendingExpenses.length > 0) {
-    alerts.push({
-      id: "pending-expenses",
-      title: "💰 Validation dépenses à traiter",
-      detail: `${params.pendingExpenses.length} dépense(s) attendent encore votre décision.`,
-      tone: "warning",
     });
   }
 
@@ -823,9 +940,10 @@ function getActivityFeed(params: {
       occurredAt: reservation.createdAt,
       tone: "neutral",
     }));
+  const onlineReservationIds = new Set(onlineReservationEvents.map((event) => event.id.replace("online-reservation-", "")));
 
   const reservationEvents = params.reservationRows
-    .filter((reservation) => reservation.createdAt != null)
+    .filter((reservation) => reservation.createdAt != null && !onlineReservationIds.has(reservation.id))
     .map<AgencyActivityFeedItem>((reservation) => ({
       id: `reservation-${reservation.id}`,
       kind: "ticket",
@@ -907,13 +1025,6 @@ export function useAgencyActionCockpit() {
 
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
-  const userId = user?.uid ?? "";
-  const roleList = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
-  const approverRole =
-    roleList.find((role) => role === "chefAgence" || role === "chefagence" || role === "admin_compagnie") ??
-    roleList[0] ??
-    null;
-
   const agencyTimezone = useMemo(
     () => resolveAgencyTimezone({ timezone: user?.agencyTimezone }),
     [user?.agencyTimezone]
@@ -930,6 +1041,8 @@ export function useAgencyActionCockpit() {
   const [rawReservations, setRawReservations] = useState<Array<Record<string, unknown>>>([]);
   const [rawActiveGuichetReservations, setRawActiveGuichetReservations] = useState<Array<Record<string, unknown>>>([]);
   const [rawShipments, setRawShipments] = useState<ShipmentRow[]>([]);
+  const [weeklyTrips, setWeeklyTrips] = useState<WeeklyTripDoc[]>([]);
+  const [tripAssignments, setTripAssignments] = useState<Array<TripAssignmentDoc & { id: string }>>([]);
   const [originTrips, setOriginTrips] = useState<TripInstanceDocWithId[]>([]);
   const [destinationTrips, setDestinationTrips] = useState<TripInstanceDocWithId[]>([]);
   const [pendingExpenses, setPendingExpenses] = useState<AgencyPendingExpenseItem[]>([]);
@@ -951,10 +1064,11 @@ export function useAgencyActionCockpit() {
   const [loadingCourierSessions, setLoadingCourierSessions] = useState(true);
   const [loadingReservations, setLoadingReservations] = useState(true);
   const [loadingShipments, setLoadingShipments] = useState(true);
+  const [loadingWeeklyTrips, setLoadingWeeklyTrips] = useState(true);
+  const [loadingTripAssignments, setLoadingTripAssignments] = useState(true);
   const [loadingTrips, setLoadingTrips] = useState(true);
   const [loadingExpenses, setLoadingExpenses] = useState(true);
 
-  const [processingExpenseId, setProcessingExpenseId] = useState<string | null>(null);
   const [timeTick, setTimeTick] = useState(0);
 
   useEffect(() => {
@@ -1330,6 +1444,68 @@ export function useAgencyActionCockpit() {
 
   useEffect(() => {
     if (!companyId || !agencyId) {
+      setWeeklyTrips([]);
+      setLoadingWeeklyTrips(false);
+      return;
+    }
+
+    setLoadingWeeklyTrips(true);
+    return onSnapshot(
+      collection(db, "companies", companyId, "agences", agencyId, "weeklyTrips"),
+      (snapshot) => {
+        setWeeklyTrips(
+          snapshot.docs.map((docSnap) => {
+            const data = docSnap.data() as Record<string, unknown>;
+            return {
+              id: docSnap.id,
+              departure: String(data.departure ?? ""),
+              arrival: String(data.arrival ?? ""),
+              horaires: (data.horaires as Record<string, string[]>) ?? {},
+              active: data.active !== false,
+              tripDurationMinutes: Number(data.tripDurationMinutes ?? data.durationMinutes ?? data.dureeMinutes ?? 0) || undefined,
+              places: Number(data.places ?? 0) || undefined,
+              seats: Number(data.seats ?? 0) || undefined,
+              capacity: Number(data.capacity ?? 0) || undefined,
+              capacitySeats: Number(data.capacitySeats ?? 0) || undefined,
+              seatCapacity: Number(data.seatCapacity ?? 0) || undefined,
+              price: data.price == null ? null : Number(data.price),
+            };
+          })
+        );
+        setLoadingWeeklyTrips(false);
+      },
+      () => {
+        setWeeklyTrips([]);
+        setLoadingWeeklyTrips(false);
+      }
+    );
+  }, [companyId, agencyId]);
+
+  useEffect(() => {
+    if (!companyId || !agencyId || !todayKey) {
+      setTripAssignments([]);
+      setLoadingTripAssignments(false);
+      return;
+    }
+
+    setLoadingTripAssignments(true);
+    return subscribeTripAssignmentsForDate(
+      companyId,
+      agencyId,
+      todayKey,
+      (rows) => {
+        setTripAssignments(rows);
+        setLoadingTripAssignments(false);
+      },
+      () => {
+        setTripAssignments([]);
+        setLoadingTripAssignments(false);
+      }
+    );
+  }, [companyId, agencyId, todayKey]);
+
+  useEffect(() => {
+    if (!companyId || !agencyId) {
       setOriginTrips([]);
       setDestinationTrips([]);
       setLoadingTrips(false);
@@ -1383,12 +1559,17 @@ export function useAgencyActionCockpit() {
       if (showLoading) setLoadingExpenses(true);
       void listExpenses(companyId, {
         agencyId,
-        statusIn: ["pending", "pending_manager"],
-        limitCount: 30,
+        status: "paid",
+        limitCount: 100,
       })
         .then((rows) => {
           if (cancelled) return;
-          setPendingExpenses(rows);
+          setPendingExpenses(
+            rows.filter((expense) => {
+              const expenseDate = expenseDateForDashboard(expense);
+              return expenseDate != null && expenseDate >= dayStart && expenseDate <= dayEnd;
+            })
+          );
           setLoadingExpenses(false);
         })
         .catch(() => {
@@ -1404,7 +1585,7 @@ export function useAgencyActionCockpit() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [companyId, agencyId]);
+  }, [companyId, agencyId, dayStart, dayEnd]);
 
   const reservationRows = useMemo<ReservationRow[]>(() => {
     return rawReservations.map(toReservationRow);
@@ -1445,6 +1626,67 @@ export function useAgencyActionCockpit() {
     () => destinationTrips.filter((trip) => String(trip.date ?? "") === todayKey),
     [destinationTrips, todayKey]
   );
+  const plannedDeparturesToday = useMemo<PlannedDepartureSlot[]>(() => {
+    const dayName = weekdayFRFromIso(todayKey);
+    const assignmentsBySlot = new Map<string, TripAssignmentDoc & { id: string }>();
+    for (const assignment of tripAssignments) {
+      assignmentsBySlot.set(planningSlotKey(assignment.tripId, assignment.date, assignment.heure), assignment);
+    }
+
+    const tripsByPlanningSlot = new Map<string, TripInstanceDocWithId>();
+    const tripsByRouteSlot = new Map<string, TripInstanceDocWithId>();
+    for (const trip of tripsToday) {
+      const time = tripInstanceTime(trip);
+      const weeklyTripId = String((trip as any).weeklyTripId ?? (trip as any).trajetId ?? (trip as any).tripId ?? "").trim();
+      if (weeklyTripId) tripsByPlanningSlot.set(planningSlotKey(weeklyTripId, String(trip.date ?? todayKey), time), trip);
+      tripsByRouteSlot.set(routeSlotKey(tripInstanceDeparture(trip), tripInstanceArrival(trip), String(trip.date ?? todayKey), time), trip);
+    }
+
+    const slots: PlannedDepartureSlot[] = [];
+    for (const weeklyTrip of weeklyTrips) {
+      if (!weeklyTrip.active) continue;
+      const horaires = (weeklyTrip.horaires?.[dayName] ?? []).map(normHeure).filter(Boolean);
+      for (const heure of horaires) {
+        const slotKey = planningSlotKey(weeklyTrip.id, todayKey, heure);
+        const routeKey = routeSlotKey(weeklyTrip.departure, weeklyTrip.arrival, todayKey, heure);
+        const tripInstance = tripsByPlanningSlot.get(slotKey) ?? tripsByRouteSlot.get(routeKey) ?? null;
+        const capacity = Math.max(
+          1,
+          Number(
+            weeklyTrip.places ??
+              weeklyTrip.seats ??
+              weeklyTrip.capacitySeats ??
+              weeklyTrip.seatCapacity ??
+              weeklyTrip.capacity ??
+              50
+          ) || 50
+        );
+        slots.push({
+          id: slotKey,
+          tripId: weeklyTrip.id,
+          date: todayKey,
+          heure,
+          departure: weeklyTrip.departure,
+          arrival: weeklyTrip.arrival,
+          assignment: assignmentsBySlot.get(slotKey) ?? null,
+          tripInstance,
+          capacity,
+          price: Math.max(0, Number(weeklyTrip.price ?? 0) || 0),
+        });
+      }
+    }
+
+    return slots.sort((left, right) => left.heure.localeCompare(right.heure));
+  }, [weeklyTrips, tripAssignments, tripsToday, todayKey]);
+
+  const plannedTripInstanceIds = useMemo(() => {
+    return new Set(plannedDeparturesToday.map((slot) => slot.tripInstance?.id).filter(Boolean) as string[]);
+  }, [plannedDeparturesToday]);
+
+  const extraTripsToday = useMemo(
+    () => tripsToday.filter((trip) => !plannedTripInstanceIds.has(trip.id)),
+    [tripsToday, plannedTripInstanceIds]
+  );
 
   const averageTicketPrice = useMemo(() => {
     const confirmedReservations = reservationRows.filter(
@@ -1480,7 +1722,8 @@ export function useAgencyActionCockpit() {
   const tripInsights = useMemo(
     () =>
       getTripsAnalysis({
-        tripsToday,
+        plannedDeparturesToday,
+        extraTripsToday,
         destinationTripsToday,
         reservationAggregates,
         averageTicketPrice,
@@ -1488,7 +1731,16 @@ export function useAgencyActionCockpit() {
         now,
         departureWorkflowsByKey,
       }),
-    [tripsToday, destinationTripsToday, reservationAggregates, averageTicketPrice, agencyTimezone, now, departureWorkflowsByKey]
+    [
+      plannedDeparturesToday,
+      extraTripsToday,
+      destinationTripsToday,
+      reservationAggregates,
+      averageTicketPrice,
+      agencyTimezone,
+      now,
+      departureWorkflowsByKey,
+    ]
   );
 
   const summary = useMemo(() => {
@@ -1559,32 +1811,6 @@ export function useAgencyActionCockpit() {
     [tripInsights.departuresToValidate, liveActivity.activePosts, pendingExpenses]
   );
 
-  const approvePendingExpense = useCallback(
-    async (expenseId: string) => {
-      if (!companyId || !userId || !approverRole) throw new Error("Validation indisponible.");
-      setProcessingExpenseId(expenseId);
-      try {
-        await approveExpense(companyId, expenseId, userId, approverRole);
-      } finally {
-        setProcessingExpenseId(null);
-      }
-    },
-    [companyId, userId, approverRole]
-  );
-
-  const rejectPendingExpense = useCallback(
-    async (expenseId: string, reason: string) => {
-      if (!companyId || !userId || !approverRole) throw new Error("Validation indisponible.");
-      setProcessingExpenseId(expenseId);
-      try {
-        await rejectExpense(companyId, expenseId, userId, reason, approverRole);
-      } finally {
-        setProcessingExpenseId(null);
-      }
-    },
-    [companyId, userId, approverRole]
-  );
-
   return {
     loading:
       planLoading ||
@@ -1593,6 +1819,8 @@ export function useAgencyActionCockpit() {
       loadingReservations ||
       loadingOnlineReservationsToday ||
       loadingShipments ||
+      loadingWeeklyTrips ||
+      loadingTripAssignments ||
       loadingTrips ||
       loadingExpenses ||
       loadingDepartureWorkflows,
@@ -1613,8 +1841,5 @@ export function useAgencyActionCockpit() {
     departuresToValidate: tripInsights.departuresToValidate,
     activePosts: liveActivity.activePosts,
     pendingExpenses,
-    processingExpenseId,
-    approvePendingExpense,
-    rejectPendingExpense,
   };
 }
