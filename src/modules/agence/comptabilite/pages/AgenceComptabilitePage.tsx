@@ -33,7 +33,7 @@ import {
   Activity, AlertTriangle, Banknote, Building2, CheckCircle2, Clock4, Scale,
   Download, FileText, HandIcon, LogOut, MapPin, Package, Play, Plus, StopCircle, Bell,
   Ticket, Wallet, BarChart3,
-  RefreshCw, TrendingUp, CreditCard, Smartphone, ArrowDownCircle, Menu, X
+  RefreshCw, TrendingUp, CreditCard, Smartphone, ArrowDownCircle, Menu, X, Printer
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -50,7 +50,6 @@ import { getUnifiedCommercialActivity } from '@/modules/compagnie/networkStats/a
 import { getCashTransactionsByLocation } from '@/modules/compagnie/cash/cashService';
 import type { AgencyCashPosition } from '@/modules/agence/comptabilite/agencyCashAuditService';
 import {
-  getAgencyCashLedgerPeriodSummary,
   getAgencyCashPosition,
   listAgencyCashAudits,
   validateAgencyCash,
@@ -88,7 +87,14 @@ import { AccountantKpiCards } from '@/modules/agence/comptabilite/components/pha
 import { ActivePostsPanel } from '@/modules/agence/comptabilite/components/phase1/ActivePostsPanel';
 import { AccountantControlLayout } from '@/modules/agence/comptabilite/components/phase1/AccountantControlLayout';
 import AgencyCashStatement from '@/modules/agence/cashStatement/AgencyCashStatement';
-import { TodayHistoryTimeline } from '@/modules/agence/comptabilite/components/phase1/TodayHistoryTimeline';
+import {
+  buildAgencyCashStatementSummary,
+  loadAgencyCashStatementCached,
+} from '@/modules/agence/cashStatement/agencyCashStatementService';
+import type {
+  AgencyCashStatementRow,
+  AgencyCashStatementSummary,
+} from '@/modules/agence/cashStatement/agencyCashStatementTypes';
 import {
   CourierComptaSessionCard,
   InfoCard,
@@ -195,28 +201,91 @@ type ShiftAgg = {
    Description : Structures pour la gestion de la caisse d'agence
    ============================================================================ */
 
-type CashDay = { dateISO: string; entrees: number; sorties: number; solde: number };
+type TreasuryModalView = 'new-operation' | 'transfer' | 'new-payable' | 'payables' | null;
+type ReportPeriodPreset = 'today' | '7d' | '30d' | 'month' | 'custom';
 
-/** Une ligne par jour calendaire (évite clés React dupliquées et correspond au libellé « Historique par jour »). */
-function aggregateCashDaysByDate(rows: CashDay[]): CashDay[] {
-  const map = new Map<string, { entrees: number; sorties: number }>();
-  for (const r of rows) {
-    const cur = map.get(r.dateISO) ?? { entrees: 0, sorties: 0 };
-    cur.entrees += r.entrees;
-    cur.sorties += r.sorties;
-    map.set(r.dateISO, cur);
-  }
-  return Array.from(map.entries())
-    .map(([dateISO, agg]) => ({
-      dateISO,
-      entrees: agg.entrees,
-      sorties: agg.sorties,
-      solde: agg.entrees - agg.sorties,
-    }))
-    .sort((a, b) => (a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : 0));
+type AccountingReportBreakdown = {
+  billetterie: number;
+  courrier: number;
+  ajustements: number;
+  depenses: number;
+  versementsCompagnie: number;
+};
+
+function classifyReportBreakdown(rows: AgencyCashStatementRow[]): AccountingReportBreakdown {
+  return rows.reduce<AccountingReportBreakdown>(
+    (sum, row) => {
+      const label = `${row.label} ${row.typeLabel}`.toLowerCase();
+      if (row.entry > 0) {
+        if (row.category === 'validation' && label.includes('courrier')) {
+          sum.courrier += row.entry;
+        } else if (row.category === 'validation') {
+          sum.billetterie += row.entry;
+        } else {
+          sum.ajustements += row.entry;
+        }
+      }
+      if (row.exit > 0) {
+        if (row.category === 'transfer') {
+          sum.versementsCompagnie += row.exit;
+        } else {
+          sum.depenses += row.exit;
+        }
+      }
+      return sum;
+    },
+    {
+      billetterie: 0,
+      courrier: 0,
+      ajustements: 0,
+      depenses: 0,
+      versementsCompagnie: 0,
+    }
+  );
 }
 
-type TreasuryModalView = 'new-operation' | 'transfer' | 'new-payable' | 'payables' | null;
+function toDateInputValue(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function buildReportPeriodRange(
+  preset: ReportPeriodPreset,
+  customFrom: string,
+  customTo: string
+): { from: Date; to: Date } {
+  const now = new Date();
+  const endToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  if (preset === 'today') {
+    return {
+      from: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0),
+      to: endToday,
+    };
+  }
+  if (preset === '7d' || preset === '30d') {
+    const days = preset === '7d' ? 6 : 29;
+    return {
+      from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - days, 0, 0, 0, 0),
+      to: endToday,
+    };
+  }
+  if (preset === 'month') {
+    return {
+      from: new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0),
+      to: endToday,
+    };
+  }
+  const fallback = {
+    from: new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0),
+    to: endToday,
+  };
+  if (!customFrom || !customTo) return fallback;
+  const from = new Date(customFrom);
+  const to = new Date(customTo);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return fallback;
+  from.setHours(0, 0, 0, 0);
+  to.setHours(23, 59, 59, 999);
+  return { from, to };
+}
 
 /* ============================================================================
    SECTION : TYPES RÉCONCILIATION
@@ -254,7 +323,6 @@ type ReconciliationData = {
    ============================================================================ */
 
 const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
-const endOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 1, 0, 0, 0, 0);
 
 // Formats français pour les dates
 const fmtDT = (d?: Date | null) =>
@@ -469,7 +537,7 @@ const AgenceComptabilitePage: React.FC = () => {
   const [liveStats, setLiveStats] = useState<Record<string, { reservations: number; tickets: number; amount: number }>>({});
   const liveUnsubsRef = useRef<Record<string, () => void>>({});
   /** Pointe vers le dernier `reloadCash` (défini plus bas) pour rafraîchir la caisse après validation sans recharger la page. */
-  const reloadCashRef = useRef<(() => Promise<void>) | null>(null);
+  const reloadCashRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
 
   /* OPERATIONAL (métier) : réservations vendues jour — pas la vérité financière ledger. */
   const [agencyStatsToday, setAgencyStatsToday] = useState<{
@@ -498,17 +566,11 @@ const AgenceComptabilitePage: React.FC = () => {
   });
   const [rangeFrom, setRangeFrom] = useState<string>('');
   const [rangeTo, setRangeTo] = useState<string>('');
-  const [days, setDays] = useState<CashDay[]>([]);
-  /** DOCUMENTARY journal (cashReceipts / cashMovements) — not financial truth. */
-  const [totIn, setTotIn] = useState(0);
-  const [totOut, setTotOut] = useState(0);
-  /** Flux période : entrées (comptaEncaissements) + sorties (ledger) filtrés par createdAt / performedAt. */
-  const [ledgerPeriodCash, setLedgerPeriodCash] = useState<AgencyCashPosition | null>(null);
+  const [cashDashboardSummary, setCashDashboardSummary] = useState<AgencyCashStatementSummary | null>(null);
   const [ledgerPeriodError, setLedgerPeriodError] = useState<string | null>(null);
-  /** Stock global : indépendant du filtre mois / plage (toutes périodes). */
-  const [cashGlobalPosition, setCashGlobalPosition] = useState<AgencyCashPosition | null>(null);
   const [loadingCash, setLoadingCash] = useState(false);
   const [treasuryModalView, setTreasuryModalView] = useState<TreasuryModalView>(null);
+  const [cashStatementInitialRange, setCashStatementInitialRange] = useState<{ from: Date; to: Date } | undefined>();
 
   /** Caisse théorique (ledger financialTransactions) + audits de contrôle */
   const [ledgerCashPosition, setLedgerCashPosition] = useState<AgencyCashPosition | null>(null);
@@ -534,6 +596,16 @@ const AgenceComptabilitePage: React.FC = () => {
     date: '',
   });
   const [loadingDailyDashboard, setLoadingDailyDashboard] = useState(false);
+  const [reportDailySummary, setReportDailySummary] = useState<AgencyCashStatementSummary | null>(null);
+  const [reportPeriodSummary, setReportPeriodSummary] = useState<AgencyCashStatementSummary | null>(null);
+  const [reportPeriodPreset, setReportPeriodPreset] = useState<ReportPeriodPreset>('month');
+  const [reportCustomFrom, setReportCustomFrom] = useState<string>(() => {
+    const d = new Date();
+    return toDateInputValue(new Date(d.getFullYear(), d.getMonth(), 1));
+  });
+  const [reportCustomTo, setReportCustomTo] = useState<string>(() => toDateInputValue(new Date()));
+  const [loadingAccountingReports, setLoadingAccountingReports] = useState(false);
+  const [accountingReportsError, setAccountingReportsError] = useState<string | null>(null);
 
   /* ============================================================================
      SECTION : ÉTATS REACT - RÉCONCILIATION
@@ -1208,7 +1280,7 @@ const AgenceComptabilitePage: React.FC = () => {
       });
 
       try {
-        await reloadCashRef.current?.();
+        await reloadCashRef.current?.(true);
       } catch (reErr) {
         console.warn('[AgenceCompta] Rafraîchissement caisse après validation:', reErr);
       }
@@ -1273,7 +1345,7 @@ const AgenceComptabilitePage: React.FC = () => {
         validatedBy: { id: accountant.id, name: accountant.displayName || accountant.email || null },
       });
       try {
-        await reloadCashRef.current?.();
+        await reloadCashRef.current?.(true);
       } catch (reErr) {
         console.warn('[AgenceCompta] Rafraîchissement caisse après validation courrier:', reErr);
       }
@@ -1513,12 +1585,17 @@ const AgenceComptabilitePage: React.FC = () => {
   const currentRange = useMemo(() => {
     if (useCustomRange && rangeFrom && rangeTo) {
       const from = new Date(rangeFrom); from.setHours(0,0,0,0);
-      const to = new Date(rangeTo); to.setHours(24,0,0,0);
+      const to = new Date(rangeTo); to.setHours(23,59,59,999);
       return { from, to };
     }
     const [y,m] = monthValue.split('-').map(Number);
     const d = new Date(y, (m||1)-1, 1);
-    return { from: startOfMonth(d), to: endOfMonth(d) };
+    const now = new Date();
+    const isCurrentMonth = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    const to = isCurrentMonth
+      ? new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      : new Date(y, m, 0, 23, 59, 59, 999);
+    return { from: startOfMonth(d), to };
   }, [useCustomRange, rangeFrom, rangeTo, monthValue]);
 
   /* ============================================================================
@@ -1526,163 +1603,35 @@ const AgenceComptabilitePage: React.FC = () => {
      Description : Récupération et agrégation des mouvements de caisse
      ============================================================================ */
   
-  const reloadCash = useCallback(async () => {
+  const reloadCash = useCallback(async (force = false) => {
     console.log('[AgenceCompta] Chargement des données de caisse', currentRange);
     
     if (!user?.companyId || !user?.agencyId) return;
     setLoadingCash(true);
     setLedgerPeriodError(null);
 
-    /** Stock caisse : ne dépend pas de la période (solde ledger + cumul encaissements / sorties tout temps). */
     try {
-      const globalPos = await getAgencyCashPosition(user.companyId, user.agencyId);
-      setCashGlobalPosition(globalPos);
-      console.log('[AgenceCompta][caisse] solde global (hors période):', {
-        soldeLedger: globalPos.soldeCash,
-        cumulEncaissementsToutTemps: globalPos.totalCashIn,
-        cumulSortiesToutTemps: globalPos.totalCashOut,
-      });
-    } catch (globalErr) {
-      console.warn('[AgenceCompta] Solde global caisse:', globalErr);
-      setCashGlobalPosition(null);
-    }
-
-    try {
-      // Sorties caisse : financialTransactions. Entrées comptables : comptaEncaissements (validation session).
-      const txRef = collection(db, `companies/${user.companyId}/financialTransactions`);
-      let snap;
-      try {
-        const qTx = query(
-          txRef,
-          where("companyId", "==", user.companyId),
-          where("agencyId", "==", user.agencyId),
-          where("createdAt", ">=", Timestamp.fromDate(currentRange.from)),
-          where("createdAt", "<", Timestamp.fromDate(currentRange.to)),
-          orderBy("createdAt", "desc"),
-          limit(50)
-        );
-        snap = await getDocs(qTx);
-      } catch (rangeErr) {
-        // Fallback robuste: certains jeux de données historiques ont des createdAt manquants
-        // ou des index/règles partiels sur la requête bornée.
-        console.warn("[AgenceCompta] reloadCash range query failed, fallback agency-only:", rangeErr);
-        const qFallback = query(
-          txRef,
-          where("companyId", "==", user.companyId),
-          where("agencyId", "==", user.agencyId),
-          orderBy("createdAt", "desc"),
-          limit(200)
-        );
-        snap = await getDocs(qFallback);
-      }
-
-      const txRows: CashDay[] = snap.docs
-        .map((d) => d.data() as Record<string, unknown>)
-        .map((tx) => {
-          const createdAt = (tx.createdAt as Timestamp | undefined)?.toDate?.() ?? null;
-          return { tx, createdAt };
-        })
-        .filter(
-          (x): x is { tx: Record<string, unknown>; createdAt: Date } =>
-            x.createdAt instanceof Date &&
-            x.createdAt >= currentRange.from &&
-            x.createdAt < currentRange.to
-        )
-        .map(({ tx, createdAt }) => {
-          const amount = Math.max(0, Number(tx.amount ?? 0));
-          const type = String(tx.type ?? "").toLowerCase();
-          const source = String(tx.source ?? "").toLowerCase();
-
-          /** Entrées : uniquement via comptaEncaissements (pas les lignes ledger ici). */
-          const isOut =
-            type === "expense" ||
-            type === "payment_sent" ||
-            type === "transfer" ||
-            type === "transfer_to_bank" ||
-            type === "adjustment" ||
-            source === "cashout";
-
-          const entrees = 0;
-          const sorties = isOut ? amount : 0;
-
-          return {
-            dateISO: createdAt.toISOString().split("T")[0],
-            entrees,
-            sorties,
-            solde: entrees - sorties,
-          };
-        });
-
-      let comptaRows: CashDay[] = [];
-      try {
-        const enc = await listComptaEncaissementsInRange(
-          user.companyId,
-          user.agencyId,
-          currentRange.from,
-          currentRange.to,
-          500
-        );
-        comptaRows = enc
-          .map((e) => {
-            const raw = e.createdAt as Timestamp | undefined;
-            const dt = raw?.toDate?.() ?? null;
-            if (!(dt instanceof Date)) return null;
-            const m = Math.max(0, Number(e.montant ?? 0));
-            return {
-              dateISO: dt.toISOString().split("T")[0],
-              entrees: m,
-              sorties: 0,
-              solde: m,
-            };
-          })
-          .filter((x): x is CashDay => x != null);
-      } catch (encErr) {
-        console.warn("[AgenceCompta] comptaEncaissements (période):", encErr);
-      }
-
-      const rows = aggregateCashDaysByDate([...txRows, ...comptaRows]);
-      let totalIn = 0;
-      let totalOut = 0;
-      for (const r of rows) {
-        totalIn += r.entrees;
-        totalOut += r.sorties;
-      }
-
-      setDays(rows);
-      setTotIn(totalIn);
-      setTotOut(totalOut);
-
-      let periodSummary: AgencyCashPosition | null = null;
-      try {
-        periodSummary = await getAgencyCashLedgerPeriodSummary(
-          user.companyId,
-          user.agencyId,
-          currentRange.from,
-          currentRange.to
-        );
-        setLedgerPeriodCash(periodSummary);
-      } catch (periodErr) {
-        console.warn("[AgenceCompta] Période caisse ledger:", periodErr);
-        setLedgerPeriodCash(null);
-      }
-
-      const netPeriode = periodSummary
-        ? periodSummary.totalCashIn - periodSummary.totalCashOut
-        : totalIn - totalOut;
+      const statement = await loadAgencyCashStatementCached(
+        {
+          companyId: user.companyId,
+          agencyId: user.agencyId,
+          from: currentRange.from,
+          to: currentRange.to,
+        },
+        { force }
+      );
+      const summary = buildAgencyCashStatementSummary(statement, 'all');
+      setCashDashboardSummary(summary);
       console.log("[AgenceCompta] Données de caisse chargées:", {
-        jours: rows.length,
-        entreesPeriode: periodSummary?.totalCashIn ?? totalIn,
-        sortiesPeriode: periodSummary?.totalCashOut ?? totalOut,
-        netFluxPeriode: netPeriode,
-        entrées_documentaire_fallback: totalIn,
-        sorties_documentaire_fallback: totalOut,
+        mouvements: summary.rows.length,
+        entreesPeriode: summary.totalEntries,
+        sortiesPeriode: summary.totalExits,
+        netFluxPeriode: summary.net,
+        soldeActuel: summary.currentBalance,
       });
     } catch (error) {
       console.error('[AgenceCompta] Erreur lors du chargement de la caisse (période / journal):', error);
-      setLedgerPeriodCash(null);
-      setDays([]);
-      setTotIn(0);
-      setTotOut(0);
+      setCashDashboardSummary(null);
       setLedgerPeriodError("Impossible de charger les mouvements de la période. Le solde global reste affiché si disponible.");
       console.log("[AgenceCompta][caisse] erreur période — entrees/sorties période indisponibles");
     } finally {
@@ -1993,12 +1942,117 @@ const AgenceComptabilitePage: React.FC = () => {
     }
   }, [user?.companyId, user?.agencyId, agencyTz]);
 
+  const reportPeriodRange = useMemo(
+    () => buildReportPeriodRange(reportPeriodPreset, reportCustomFrom, reportCustomTo),
+    [reportPeriodPreset, reportCustomFrom, reportCustomTo]
+  );
+
+  const reportDailyBreakdown = useMemo(
+    () => classifyReportBreakdown(reportDailySummary?.rows ?? []),
+    [reportDailySummary]
+  );
+
+  const reportPeriodBreakdown = useMemo(
+    () => classifyReportBreakdown(reportPeriodSummary?.rows ?? []),
+    [reportPeriodSummary]
+  );
+
+  const loadAccountingReports = useCallback(async (force = false) => {
+    if (!user?.companyId || !user?.agencyId) return;
+    setLoadingAccountingReports(true);
+    setAccountingReportsError(null);
+    try {
+      const todayKey = getTodayForTimezone(agencyTz);
+      const dailyRange = {
+        from: getStartOfDayForDate(todayKey, agencyTz),
+        to: getEndOfDayForDate(todayKey, agencyTz),
+      };
+      const [dailyStatement, periodStatement] = await Promise.all([
+        loadAgencyCashStatementCached(
+          {
+            companyId: user.companyId,
+            agencyId: user.agencyId,
+            from: dailyRange.from,
+            to: dailyRange.to,
+          },
+          { force }
+        ),
+        loadAgencyCashStatementCached(
+          {
+            companyId: user.companyId,
+            agencyId: user.agencyId,
+            from: reportPeriodRange.from,
+            to: reportPeriodRange.to,
+          },
+          { force }
+        ),
+      ]);
+      setReportDailySummary(buildAgencyCashStatementSummary(dailyStatement, 'all'));
+      setReportPeriodSummary(buildAgencyCashStatementSummary(periodStatement, 'all'));
+    } catch (error) {
+      console.error('[AgenceCompta] Rapports comptables:', error);
+      setReportDailySummary(null);
+      setReportPeriodSummary(null);
+      setAccountingReportsError('Impossible de charger la synthèse comptable.');
+    } finally {
+      setLoadingAccountingReports(false);
+    }
+  }, [agencyTz, reportPeriodRange, user?.agencyId, user?.companyId]);
+
+  const exportAccountingReportsCsv = useCallback(() => {
+    const day = reportDailySummary;
+    const period = reportPeriodSummary;
+    if (!day || !period) {
+      toast.error('Aucune synthèse à exporter.');
+      return;
+    }
+    const lines = [
+      ['Section', 'Libellé', 'Montant'].join(';'),
+      ['Rapport journalier', 'Total des entrées', String(day.totalEntries)].join(';'),
+      ['Rapport journalier', 'Total des sorties', String(day.totalExits)].join(';'),
+      ['Rapport journalier', 'Net de la journée', String(day.net)].join(';'),
+      ['Rapport journalier', 'Solde caisse actuel', String(day.currentBalance)].join(';'),
+      ['Rapport journalier', 'Billetterie', String(reportDailyBreakdown.billetterie)].join(';'),
+      ['Rapport journalier', 'Courrier', String(reportDailyBreakdown.courrier)].join(';'),
+      ['Rapport journalier', 'Dépenses', String(reportDailyBreakdown.depenses)].join(';'),
+      ['Rapport journalier', 'Versements compagnie', String(reportDailyBreakdown.versementsCompagnie)].join(';'),
+      ['Rapport période', 'Billetterie', String(reportPeriodBreakdown.billetterie)].join(';'),
+      ['Rapport période', 'Courrier', String(reportPeriodBreakdown.courrier)].join(';'),
+      ['Rapport période', 'Ajustements', String(reportPeriodBreakdown.ajustements)].join(';'),
+      ['Rapport période', 'Dépenses', String(reportPeriodBreakdown.depenses)].join(';'),
+      ['Rapport période', 'Versements compagnie', String(reportPeriodBreakdown.versementsCompagnie)].join(';'),
+      ['Rapport période', 'Total entrées', String(period.totalEntries)].join(';'),
+      ['Rapport période', 'Total sorties', String(period.totalExits)].join(';'),
+      ['Rapport période', 'Net période', String(period.net)].join(';'),
+      ['Rapport période', 'Solde actuel', String(period.currentBalance)].join(';'),
+    ];
+    const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `rapport-comptable-${user?.agencyId ?? 'agence'}-${toDateInputValue(new Date())}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [
+    reportDailyBreakdown,
+    reportDailySummary,
+    reportPeriodBreakdown,
+    reportPeriodSummary,
+    user?.agencyId,
+  ]);
+
   // Chargement initial du dashboard et rafraîchissement périodique
   useEffect(() => {
     if (phaseView === 'dashboard') {
       void loadDailyDashboardData();
     }
   }, [phaseView, loadDailyDashboardData]);
+
+  useEffect(() => {
+    if (phaseView === 'rapports') {
+      void loadAccountingReports();
+    }
+  }, [phaseView, loadAccountingReports]);
 
   // Rafraîchissement du dashboard après validation d'une réception
   useEffect(() => {
@@ -2073,7 +2127,7 @@ const AgenceComptabilitePage: React.FC = () => {
          Description : Logo, nom d'entreprise, onglets et informations comptable
          ============================================================================ */}
       
-      <div className="sticky top-0 z-40 shadow-sm">
+      <div className="fixed inset-x-0 top-0 z-40 shadow-sm print:static">
         <div
           className="h-16 border-b border-gray-200/60"
           style={{ backgroundImage: 'var(--agency-gradient-header)' }}
@@ -2221,7 +2275,7 @@ const AgenceComptabilitePage: React.FC = () => {
          Description : Contenu des différents onglets
          ============================================================================ */}
       
-      <div className="min-w-0 lg:pl-72">
+      <div className="min-w-0 pt-16 lg:pl-72">
         <main className="min-w-0 px-3 py-5 sm:px-6 lg:px-8">
           <div className="mx-auto min-w-0 max-w-[1600px] space-y-6">
             <div className="min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-5">
@@ -3241,7 +3295,7 @@ const AgenceComptabilitePage: React.FC = () => {
         )}
 
         {phaseView === 'historique' && (
-          <AgencyCashStatement />
+          <AgencyCashStatement initialRange={cashStatementInitialRange} />
         )}
 
         {/* ============================================================================
@@ -3799,15 +3853,6 @@ const AgenceComptabilitePage: React.FC = () => {
                       </ActionButton>
                     </>
                   )}
-                  <ActionButton
-                    variant="secondary"
-                    onClick={() => exportCsv(days, currencySymbol)}
-                    disabled={days.length === 0}
-                    className="whitespace-nowrap"
-                  >
-                    <Download className="h-4 w-4 mr-2" /> 
-                    Export CSV
-                  </ActionButton>
                 </div>
               </div>
 
@@ -3864,7 +3909,7 @@ const AgenceComptabilitePage: React.FC = () => {
                     </>
                   )}
                   
-                  <ActionButton variant="secondary" onClick={reloadCash} disabled={loadingCash}>
+                  <ActionButton variant="secondary" onClick={() => void reloadCash(true)} disabled={loadingCash}>
                     {loadingCash ? 'Actualisation...' : 'Actualiser'}
                   </ActionButton>
                 </div>
@@ -3873,9 +3918,7 @@ const AgenceComptabilitePage: React.FC = () => {
 
             {/* ===== SECTION CARTES KPI — CAISSE (CORRIGÉE) ===== */}
             {(() => {
-              const totalPeriodIn = ledgerPeriodCash?.totalCashIn ?? totIn;
-              const totalPeriodOut = ledgerPeriodCash?.totalCashOut ?? totOut;
-              const periodNet = totalPeriodIn - totalPeriodOut;
+              const summary = cashDashboardSummary;
 
               return (
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
@@ -3886,11 +3929,11 @@ const AgenceComptabilitePage: React.FC = () => {
                         ? '…'
                         : ledgerPeriodError
                           ? 'Indisponible'
-                          : money(totalPeriodIn)
+                          : money(summary?.totalEntries ?? 0)
                     }
                     icon={HandIcon}
                     valueColorVar={theme?.primary}
-                    hint="Total des fonds reçus sur la période sélectionnée"
+                    hint="Même calcul que le relevé Historique"
                   />
                   <MetricCard
                     label="Sorties période"
@@ -3899,11 +3942,11 @@ const AgenceComptabilitePage: React.FC = () => {
                         ? '…'
                         : ledgerPeriodError
                           ? 'Indisponible'
-                          : money(totalPeriodOut)
+                          : money(summary?.totalExits ?? 0)
                     }
                     icon={AlertTriangle}
                     valueColorVar="#b91c1c"
-                    hint="Total des sorties sur la période sélectionnée"
+                    hint="Même calcul que le relevé Historique"
                   />
                   <MetricCard
                     label="Net période"
@@ -3912,57 +3955,102 @@ const AgenceComptabilitePage: React.FC = () => {
                         ? '…'
                         : ledgerPeriodError
                           ? 'Indisponible'
-                          : money(periodNet)
+                          : money(summary?.net ?? 0)
                     }
                     icon={TrendingUp}
                     valueColorVar={theme?.primary}
-                    hint="Entrées - sorties sur la période sélectionnée"
+                    hint="Entrées - sorties, même calcul que le relevé Historique"
                   />
                   <MetricCard
                     label="Solde caisse actuel"
                     value={
-                      cashGlobalPosition == null
+                      summary == null
                         ? loadingCash
                           ? '…'
                           : 'Indisponible'
-                        : money(cashGlobalPosition.soldeCash)
+                        : money(summary.currentBalance)
                     }
                     icon={Banknote}
                     valueColorVar={theme?.primary}
-                    hint="Solde réel disponible dans la caisse agence"
+                    hint="Solde actuel lu depuis le même relevé"
                   />
                 </div>
               );
             })()}
 
-            {cashGlobalPosition?.capped && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                Solde global : agrégation tronquée (limite de lecture) — le montant peut être incomplet.
-              </div>
-            )}
-
             {ledgerPeriodError && (
               <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">
-                {ledgerPeriodError} Vérifiez les droits de lecture de la caisse pour ce profil.
+                {ledgerPeriodError} Consultez l’onglet Historique pour le relevé détaillé si le problème persiste.
               </div>
             )}
 
-            {ledgerPeriodCash?.capped && (
+            {(cashDashboardSummary?.transactionsCapped || cashDashboardSummary?.legacyCapped) && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                 Flux période : historique tronqué (limite d’affichage) — entrées / sorties période peuvent être sous-estimées.
               </div>
             )}
 
-            <TodayHistoryTimeline
-              days={days}
-              loadingCash={loadingCash}
-              totIn={totIn}
-              totOut={totOut}
-              money={money}
-              eyebrow="Période sélectionnée"
-              title="Mouvements de caisse"
-              unavailable={Boolean(ledgerPeriodError)}
-            />
+            <SectionCard
+              title="Derniers mouvements"
+              icon={ArrowDownCircle}
+              right={
+                <ActionButton
+                  variant="secondary"
+                  onClick={() => {
+                    setCashStatementInitialRange({ from: currentRange.from, to: currentRange.to });
+                    setPhaseView('historique');
+                  }}
+                  className="whitespace-nowrap"
+                >
+                  Voir le relevé complet
+                </ActionButton>
+              }
+            >
+              {loadingCash ? (
+                <div className="py-8 text-center text-sm text-gray-500">Chargement des derniers mouvements…</div>
+              ) : ledgerPeriodError ? (
+                <UIEmptyState message="Derniers mouvements indisponibles pour le moment." />
+              ) : !cashDashboardSummary || cashDashboardSummary.rows.length === 0 ? (
+                <UIEmptyState message="Aucun mouvement sur la période sélectionnée." />
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <Th>Date</Th>
+                        <Th>Type</Th>
+                        <Th>Libellé</Th>
+                        <Th align="right">Entrée</Th>
+                        <Th align="right">Sortie</Th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {cashDashboardSummary.rows.slice(0, 10).map((row) => (
+                        <tr key={row.id} className="hover:bg-slate-50/80">
+                          <Td>{fmtDT(row.date)}</Td>
+                          <Td>{row.typeLabel}</Td>
+                          <Td>{row.label}</Td>
+                          <Td align="right">
+                            {row.entry ? (
+                              <span className="font-semibold text-emerald-700">+ {money(row.entry)}</span>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </Td>
+                          <Td align="right">
+                            {row.exit ? (
+                              <span className="font-semibold text-rose-700">− {money(row.exit)}</span>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </Td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </SectionCard>
           </div>
         )}
 
@@ -3971,6 +4059,222 @@ const AgenceComptabilitePage: React.FC = () => {
            ============================================================================ */}
         
         {phaseView === 'rapports' && (
+          <div className="space-y-6 print:space-y-4">
+            <div className="accountant-night-surface rounded-2xl border border-gray-200 bg-white p-5 shadow-sm print:border-gray-300 print:shadow-none">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 items-start gap-4">
+                  {companyLogo ? (
+                    <img src={companyLogo} alt={companyName} className="h-12 w-12 rounded-xl object-contain" />
+                  ) : (
+                    <div className="grid h-12 w-12 place-items-center rounded-xl bg-slate-100 text-slate-700">
+                      <FileText className="h-6 w-6" />
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Synthèse comptable</div>
+                    <h2 className="mt-1 text-2xl font-bold text-slate-950">Rapports</h2>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Bilan imprimable de la période — sans relevé détaillé. Le relevé complet reste dans Historique.
+                    </p>
+                    <div className="mt-3 grid gap-1 text-sm text-slate-600 sm:grid-cols-3">
+                      <span><strong className="text-slate-900">Compagnie :</strong> {companyName}</span>
+                      <span><strong className="text-slate-900">Agence :</strong> {agencyName}</span>
+                      <span><strong className="text-slate-900">Comptable :</strong> {accountant?.displayName || accountant?.email || user?.email || accountantCode}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 print:hidden">
+                  <ActionButton variant="secondary" onClick={() => loadAccountingReports(true)} disabled={loadingAccountingReports}>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    {loadingAccountingReports ? 'Chargement…' : 'Actualiser'}
+                  </ActionButton>
+                  <ActionButton variant="secondary" onClick={exportAccountingReportsCsv} disabled={!reportDailySummary || !reportPeriodSummary}>
+                    <Download className="mr-2 h-4 w-4" />
+                    Export CSV
+                  </ActionButton>
+                  <ActionButton onClick={() => window.print()} disabled={!reportDailySummary || !reportPeriodSummary}>
+                    <Printer className="mr-2 h-4 w-4" />
+                    Imprimer
+                  </ActionButton>
+                </div>
+              </div>
+            </div>
+
+            {accountingReportsError && (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                {accountingReportsError}
+              </div>
+            )}
+
+            <SectionCard
+              title="Rapport journalier"
+              icon={FileText}
+              help="Synthèse du jour, calculée depuis la même source que Finances et Historique."
+            >
+              {loadingAccountingReports && !reportDailySummary ? (
+                <div className="py-10 text-center text-sm text-slate-500">Chargement du rapport journalier…</div>
+              ) : !reportDailySummary ? (
+                <UIEmptyState message="Aucune synthèse journalière disponible." />
+              ) : (
+                <div className="space-y-5">
+                  <div className="grid gap-3 text-sm text-slate-600 sm:grid-cols-3">
+                    <div><span className="font-semibold text-slate-900">Date :</span> {new Date().toLocaleDateString('fr-FR')}</div>
+                    <div><span className="font-semibold text-slate-900">Agence :</span> {agencyName}</div>
+                    <div><span className="font-semibold text-slate-900">Comptable :</span> {accountant?.displayName || accountant?.email || user?.email || accountantCode}</div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <MetricCard label="Total des entrées" value={money(reportDailySummary.totalEntries)} icon={ArrowDownCircle} valueColorVar={theme.primary} />
+                    <MetricCard label="Total des sorties" value={money(reportDailySummary.totalExits)} icon={TrendingUp} valueColorVar="#b91c1c" />
+                    <MetricCard label="Net de la journée" value={money(reportDailySummary.net)} icon={Scale} valueColorVar={reportDailySummary.net >= 0 ? theme.primary : '#b91c1c'} />
+                    <MetricCard label="Solde caisse actuel" value={money(reportDailySummary.currentBalance)} icon={Wallet} valueColorVar={theme.primary} />
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                    <div className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-700">Résumé</div>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="rounded-xl bg-white p-4 shadow-sm">
+                        <div className="text-xs text-slate-500">Billetterie</div>
+                        <div className="mt-1 text-lg font-bold text-slate-950">{money(reportDailyBreakdown.billetterie)}</div>
+                      </div>
+                      <div className="rounded-xl bg-white p-4 shadow-sm">
+                        <div className="text-xs text-slate-500">Courrier</div>
+                        <div className="mt-1 text-lg font-bold text-slate-950">{money(reportDailyBreakdown.courrier)}</div>
+                      </div>
+                      <div className="rounded-xl bg-white p-4 shadow-sm">
+                        <div className="text-xs text-slate-500">Dépenses</div>
+                        <div className="mt-1 text-lg font-bold text-rose-700">{money(reportDailyBreakdown.depenses)}</div>
+                      </div>
+                      <div className="rounded-xl bg-white p-4 shadow-sm">
+                        <div className="text-xs text-slate-500">Versements compagnie</div>
+                        <div className="mt-1 text-lg font-bold text-rose-700">{money(reportDailyBreakdown.versementsCompagnie)}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard
+              title="Rapport de période"
+              icon={BarChart3}
+              help="Vue agrégée : les lignes détaillées restent uniquement dans Historique."
+              right={
+                <div className="flex flex-wrap items-center gap-2 print:hidden">
+                  {[
+                    ['today', 'Aujourd’hui'],
+                    ['7d', '7 jours'],
+                    ['30d', '30 jours'],
+                    ['month', 'Ce mois'],
+                    ['custom', 'Personnalisé'],
+                  ].map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setReportPeriodPreset(key as ReportPeriodPreset)}
+                      className={cn(
+                        'rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors',
+                        reportPeriodPreset === key
+                          ? 'border-transparent text-white'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                      )}
+                      style={reportPeriodPreset === key ? { backgroundColor: theme.primary } : undefined}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              }
+            >
+              <div className="space-y-5">
+                {reportPeriodPreset === 'custom' && (
+                  <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_1fr_auto] print:hidden">
+                    <label className="text-sm text-slate-700">
+                      <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Du</span>
+                      <input
+                        type="date"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        value={reportCustomFrom}
+                        onChange={(e) => setReportCustomFrom(e.target.value)}
+                      />
+                    </label>
+                    <label className="text-sm text-slate-700">
+                      <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Au</span>
+                      <input
+                        type="date"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        value={reportCustomTo}
+                        onChange={(e) => setReportCustomTo(e.target.value)}
+                      />
+                    </label>
+                    <div className="flex items-end">
+                      <ActionButton variant="secondary" onClick={() => loadAccountingReports(true)} disabled={loadingAccountingReports}>
+                        Appliquer
+                      </ActionButton>
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-sm text-slate-600">
+                  Période : <span className="font-semibold text-slate-900">{reportPeriodRange.from.toLocaleDateString('fr-FR')}</span>
+                  {' '}→{' '}
+                  <span className="font-semibold text-slate-900">{reportPeriodRange.to.toLocaleDateString('fr-FR')}</span>
+                </div>
+
+                {loadingAccountingReports && !reportPeriodSummary ? (
+                  <div className="py-10 text-center text-sm text-slate-500">Chargement du rapport de période…</div>
+                ) : !reportPeriodSummary ? (
+                  <UIEmptyState message="Aucune synthèse de période disponible." />
+                ) : (
+                  <>
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4">
+                        <div className="mb-3 text-sm font-bold uppercase tracking-wide text-emerald-800">Entrées par type</div>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between gap-3 rounded-xl bg-white p-3">
+                            <span className="text-sm text-slate-600">Billetterie</span>
+                            <span className="font-bold text-slate-950">{money(reportPeriodBreakdown.billetterie)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 rounded-xl bg-white p-3">
+                            <span className="text-sm text-slate-600">Courrier</span>
+                            <span className="font-bold text-slate-950">{money(reportPeriodBreakdown.courrier)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 rounded-xl bg-white p-3">
+                            <span className="text-sm text-slate-600">Ajustements</span>
+                            <span className="font-bold text-slate-950">{money(reportPeriodBreakdown.ajustements)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-rose-100 bg-rose-50/60 p-4">
+                        <div className="mb-3 text-sm font-bold uppercase tracking-wide text-rose-800">Sorties par type</div>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between gap-3 rounded-xl bg-white p-3">
+                            <span className="text-sm text-slate-600">Dépenses</span>
+                            <span className="font-bold text-rose-700">{money(reportPeriodBreakdown.depenses)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 rounded-xl bg-white p-3">
+                            <span className="text-sm text-slate-600">Versements compagnie</span>
+                            <span className="font-bold text-rose-700">{money(reportPeriodBreakdown.versementsCompagnie)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <MetricCard label="Total entrées" value={money(reportPeriodSummary.totalEntries)} icon={ArrowDownCircle} valueColorVar={theme.primary} />
+                      <MetricCard label="Total sorties" value={money(reportPeriodSummary.totalExits)} icon={TrendingUp} valueColorVar="#b91c1c" />
+                      <MetricCard label="Net période" value={money(reportPeriodSummary.net)} icon={Scale} valueColorVar={reportPeriodSummary.net >= 0 ? theme.primary : '#b91c1c'} />
+                      <MetricCard label="Solde actuel" value={money(reportPeriodSummary.currentBalance)} icon={Wallet} valueColorVar={theme.primary} />
+                    </div>
+                  </>
+                )}
+              </div>
+            </SectionCard>
+          </div>
+        )}
+
+        {false && phaseView === 'rapports' && (
           <div className="space-y-6">
             {/* En-tête et sélecteur de date */}
             <div className="accountant-night-surface rounded-xl border border-gray-200 shadow-sm p-4 sm:p-5 bg-gradient-to-r from-white to-gray-50/50">
@@ -4377,7 +4681,7 @@ const ACCOUNTANT_PHASE_NAV: Array<{
     key: 'rapports',
     label: 'Rapports',
     title: 'Rapports',
-    subtitle: 'Comparaison des ventes et encaissements',
+    subtitle: 'Synthèse comptable imprimable de la période',
     icon: <FileText className="h-4 w-4" />,
   },
 ];
@@ -4520,46 +4824,5 @@ const TabButton: React.FC<{
   </button>
 );
 
-
-/* ============================================================================
-   SECTION : FONCTIONS UTILITAIRES - EXPORT CSV
-   Description : Export des données de caisse au format CSV
-   ============================================================================ */
-
-function exportCsv(rows: CashDay[], currencySymbol: string) {
-  console.log('[AgenceCompta] Export CSV des données de caisse');
-  
-  if (!rows.length) { 
-    console.warn('[AgenceCompta] Aucune donnée à exporter');
-    alert('Aucune donnée à exporter'); 
-    return; 
-  }
-  
-  try {
-    const header = ['Date', `Entrées (${currencySymbol})`, `Sorties (${currencySymbol})`, `Solde (${currencySymbol})`];
-    const body = rows.map(r => [
-      new Date(r.dateISO).toLocaleDateString('fr-FR'),
-      r.entrees.toLocaleString('fr-FR'),
-      r.sorties.toLocaleString('fr-FR'),
-      r.solde.toLocaleString('fr-FR')
-    ].join(';'));
-    
-    const csv = [header.join(';'), ...body].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `caisse_agence_${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    
-    console.log('[AgenceCompta] Export CSV terminé avec succès');
-  } catch (error) {
-    console.error('[AgenceCompta] Erreur lors de l\'export CSV:', error);
-    alert('Erreur lors de l\'export CSV');
-  }
-}
 
 export default AgenceComptabilitePage;

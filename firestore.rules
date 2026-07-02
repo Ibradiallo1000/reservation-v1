@@ -1066,7 +1066,9 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
         && request.resource.data.get('paidAt', null) is timestamp
         && request.resource.data.get('createdAt', null) is timestamp
         && request.resource.data.get('updatedAt', null) == request.time
-        && agencyDirectExpenseThresholdOk(companyId, amount, true)
+        && amount is number
+        && amount > 0
+        && amount < 100000000
         && exists(cashPath)
         && !exists(transactionPath)
         && !exists(idempotencyPath)
@@ -2984,6 +2986,15 @@ match /shiftReports/{reportId} {
    Comptable peut lire et écrire son compte caisse
 ============================================================ */
 match /accounts/{accountId} {
+  allow get: if isAuth()
+    && userAgencyBelongsToCompany(companyId)
+    && (
+      hasUserRole('chefAgence')
+      || hasUserRole('chefagence')
+      || hasUserRole('chef_agence')
+    )
+    && accountId == 'agency_' + getUserAgencyId() + '_cash';
+
   // ✅ Lecture GET pour le Chef d'Agence
   allow get: if isAuth()
     && userAgencyBelongsToCompany(companyId)

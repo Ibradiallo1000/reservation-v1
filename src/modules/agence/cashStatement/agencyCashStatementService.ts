@@ -17,14 +17,61 @@ import {
   agencyCashAccountDocId,
   ledgerAccountDocRef,
 } from "@/modules/compagnie/treasury/ledgerAccounts";
+import { listComptaEncaissementsInRange } from "@/modules/agence/comptabilite/comptaEncaissementsService";
 import type { FinancialTransactionDoc } from "@/modules/compagnie/treasury/types";
 import type {
   AgencyCashStatementCategory,
+  AgencyCashStatementFilter,
   AgencyCashStatementResult,
   AgencyCashStatementRow,
+  AgencyCashStatementSummary,
 } from "./agencyCashStatementTypes";
 
 const MAX_ROWS = 5000;
+const STATEMENT_CACHE_TTL_MS = 30_000;
+
+type AgencyCashStatementMode = "accountant" | "manager";
+
+type AgencyCashStatementLoadOptions = {
+  mode?: AgencyCashStatementMode;
+  includeLegacyLedger?: boolean;
+  tolerateSecondarySourceErrors?: boolean;
+};
+
+type CacheEntry = {
+  loadedAt: number;
+  promise: Promise<AgencyCashStatementResult>;
+};
+
+const statementCache = new Map<string, CacheEntry>();
+
+function cacheKey(params: {
+  companyId: string;
+  agencyId: string;
+  from: Date;
+  to: Date;
+  options?: AgencyCashStatementLoadOptions;
+}): string {
+  const mode = params.options?.mode ?? "accountant";
+  const includeLegacyLedger = params.options?.includeLegacyLedger ?? mode === "accountant";
+  const tolerateSecondarySourceErrors =
+    params.options?.tolerateSecondarySourceErrors ?? mode === "manager";
+  return [
+    params.companyId,
+    params.agencyId,
+    params.from.toISOString(),
+    params.to.toISOString(),
+    mode,
+    includeLegacyLedger ? "legacy" : "no-legacy",
+    tolerateSecondarySourceErrors ? "tolerant" : "strict",
+  ].join("|");
+}
+
+function isPermissionDenied(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return code === "permission-denied" || message.toLowerCase().includes("permission");
+}
 
 function timestampToDate(value: unknown): Date | null {
   if (value instanceof Date) return value;
@@ -103,50 +150,140 @@ function normalizeFinancialTransaction(
   };
 }
 
+function normalizeComptaEncaissementDate(value: unknown): Date | null {
+  return timestampToDate(value);
+}
+
+export function agencyCashStatementRowMatchesFilter(
+  row: AgencyCashStatementRow,
+  filter: AgencyCashStatementFilter
+): boolean {
+  if (filter === "all") return true;
+  if (filter === "entries") return row.entry > 0;
+  if (filter === "exits") return row.exit > 0;
+  if (filter === "expenses") return row.category === "expense";
+  if (filter === "transfers") return row.category === "transfer";
+  return row.category === "validation";
+}
+
+export function buildAgencyCashStatementSummary(
+  result: AgencyCashStatementResult,
+  filter: AgencyCashStatementFilter = "all"
+): AgencyCashStatementSummary {
+  const rows = result.rows.filter((row) => agencyCashStatementRowMatchesFilter(row, filter));
+  const totals = rows.reduce(
+    (sum, row) => ({
+      totalEntries: sum.totalEntries + row.entry,
+      totalExits: sum.totalExits + row.exit,
+    }),
+    { totalEntries: 0, totalExits: 0 }
+  );
+
+  return {
+    ...totals,
+    net: totals.totalEntries - totals.totalExits,
+    currentBalance: result.currentBalance,
+    currency: result.currency,
+    rows,
+    transactionsCapped: result.transactionsCapped,
+    legacyCapped: result.legacyCapped,
+    unavailableSources: result.unavailableSources,
+  };
+}
+
 export async function loadAgencyCashStatement(params: {
   companyId: string;
   agencyId: string;
   from: Date;
   to: Date;
-}): Promise<AgencyCashStatementResult> {
+}, options: AgencyCashStatementLoadOptions = {}): Promise<AgencyCashStatementResult> {
   const { companyId, agencyId, from, to } = params;
+  const mode = options.mode ?? "accountant";
+  const includeLegacyLedger = options.includeLegacyLedger ?? mode === "accountant";
+  const tolerateSecondarySourceErrors = options.tolerateSecondarySourceErrors ?? mode === "manager";
   const cashAccountId = agencyCashAccountDocId(agencyId);
   const cashAccountRef = ledgerAccountDocRef(companyId, cashAccountId);
   const fromTimestamp = Timestamp.fromDate(from);
   const toTimestamp = Timestamp.fromDate(to);
 
-  const [transactions, cashAccountSnapshot, legacySnapshot] = await Promise.all([
+  const rangeToExclusive = new Date(to.getTime() + 1);
+  const unavailableSources: string[] = [];
+
+  const [transactions, cashAccountSnapshot, legacyDocs, comptaEncaissements] = await Promise.all([
     listFinancialTransactionsByPeriod(
       companyId,
       fromTimestamp,
       toTimestamp,
       agencyId
-    ),
+    ).catch((error) => {
+      if (!tolerateSecondarySourceErrors || !isPermissionDenied(error)) throw error;
+      unavailableSources.push("financialTransactions");
+      return [] as Array<FinancialTransactionDoc & { id: string }>;
+    }),
     getDoc(cashAccountRef),
-    getDocs(
-      query(
-        collection(cashAccountRef, "ledger"),
-        where("createdAt", ">=", fromTimestamp),
-        where("createdAt", "<=", toTimestamp),
-        orderBy("createdAt", "asc"),
-        limit(MAX_ROWS)
-      )
-    ),
+    includeLegacyLedger
+      ? getDocs(
+          query(
+            collection(cashAccountRef, "ledger"),
+            where("createdAt", ">=", fromTimestamp),
+            where("createdAt", "<=", toTimestamp),
+            orderBy("createdAt", "asc"),
+            limit(MAX_ROWS)
+          )
+        )
+          .then((snapshot) => snapshot.docs)
+          .catch((error) => {
+            if (!tolerateSecondarySourceErrors || !isPermissionDenied(error)) throw error;
+            unavailableSources.push("legacyLedger");
+            return [];
+          })
+      : Promise.resolve([]),
+    listComptaEncaissementsInRange(
+      companyId,
+      agencyId,
+      from,
+      rangeToExclusive,
+      MAX_ROWS
+    ).catch((error) => {
+      if (!tolerateSecondarySourceErrors || !isPermissionDenied(error)) throw error;
+      unavailableSources.push("comptaEncaissements");
+      return [];
+    }),
   ]);
 
   const transactionRows = transactions
     .map((row) => normalizeFinancialTransaction(row.id, row, cashAccountId))
-    .filter((row): row is AgencyCashStatementRow => row != null);
+    .filter((row): row is AgencyCashStatementRow => row != null)
+    .filter((row) => row.category !== "validation");
 
   const validationReferences = new Set(
-    transactions
-      .filter((row) => row.type === "remittance")
-      .map((row) => String(row.referenceId ?? "").trim())
+    comptaEncaissements
+      .map((row) => String(row.sessionId ?? "").trim())
       .filter(Boolean)
   );
 
+  const comptaRows: AgencyCashStatementRow[] = comptaEncaissements
+    .map((row): AgencyCashStatementRow | null => {
+      const amount = Math.abs(Number(row.montant ?? 0));
+      const date = normalizeComptaEncaissementDate(row.createdAt);
+      if (!date || !Number.isFinite(amount) || amount <= 0) return null;
+      return {
+        id: `compta-${row.id}`,
+        date,
+        reference: row.sessionId || row.id,
+        category: "validation",
+        typeLabel: "Validation de poste",
+        label: row.source === "courrier" ? "Remise courrier validée" : "Remise de caisse validée",
+        entry: amount,
+        exit: 0,
+        status: "posted",
+        source: "comptaEncaissements",
+      };
+    })
+    .filter((row): row is AgencyCashStatementRow => row != null);
+
   const legacyRows: AgencyCashStatementRow[] = [];
-  for (const legacyDoc of legacySnapshot.docs) {
+  for (const legacyDoc of legacyDocs) {
     const data = legacyDoc.data() as Record<string, unknown>;
     const shiftId = String(data.shiftId ?? "").trim();
     if (shiftId && validationReferences.has(shiftId)) continue;
@@ -179,13 +316,38 @@ export async function loadAgencyCashStatement(params: {
       : "XOF";
 
   return {
-    rows: [...transactionRows, ...legacyRows].sort(
+    rows: [...transactionRows, ...comptaRows, ...legacyRows].sort(
       (a, b) => b.date.getTime() - a.date.getTime()
     ),
     currentBalance: Number.isFinite(currentBalance) ? currentBalance : 0,
     currency,
     transactionsCapped: transactions.length >= MAX_ROWS,
-    legacyCapped: legacySnapshot.size >= MAX_ROWS,
+    legacyCapped: legacyDocs.length >= MAX_ROWS || comptaEncaissements.length >= MAX_ROWS,
+    unavailableSources,
   };
 }
 
+export function loadAgencyCashStatementCached(
+  params: {
+    companyId: string;
+    agencyId: string;
+    from: Date;
+    to: Date;
+  },
+  options: { force?: boolean } & AgencyCashStatementLoadOptions = {}
+): Promise<AgencyCashStatementResult> {
+  const { force, ...loadOptions } = options;
+  const key = cacheKey({ ...params, options: loadOptions });
+  const cached = statementCache.get(key);
+  const now = Date.now();
+  if (!force && cached && now - cached.loadedAt < STATEMENT_CACHE_TTL_MS) {
+    return cached.promise;
+  }
+
+  const promise = loadAgencyCashStatement(params, loadOptions).catch((error) => {
+    statementCache.delete(key);
+    throw error;
+  });
+  statementCache.set(key, { loadedAt: now, promise });
+  return promise;
+}

@@ -1,5 +1,5 @@
 // Treasury dashboard — Agency: local accounts, cash position, recent movements, pending expenses.
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 import {
@@ -17,7 +17,9 @@ import { getAgencyTreasuryLedgerCashDisplay } from "@/modules/agence/comptabilit
 import {
   listExpenses,
   createExpense,
+  payExpense,
   type ExpenseStatus,
+  type ExpenseDoc,
   EXPENSE_CATEGORIES,
   PENDING_STATUSES,
 } from "@/modules/compagnie/treasury/expenses";
@@ -51,6 +53,7 @@ const MOVEMENT_TYPE_LABELS: Record<string, string> = {
 };
 
 type TreasuryActionView = "overview" | "expense" | "transfer" | "supplier";
+type ExpenseRow = ExpenseDoc & { id: string };
 
 export type AgencyTreasuryPageProps = { embedded?: boolean };
 
@@ -61,6 +64,14 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
   const isOnline = useOnlineStatus();
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
+  const roles = useMemo(
+    () => Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [],
+    [user?.role]
+  );
+  const isAgencyManager = roles.some((role) => ["chefAgence", "chefagence", "superviseur"].includes(role));
+  const isAgencyAccountant = roles.some((role) => ["agency_accountant", "comptable", "Comptable"].includes(role));
+  const canCreateAgencyExpense = isAgencyAccountant && !isAgencyManager;
+  const canDisburseApprovedExpenses = isAgencyAccountant && !isAgencyManager;
 
   // 🔥 État de navigation interne
   const [actionView, setActionView] = useState<TreasuryActionView>("overview");
@@ -74,6 +85,9 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
   const [mirrorCashSecondary, setMirrorCashSecondary] = useState<number | null>(null);
   const [movements, setMovements] = useState<{ id: string; amount: number; movementType: string; performedAt: unknown }[]>([]);
   const [pendingExpenses, setPendingExpenses] = useState<{ id: string; amount: number; category: string; status: ExpenseStatus }[]>([]);
+  const [approvedExpenses, setApprovedExpenses] = useState<ExpenseRow[]>([]);
+  const [approvedLoading, setApprovedLoading] = useState(false);
+  const [disbursingExpenseId, setDisbursingExpenseId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -198,10 +212,54 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
     }
   };
 
+  const loadApprovedExpenses = useCallback(async () => {
+    if (!companyId || !agencyId || !canDisburseApprovedExpenses) {
+      setApprovedExpenses([]);
+      return;
+    }
+    setApprovedLoading(true);
+    try {
+      const list = await listExpenses(companyId, {
+        agencyId,
+        status: "approved",
+        limitCount: 50,
+      });
+      setApprovedExpenses(list);
+    } catch {
+      setError(
+        !isOnline
+          ? "Connexion indisponible. Dépenses approuvées non disponibles."
+          : "Erreur lors du chargement des dépenses approuvées."
+      );
+    } finally {
+      setApprovedLoading(false);
+    }
+  }, [agencyId, canDisburseApprovedExpenses, companyId, isOnline]);
+
+  const handleDisburseExpense = async (expenseId: string) => {
+    if (!companyId || !user?.uid || !canDisburseApprovedExpenses) return;
+    if (disbursingExpenseId) return;
+    const currency = (company as { devise?: string })?.devise ?? "XOF";
+    setDisbursingExpenseId(expenseId);
+    try {
+      await payExpense(companyId, expenseId, user.uid, currency);
+      toast.success("Dépense décaissée.");
+      setApprovedExpenses((current) => current.filter((expense) => expense.id !== expenseId));
+      setReloadKey((key) => key + 1);
+      window.dispatchEvent(new Event(AGENCY_CASH_UI_REFRESH_EVENT));
+      await loadApprovedExpenses();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erreur lors du décaissement.");
+    } finally {
+      setDisbursingExpenseId(null);
+    }
+  };
+
   useEffect(() => {
   if (!companyId || !agencyId) return;
   const q = query(
     collection(db, `companies/${companyId}/financialTransactions`),
+    where("companyId", "==", companyId),
     where("agencyId", "==", agencyId),
     orderBy("performedAt", "desc"),
     limit(50)
@@ -234,6 +292,10 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
   });
   return () => unsub();
 }, [companyId, agencyId, isOnline]);
+
+  useEffect(() => {
+    void loadApprovedExpenses();
+  }, [loadApprovedExpenses, reloadKey]);
 
   useEffect(() => {
     if (!companyId) return;
@@ -277,6 +339,11 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
   if (loading && accounts.length === 0) {
     return embedded ? <div className="py-8 text-gray-500">Chargement…</div> : <PageLoadingState />;
   }
+
+  const formatExpenseDate = (expense: ExpenseRow): string => {
+    const date = (expense.createdAt as { toDate?: () => Date } | undefined)?.toDate?.();
+    return date ? date.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" }) : "—";
+  };
 
   // 🔥 Vue "Nouvelle dépense"
   const renderExpenseForm = () => (
@@ -471,17 +538,13 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
             Suivi des fonds disponibles et des mouvements de l'agence.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <ActionButton size="sm" onClick={() => setActionView("expense")}>
-            Nouvelle dépense
-          </ActionButton>
-          <ActionButton size="sm" variant="secondary" onClick={() => setActionView("transfer")}>
-            Versement compagnie
-          </ActionButton>
-          <ActionButton size="sm" variant="secondary" onClick={() => setActionView("supplier")}>
-            Paiement fournisseur
-          </ActionButton>
-        </div>
+        {canCreateAgencyExpense && (
+          <div className="flex flex-wrap items-center gap-2">
+            <ActionButton size="sm" onClick={() => setActionView("expense")}>
+              Nouvelle dépense
+            </ActionButton>
+          </div>
+        )}
       </div>
 
       {/* Carte résumé compacte */}
@@ -501,6 +564,55 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
           </div>
         </div>
       </SectionCard>
+
+      {canDisburseApprovedExpenses && (
+        <SectionCard title="Dépenses approuvées à décaisser" icon={FileText}>
+          {approvedLoading ? (
+            <div className="flex items-center justify-center py-8 text-gray-500">
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+              Chargement des dépenses approuvées…
+            </div>
+          ) : approvedExpenses.length === 0 ? (
+            <EmptyState message="Aucune dépense approuvée à décaisser." />
+          ) : (
+            <div className={table.wrapper}>
+              <table className={table.base}>
+                <thead className={table.head}>
+                  <tr>
+                    <th className={table.th}>Date</th>
+                    <th className={table.th}>Catégorie</th>
+                    <th className={table.th}>Description</th>
+                    <th className={table.thRight}>Montant</th>
+                    <th className={table.th}>Statut</th>
+                    <th className={table.thRight}>Action</th>
+                  </tr>
+                </thead>
+                <tbody className={table.body}>
+                  {approvedExpenses.map((expense) => (
+                    <tr key={expense.id} className={tableRowClassName()}>
+                      <td className={table.td}>{formatExpenseDate(expense)}</td>
+                      <td className={table.td}>{CATEGORY_LABELS[expense.expenseCategory ?? expense.category] ?? expense.category}</td>
+                      <td className={table.td}>{expense.description || "—"}</td>
+                      <td className={table.tdRight}>{money(Number(expense.amount || 0))}</td>
+                      <td className={table.td}>Approuvée</td>
+                      <td className={table.tdRight}>
+                        <ActionButton
+                          size="sm"
+                          onClick={() => void handleDisburseExpense(expense.id)}
+                          disabled={disbursingExpenseId != null}
+                        >
+                          {disbursingExpenseId === expense.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                          Décaisser
+                        </ActionButton>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </SectionCard>
+      )}
 
       {/* Derniers mouvements */}
       <SectionCard title="Derniers mouvements" icon={ArrowRightLeft}>
@@ -574,6 +686,9 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
 
   // 🔥 Sélection de la vue à afficher
   const renderContent = () => {
+    if (!canCreateAgencyExpense && actionView !== "overview") {
+      return renderOverview();
+    }
     switch (actionView) {
       case "expense":
         return renderExpenseForm();

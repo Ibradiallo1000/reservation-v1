@@ -21,7 +21,6 @@ import {
   agencyCashAccountDocId,
   agencyExpenseClearingAccountDocId,
   ledgerAccountDocRef,
-  ledgerDocIdFromFinancialAccountData,
 } from "./ledgerAccounts";
 import {
   getExpenseApprovalThresholds,
@@ -274,7 +273,6 @@ export async function recordAgencyCashExpense(
   const transactionId = `expense_${expenseId}`;
   const idempotencyKey = transactionId;
   const expenseDocumentRef = expenseRef(companyId, expenseId);
-  const settingsRef = doc(db, "companies", companyId, "financialSettings", "current");
   const transactionRef = doc(db, "companies", companyId, "financialTransactions", transactionId);
   const idempotencyRef = doc(
     db,
@@ -290,20 +288,10 @@ export async function recordAgencyCashExpense(
   const expenseAccountId = cashAccountId;
 
   return runTransaction(db, async (tx): Promise<RecordAgencyCashExpenseResult> => {
-    const [settingsSnap, existingExpenseSnap, existingIdempotencySnap] = await Promise.all([
-      tx.get(settingsRef),
+    const [existingExpenseSnap, existingIdempotencySnap] = await Promise.all([
       tx.get(expenseDocumentRef),
       tx.get(idempotencyRef),
     ]);
-
-    if (!settingsSnap.exists()) {
-      throw new Error("Seuil des dépenses agence non configuré par l'admin compagnie.");
-    }
-    const rawThreshold = settingsSnap.data().expenseApprovalThresholds?.agencyManagerLimit;
-    const agencyManagerLimit = Number(rawThreshold);
-    if (!Number.isFinite(agencyManagerLimit) || agencyManagerLimit < 0) {
-      throw new Error("Seuil des dépenses agence invalide.");
-    }
 
     if (existingExpenseSnap.exists()) {
       const existing = existingExpenseSnap.data() as ExpenseDoc;
@@ -383,22 +371,6 @@ export async function recordAgencyCashExpense(
       createdAt: now,
       updatedAt: serverTimestamp(),
     };
-
-    if (amount > agencyManagerLimit) {
-      tx.set(expenseDocumentRef, {
-        ...commonExpensePayload,
-        status: "pending_manager",
-        paidAt: null,
-        transactionId: null,
-        idempotencyKey: null,
-      });
-      return {
-        expenseId,
-        status: "pending_manager",
-        transactionId: null,
-        idempotent: false,
-      };
-    }
 
     const [cashAccountSnap, clearingAccountSnap, existingTransactionSnap] = await Promise.all([
       tx.get(cashAccountRef),
@@ -541,7 +513,7 @@ function effectiveStatus(data: ExpenseDoc): ExpenseStatus {
 
 /**
  * Multi-level approval:
- * - pending_manager: agency_manager approves (if amount ≤ agencyManagerLimit → approved; else → pending_accountant).
+ * - pending_manager: agency_manager approves agency expenses → approved; company expenses keep the multi-level flow.
  * - pending_accountant: company_accountant approves (if amount ≤ accountantLimit → approved; else → pending_ceo).
  * - pending_ceo: CEO approves → approved.
  * Ledger transaction is written when status becomes "paid" (in payExpense).
@@ -569,7 +541,7 @@ export async function approveExpense(
     if (!AGENCY_MANAGER_ROLES.includes(role)) {
       throw new Error("Seul le chef d'agence (ou le CEO) peut approuver cette dépense.");
     }
-    if (amount <= thresholds.agencyManagerLimit) {
+    if (data.expenseType === "agency" || amount <= thresholds.agencyManagerLimit) {
       await updateDoc(ref, {
         status: "approved",
         approvedBy,
@@ -760,39 +732,177 @@ export async function payExpense(
     const amount = Number(data.amount);
     if (amount <= 0) throw new Error("Montant invalide.");
 
-    const sourceAccountRef = financialAccountRef(companyId, data.accountId);
-    const sourceSnap = await tx.get(sourceAccountRef);
-    if (!sourceSnap.exists()) throw new Error("Compte source introuvable.");
-    const mirroredAccountType = String((sourceSnap.data() as { accountType?: string }).accountType ?? "");
-    const mirroredAgencyId = data.agencyId ?? null;
+    const now = Timestamp.now();
+    const agencyId = data.agencyId?.trim() ?? "";
 
-    const debitLedgerId = ledgerDocIdFromFinancialAccountData(
-      sourceSnap.exists() ? (sourceSnap.data() as { accountType?: string; agencyId?: string | null }) : {}
-    );
-    if (!debitLedgerId) throw new Error("[expenses] Compte source sans mapping ledger.");
+    if (data.expenseType === "agency") {
+      if (!agencyId) throw new Error("Agence de la dépense introuvable.");
+
+      const transactionId = `expense_${expenseId}`;
+      const idempotencyKey = transactionId;
+      const cashAccountId = agencyCashAccountDocId(agencyId);
+      const clearingAccountId = agencyExpenseClearingAccountDocId(agencyId);
+      const cashAccountRef = ledgerAccountDocRef(companyId, cashAccountId);
+      const clearingAccountRef = ledgerAccountDocRef(companyId, clearingAccountId);
+      const transactionRef = doc(db, "companies", companyId, "financialTransactions", transactionId);
+      const idempotencyRef = doc(
+        db,
+        "companies",
+        companyId,
+        "financialTransactionIdempotency",
+        idempotencyKey
+      );
+
+      const [cashAccountSnap, clearingAccountSnap, existingTransactionSnap, existingIdempotencySnap] =
+        await Promise.all([
+          tx.get(cashAccountRef),
+          tx.get(clearingAccountRef),
+          tx.get(transactionRef),
+          tx.get(idempotencyRef),
+        ]);
+
+      if (existingTransactionSnap.exists() || existingIdempotencySnap.exists()) {
+        throw new Error("Dépense déjà comptabilisée.");
+      }
+      if (!cashAccountSnap.exists()) throw new Error("Caisse agence introuvable.");
+
+      const cashAccount = cashAccountSnap.data() as Record<string, unknown>;
+      if (
+        cashAccount.companyId !== companyId
+        || cashAccount.agencyId !== agencyId
+        || cashAccount.type !== "cash"
+      ) {
+        throw new Error("Compte caisse agence incohérent.");
+      }
+
+      const previousCashBalance = Number(cashAccount.balance);
+      if (!Number.isFinite(previousCashBalance)) {
+        throw new Error("Solde caisse agence invalide.");
+      }
+      if (previousCashBalance < amount) {
+        throw new Error("Solde caisse insuffisant.");
+      }
+      const nextCashBalance = previousCashBalance - amount;
+
+      let previousClearingBalance = 0;
+      if (clearingAccountSnap.exists()) {
+        const clearingAccount = clearingAccountSnap.data() as Record<string, unknown>;
+        if (
+          clearingAccount.companyId !== companyId
+          || clearingAccount.agencyId !== agencyId
+          || clearingAccount.type !== "virtual_clearing"
+          || clearingAccount.includeInLiquidity !== false
+        ) {
+          throw new Error("Compte de contrepartie agence incohérent.");
+        }
+        previousClearingBalance = Number(clearingAccount.balance);
+        if (!Number.isFinite(previousClearingBalance)) {
+          throw new Error("Solde du compte de contrepartie invalide.");
+        }
+      }
+      const nextClearingBalance = previousClearingBalance + amount;
+
+      const financialTransactionPayload: FinancialTransactionDoc = {
+        type: "expense",
+        source: "cash",
+        amount,
+        currency,
+        companyId,
+        agencyId,
+        reservationId: null,
+        debitAccountId: cashAccountId,
+        creditAccountId: clearingAccountId,
+        debitAccountType: "cash",
+        balanceAfter: nextClearingBalance,
+        status: "confirmed",
+        performedAt: now,
+        createdAt: now,
+        metadata: {
+          expenseId,
+          performedBy,
+          executionMode: "agency_cash_expense_approved",
+          debitAfter: nextCashBalance,
+          creditAfter: nextClearingBalance,
+        },
+        referenceType: "expense",
+        referenceId: expenseId,
+        uniqueReferenceKey: idempotencyKey,
+        paymentChannel: "cash",
+        paymentMethod: "cash",
+        paymentProvider: null,
+      };
+
+      const expenseUpdatePayload = {
+        status: "paid",
+        paidAt: now,
+        transactionId,
+        idempotencyKey,
+        updatedAt: serverTimestamp(),
+      };
+      tx.update(ref, expenseUpdatePayload);
+
+      const cashAccountUpdatePayload = {
+        balance: nextCashBalance,
+        updatedAt: serverTimestamp(),
+        lastDirectExpenseId: expenseId,
+      };
+      tx.update(cashAccountRef, cashAccountUpdatePayload);
+
+      if (clearingAccountSnap.exists()) {
+        const clearingAccountUpdatePayload = {
+          balance: nextClearingBalance,
+          updatedAt: serverTimestamp(),
+          lastDirectExpenseId: expenseId,
+        };
+        tx.update(clearingAccountRef, clearingAccountUpdatePayload);
+      } else {
+        const clearingAccountCreatePayload = {
+          id: clearingAccountId,
+          companyId,
+          agencyId,
+          type: "virtual_clearing",
+          label: "Contrepartie dépenses agence",
+          balance: amount,
+          currency,
+          includeInLiquidity: false,
+          lastDirectExpenseId: expenseId,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+        tx.set(clearingAccountRef, clearingAccountCreatePayload);
+      }
+      tx.set(transactionRef, financialTransactionPayload);
+
+      const idempotencyPayload = {
+        expenseId,
+        transactionId,
+        agencyId,
+        amount,
+        createdBy: performedBy,
+        createdAt: serverTimestamp(),
+      };
+      tx.set(idempotencyRef, idempotencyPayload);
+      return;
+    }
 
     await applyFinancialTransactionInExistingFirestoreTransaction(tx, {
       companyId,
       type: "expense",
-      expenseDebitLedgerDocId: debitLedgerId,
-      source: mirroredAccountType.includes("bank")
-        ? "bank"
-        : mirroredAccountType.includes("mobile")
-          ? "mobile_money"
-          : "cash",
+      expenseDebitLedgerDocId: data.accountId,
+      source: "cash",
       amount,
       currency,
-      agencyId: mirroredAgencyId,
+      agencyId: data.agencyId ?? null,
       referenceType: "expense",
       referenceId: expenseId,
     });
 
-    const now = Timestamp.now();
-    tx.update(ref, {
+    const expenseUpdatePayload = {
       status: "paid",
       paidAt: now,
       updatedAt: serverTimestamp(),
-    });
+    };
+    tx.update(ref, expenseUpdatePayload);
   });
   try {
     const snap = await getDoc(ref);

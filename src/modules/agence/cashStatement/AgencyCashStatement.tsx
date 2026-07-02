@@ -3,11 +3,13 @@ import { Download, Printer, RefreshCw } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { ActionButton, SectionCard } from "@/ui";
 import { formatCurrency } from "@/shared/utils/formatCurrency";
-import { loadAgencyCashStatement } from "./agencyCashStatementService";
+import {
+  buildAgencyCashStatementSummary,
+  loadAgencyCashStatementCached,
+} from "./agencyCashStatementService";
 import type {
   AgencyCashStatementFilter,
   AgencyCashStatementResult,
-  AgencyCashStatementRow,
 } from "./agencyCashStatementTypes";
 
 type DatePreset = "today" | "7d" | "30d" | "month" | "custom";
@@ -81,18 +83,6 @@ function resolveRange(
   return { from: startOfDay(now), to: endOfDay(now) };
 }
 
-function rowMatchesFilter(
-  row: AgencyCashStatementRow,
-  filter: AgencyCashStatementFilter
-): boolean {
-  if (filter === "all") return true;
-  if (filter === "entries") return row.entry > 0;
-  if (filter === "exits") return row.exit > 0;
-  if (filter === "expenses") return row.category === "expense";
-  if (filter === "transfers") return row.category === "transfer";
-  return row.category === "validation";
-}
-
 function csvCell(value: unknown): string {
   const text = String(value ?? "");
   return /[";\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -105,18 +95,33 @@ function statusLabel(status: string): string {
   return status || "—";
 }
 
-export default function AgencyCashStatement() {
+type AgencyCashStatementProps = {
+  initialRange?: {
+    from: Date;
+    to: Date;
+  };
+  mode?: "accountant" | "manager";
+  includeLegacyLedger?: boolean;
+  tolerateSecondarySourceErrors?: boolean;
+};
+
+export default function AgencyCashStatement({
+  initialRange,
+  mode = "accountant",
+  includeLegacyLedger,
+  tolerateSecondarySourceErrors,
+}: AgencyCashStatementProps = {}) {
   const { user, company } = useAuth() as any;
   const companyId = user?.companyId ?? "";
   const agencyId = user?.agencyId ?? "";
   const companyName = company?.nom ?? company?.name ?? "Compagnie";
   const agencyName = user?.agencyNom ?? user?.agencyName ?? "Agence";
 
-  const [preset, setPreset] = useState<DatePreset>("month");
+  const [preset, setPreset] = useState<DatePreset>(() => (initialRange ? "custom" : "month"));
   const [customFrom, setCustomFrom] = useState(() =>
-    formatInputDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+    initialRange ? formatInputDate(initialRange.from) : formatInputDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1))
   );
-  const [customTo, setCustomTo] = useState(() => formatInputDate(new Date()));
+  const [customTo, setCustomTo] = useState(() => formatInputDate(initialRange?.to ?? new Date()));
   const [typeFilter, setTypeFilter] = useState<AgencyCashStatementFilter>("all");
   const [result, setResult] = useState<AgencyCashStatementResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -127,7 +132,7 @@ export default function AgencyCashStatement() {
     [preset, customFrom, customTo]
   );
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     if (!companyId || !agencyId) {
       setError("Compagnie ou agence introuvable.");
       setLoading(false);
@@ -141,12 +146,20 @@ export default function AgencyCashStatement() {
     setLoading(true);
     setError(null);
     try {
-      const next = await loadAgencyCashStatement({
-        companyId,
-        agencyId,
-        from: range.from,
-        to: range.to,
-      });
+      const next = await loadAgencyCashStatementCached(
+        {
+          companyId,
+          agencyId,
+          from: range.from,
+          to: range.to,
+        },
+        {
+          force,
+          mode,
+          includeLegacyLedger,
+          tolerateSecondarySourceErrors,
+        }
+      );
       setResult(next);
     } catch (loadError) {
       console.error("[AgencyCashStatement] load failed", loadError);
@@ -159,28 +172,17 @@ export default function AgencyCashStatement() {
     } finally {
       setLoading(false);
     }
-  }, [agencyId, companyId, range.from, range.to]);
+  }, [agencyId, companyId, includeLegacyLedger, mode, range.from, range.to, tolerateSecondarySourceErrors]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const filteredRows = useMemo(
-    () => (result?.rows ?? []).filter((row) => rowMatchesFilter(row, typeFilter)),
-    [result?.rows, typeFilter]
+  const summary = useMemo(
+    () => (result ? buildAgencyCashStatementSummary(result, typeFilter) : null),
+    [result, typeFilter]
   );
-
-  const totals = useMemo(
-    () =>
-      filteredRows.reduce(
-        (sum, row) => ({
-          entries: sum.entries + row.entry,
-          exits: sum.exits + row.exit,
-        }),
-        { entries: 0, exits: 0 }
-      ),
-    [filteredRows]
-  );
+  const filteredRows = summary?.rows ?? [];
 
   const periodLabel = `${range.from.toLocaleDateString("fr-FR")} au ${range.to.toLocaleDateString("fr-FR")}`;
   const currency = result?.currency ?? "XOF";
@@ -196,13 +198,17 @@ export default function AgencyCashStatement() {
       row.entry || "",
       row.exit || "",
       statusLabel(row.status),
-      row.source === "legacyLedger" ? "Ledger validation" : "Journal financier",
+      row.source === "comptaEncaissements"
+        ? "Encaissement comptable"
+        : row.source === "legacyLedger"
+          ? "Ledger validation"
+          : "Journal financier",
     ]);
     rows.push([]);
-    rows.push(["Total entrées", "", "", "", totals.entries, "", "", ""]);
-    rows.push(["Total sorties", "", "", "", "", totals.exits, "", ""]);
-    rows.push(["Net période", "", "", "", totals.entries - totals.exits, "", "", ""]);
-    rows.push(["Solde caisse actuel", "", "", "", result?.currentBalance ?? 0, "", "", ""]);
+    rows.push(["Total entrées", "", "", "", summary?.totalEntries ?? 0, "", "", ""]);
+    rows.push(["Total sorties", "", "", "", "", summary?.totalExits ?? 0, "", ""]);
+    rows.push(["Net période", "", "", "", summary?.net ?? 0, "", "", ""]);
+    rows.push(["Solde caisse actuel", "", "", "", summary?.currentBalance ?? 0, "", "", ""]);
 
     const csv = [header, ...rows].map((row) => row.map(csvCell).join(";")).join("\r\n");
     const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
@@ -287,7 +293,7 @@ export default function AgencyCashStatement() {
             </label>
           </div>
           <div className="flex flex-wrap gap-2">
-            <ActionButton variant="secondary" onClick={() => void load()} disabled={loading}>
+            <ActionButton variant="secondary" onClick={() => void load(true)} disabled={loading}>
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               Actualiser
             </ActionButton>
@@ -318,28 +324,34 @@ export default function AgencyCashStatement() {
             </div>
           )}
 
-          {(result?.transactionsCapped || result?.legacyCapped) && (
+          {(summary?.transactionsCapped || summary?.legacyCapped) && (
             <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
               Le relevé atteint la limite de 5 000 lignes sur au moins une source. Les données peuvent être partielles.
             </div>
           )}
 
+          {summary?.unavailableSources?.length ? (
+            <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+              Certaines opérations détaillées ne sont pas disponibles.
+            </div>
+          ) : null}
+
           <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950/30">
               <p className="text-xs font-semibold uppercase text-emerald-700 dark:text-emerald-300">Total entrées</p>
-              <p className="mt-1 text-lg font-bold text-emerald-800 dark:text-emerald-100">{formatCurrency(totals.entries, currency)}</p>
+              <p className="mt-1 text-lg font-bold text-emerald-800 dark:text-emerald-100">{formatCurrency(summary?.totalEntries ?? 0, currency)}</p>
             </div>
             <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 dark:border-rose-800 dark:bg-rose-950/30">
               <p className="text-xs font-semibold uppercase text-rose-700 dark:text-rose-300">Total sorties</p>
-              <p className="mt-1 text-lg font-bold text-rose-800 dark:text-rose-100">{formatCurrency(totals.exits, currency)}</p>
+              <p className="mt-1 text-lg font-bold text-rose-800 dark:text-rose-100">{formatCurrency(summary?.totalExits ?? 0, currency)}</p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800">
               <p className="text-xs font-semibold uppercase text-slate-600 dark:text-slate-300">Net période</p>
-              <p className="mt-1 text-lg font-bold text-slate-900 dark:text-white">{formatCurrency(totals.entries - totals.exits, currency)}</p>
+              <p className="mt-1 text-lg font-bold text-slate-900 dark:text-white">{formatCurrency(summary?.net ?? 0, currency)}</p>
             </div>
             <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3 dark:border-indigo-800 dark:bg-indigo-950/30">
               <p className="text-xs font-semibold uppercase text-indigo-700 dark:text-indigo-300">Solde caisse actuel</p>
-              <p className="mt-1 text-lg font-bold text-indigo-900 dark:text-indigo-100">{formatCurrency(result?.currentBalance ?? 0, currency)}</p>
+              <p className="mt-1 text-lg font-bold text-indigo-900 dark:text-indigo-100">{formatCurrency(summary?.currentBalance ?? 0, currency)}</p>
             </div>
           </div>
 
@@ -409,4 +421,3 @@ export default function AgencyCashStatement() {
     </div>
   );
 }
-
