@@ -39,6 +39,11 @@ type Reservation = {
   seatsGo?: number;
   seatsReturn?: number;
   statut?: string; // "payé"
+  status?: string;
+  paymentStatus?: string;
+  paymentChannel?: string;
+  reservation?: { channel?: string };
+  ticketValidatedAt?: any;
   createdAt?: any;
   shiftId?: string;
   referenceCode?: string;
@@ -70,6 +75,16 @@ const isOnline   = (raw?: string) => {
   return v.includes('ligne') || v === 'online' || v === 'web';
 };
 const norm = (s?: string) => (s||'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
+const isOnlineReservation = (reservation: Reservation) =>
+  isOnline(
+    reservation.canal ||
+    reservation.paymentChannel ||
+    reservation.reservation?.channel
+  );
+const isConfirmedOnlineReservation = (reservation: Reservation) => {
+  const status = norm(reservation.statut || reservation.status);
+  return isOnlineReservation(reservation) && status === 'confirme';
+};
 
 /* ===================== UI bits ===================== */
 import { StandardLayoutWrapper, PageHeader, SectionCard, MetricCard, StatusBadge, ActionButton, EmptyState, table, tableRowClassName } from '@/ui';
@@ -275,10 +290,37 @@ const AgenceReservationsPage: React.FC = () => {
     const cursor = reservationCursors[reservationsPage];
     const qy = cursor ? query(baseQuery, startAfter(cursor)) : baseQuery;
     let cancelled = false;
-    getDocs(qy).then((snap) => {
+    const onlineQueries = reservationsPage === 0
+      ? [
+          getDocs(query(
+            rRef,
+            where('ticketValidatedAt', '>=', Timestamp.fromDate(range[0])),
+            where('ticketValidatedAt', '<=', Timestamp.fromDate(range[1])),
+            orderBy('ticketValidatedAt', 'desc'),
+            limit(RESERVATIONS_PAGE_SIZE)
+          )),
+          getDocs(query(
+            rRef,
+            where('createdAt', '>=', Timestamp.fromDate(range[0])),
+            where('createdAt', '<=', Timestamp.fromDate(range[1])),
+            orderBy('createdAt', 'desc'),
+            limit(RESERVATIONS_PAGE_SIZE)
+          )),
+        ]
+      : [];
+
+    Promise.all([getDocs(qy), ...onlineQueries]).then(([snap, ...onlineSnaps]) => {
       if (cancelled) return;
-      const list: Reservation[] = snap.docs.map(d => ({ id:d.id, ...(d.data() as any) }));
-      setRows(list);
+      const guichetRows: Reservation[] = snap.docs.map(d => ({ id:d.id, ...(d.data() as any) }));
+      const onlineRows = onlineSnaps
+        .flatMap((onlineSnap) => onlineSnap.docs)
+        .map(d => ({ id:d.id, ...(d.data() as any) } as Reservation))
+        .filter(isConfirmedOnlineReservation);
+      const mergedRows = new Map<string, Reservation>();
+      [...guichetRows, ...onlineRows].forEach((reservation) => {
+        mergedRows.set(reservation.id, reservation);
+      });
+      setRows([...mergedRows.values()]);
       setLastReservationDoc(snap.docs[snap.docs.length - 1] ?? null);
       setHasNextReservationsPage(snap.docs.length === RESERVATIONS_PAGE_SIZE);
     });
@@ -306,7 +348,7 @@ const AgenceReservationsPage: React.FC = () => {
     let gTickets=0, gMontant=0, oTickets=0, oMontant=0;
     for (const r of rows) {
       const seats = (r.seatsGo||0) + (r.seatsReturn||0);
-      if (isOnline(r.canal)) { oTickets += seats; oMontant += r.montant||0; }
+      if (isOnlineReservation(r)) { oTickets += seats; oMontant += r.montant||0; }
       else { gTickets += seats; gMontant += r.montant||0; }
     }
     return { gTickets, gMontant, oTickets, oMontant };
@@ -327,7 +369,7 @@ const AgenceReservationsPage: React.FC = () => {
         };
       }
       const seats = (r.seatsGo||0) + (r.seatsReturn||0);
-      if (isOnline(r.canal)) {
+      if (isOnlineReservation(r)) {
         map[key].billetsOnline += seats; map[key].montantOnline += r.montant||0;
       } else {
         map[key].billetsGuichet += seats; map[key].montantGuichet += r.montant||0;

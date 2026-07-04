@@ -4,10 +4,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import {
+  ArrowRightLeft,
   CreditCard,
+  FileText,
   Landmark,
   LayoutDashboard,
-  Wallet,
   Receipt,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -99,22 +100,27 @@ const CompanyAccountantLayout: React.FC = () => {
   const sections: NavSection[] = [
     { label: "Dashboard", icon: LayoutDashboard, path: basePath, end: true },
     {
-      label: "Activité",
+      label: "Réseau financier",
       icon: CreditCard,
       path: `${basePath}/reservations-reseau`,
     },
     {
-      label: "Contrôle des caisses",
-      icon: Wallet,
+      label: "Trésorerie",
+      icon: Landmark,
+      path: `${basePath}/treasury`,
+    },
+    {
+      label: "Flux financiers",
+      icon: ArrowRightLeft,
       path: `${basePath}/finances`,
+    },
+    {
+      label: "Rapports",
+      icon: FileText,
+      path: `${basePath}/rapports`,
     },
     ...(!ENABLE_PHASE1_ONLY || ENABLE_ADVANCED_FINANCE
       ? [
-          {
-            label: "Trésorerie",
-            icon: Landmark,
-            path: `${basePath}/treasury`,
-          },
           {
             label: "Dépenses",
             icon: Receipt,

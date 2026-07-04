@@ -1,0 +1,50 @@
+[debug] [2026-07-04T18:37:07.379Z] ----------------------------------------------------------------------
+[debug] [2026-07-04T18:37:07.381Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\DELL\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js deploy --only firestore:rules --project monbillet-95b77
+[debug] [2026-07-04T18:37:07.382Z] CLI Version:   14.25.0
+[debug] [2026-07-04T18:37:07.382Z] Platform:      win32
+[debug] [2026-07-04T18:37:07.382Z] Node Version:  v22.15.0
+[debug] [2026-07-04T18:37:07.382Z] Time:          Sat Jul 04 2026 18:37:07 GMT+0000 (temps universel coordonné)
+[debug] [2026-07-04T18:37:07.382Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-07-04T18:37:07.618Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-07-04T18:37:07.619Z] > authorizing via signed-in user (monbillet1000@gmail.com)
+[debug] [2026-07-04T18:37:07.619Z] [iam] checking project monbillet-95b77 for permissions ["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get"]
+[debug] [2026-07-04T18:37:07.620Z] Checked if tokens are valid: true, expires at: 1783193513841
+[debug] [2026-07-04T18:37:07.621Z] Checked if tokens are valid: true, expires at: 1783193513841
+[debug] [2026-07-04T18:37:07.622Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/monbillet-95b77:testIamPermissions [none]
+[debug] [2026-07-04T18:37:07.622Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/monbillet-95b77:testIamPermissions x-goog-quota-user=projects/monbillet-95b77
+[debug] [2026-07-04T18:37:07.622Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/monbillet-95b77:testIamPermissions {"permissions":["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get"]}
+[debug] [2026-07-04T18:37:08.352Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/monbillet-95b77:testIamPermissions 200
+[debug] [2026-07-04T18:37:08.353Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/monbillet-95b77:testIamPermissions {"permissions":["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get"]}
+[info] 
+[info] === Deploying to 'monbillet-95b77'...
+[info] 
+[info] i  deploying firestore 
+[info] i  firestore: ensuring required API firestore.googleapis.com is enabled... 
+[info] i  firestore: ensuring required API firestore.googleapis.com is enabled... 
+[debug] [2026-07-04T18:37:08.383Z] Checked if tokens are valid: true, expires at: 1783193513841
+[debug] [2026-07-04T18:37:08.383Z] Checked if tokens are valid: true, expires at: 1783193513841
+[debug] [2026-07-04T18:37:08.383Z] >>> [apiv2][query] GET https://firestore.googleapis.com/v1/projects/monbillet-95b77/databases/(default) [none]
+[debug] [2026-07-04T18:37:09.539Z] <<< [apiv2][status] GET https://firestore.googleapis.com/v1/projects/monbillet-95b77/databases/(default) 200
+[debug] [2026-07-04T18:37:09.539Z] <<< [apiv2][body] GET https://firestore.googleapis.com/v1/projects/monbillet-95b77/databases/(default) {"name":"projects/monbillet-95b77/databases/(default)","uid":"eac593f2-1f96-4059-ad8c-c9251f09d4a8","createTime":"2025-04-14T15:44:18.509260Z","updateTime":"2025-04-14T15:44:18.509260Z","locationId":"nam5","type":"FIRESTORE_NATIVE","concurrencyMode":"PESSIMISTIC","versionRetentionPeriod":"3600s","earliestVersionTime":"2026-07-04T17:37:08.536708Z","appEngineIntegrationMode":"DISABLED","keyPrefix":"s","pointInTimeRecoveryEnablement":"POINT_IN_TIME_RECOVERY_DISABLED","deleteProtectionState":"DELETE_PROTECTION_DISABLED","databaseEdition":"STANDARD","freeTier":true,"realtimeUpdatesMode":"REALTIME_UPDATES_MODE_ENABLED","etag":"IIaYjqHVuZUDMJTT55iy5pID"}
+[info] i  cloud.firestore: checking firestore.rules for compilation errors... 
+[debug] [2026-07-04T18:37:09.541Z] Checked if tokens are valid: true, expires at: 1783193513841
+[debug] [2026-07-04T18:37:09.541Z] Checked if tokens are valid: true, expires at: 1783193513841
+[debug] [2026-07-04T18:37:09.542Z] >>> [apiv2][query] POST https://firebaserules.googleapis.com/v1/projects/monbillet-95b77:test [none]
+[debug] [2026-07-04T18:37:09.542Z] >>> [apiv2][body] POST https://firebaserules.googleapis.com/v1/projects/monbillet-95b77:test [omitted]
+[debug] [2026-07-04T18:37:16.940Z] <<< [apiv2][status] POST https://firebaserules.googleapis.com/v1/projects/monbillet-95b77:test 503
+[debug] [2026-07-04T18:37:16.941Z] <<< [apiv2][body] POST https://firebaserules.googleapis.com/v1/projects/monbillet-95b77:test {"error":{"code":503,"message":"The service is currently unavailable.","status":"UNAVAILABLE"}}
+[error] 
+[error] Error: Request to https://firebaserules.googleapis.com/v1/projects/monbillet-95b77:test had HTTP Error: 503, The service is currently unavailable.
+[debug] [2026-07-04T18:37:16.943Z] Error Context: {
+  "body": {
+    "error": {
+      "code": 503,
+      "message": "The service is currently unavailable.",
+      "status": "UNAVAILABLE"
+    }
+  },
+  "response": {
+    "statusCode": 503
+  }
+}

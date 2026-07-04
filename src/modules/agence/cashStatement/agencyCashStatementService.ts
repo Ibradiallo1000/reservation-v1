@@ -73,6 +73,35 @@ function isPermissionDenied(error: unknown): boolean {
   return code === "permission-denied" || message.toLowerCase().includes("permission");
 }
 
+async function traceStatementRead<T>(params: {
+  operation: string;
+  path: string;
+  companyId: string;
+  agencyId: string;
+  read: Promise<T>;
+}): Promise<T> {
+  const context = {
+    operation: params.operation,
+    path: params.path,
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+  };
+  console.info("[agencyCashStatement][read]", { ...context, status: "start" });
+  try {
+    const result = await params.read;
+    console.info("[agencyCashStatement][read]", { ...context, status: "success" });
+    return result;
+  } catch (error) {
+    console.error("[agencyCashStatement][read]", {
+      ...context,
+      status: "error",
+      code: (error as { code?: string } | null)?.code ?? null,
+      error,
+    });
+    throw error;
+  }
+}
+
 function timestampToDate(value: unknown): Date | null {
   if (value instanceof Date) return value;
   if (value && typeof value === "object" && "toDate" in value) {
@@ -210,27 +239,45 @@ export async function loadAgencyCashStatement(params: {
   const unavailableSources: string[] = [];
 
   const [transactions, cashAccountSnapshot, legacyDocs, comptaEncaissements] = await Promise.all([
-    listFinancialTransactionsByPeriod(
+    traceStatementRead({
+      operation: "list_financial_transactions",
+      path: `companies/${companyId}/financialTransactions`,
       companyId,
-      fromTimestamp,
-      toTimestamp,
-      agencyId
-    ).catch((error) => {
+      agencyId,
+      read: listFinancialTransactionsByPeriod(
+        companyId,
+        fromTimestamp,
+        toTimestamp,
+        agencyId
+      ),
+    }).catch((error) => {
       if (!tolerateSecondarySourceErrors || !isPermissionDenied(error)) throw error;
       unavailableSources.push("financialTransactions");
       return [] as Array<FinancialTransactionDoc & { id: string }>;
     }),
-    getDoc(cashAccountRef),
+    traceStatementRead({
+      operation: "get_agency_cash_account",
+      path: cashAccountRef.path,
+      companyId,
+      agencyId,
+      read: getDoc(cashAccountRef),
+    }),
     includeLegacyLedger
-      ? getDocs(
-          query(
-            collection(cashAccountRef, "ledger"),
-            where("createdAt", ">=", fromTimestamp),
-            where("createdAt", "<=", toTimestamp),
-            orderBy("createdAt", "asc"),
-            limit(MAX_ROWS)
-          )
-        )
+      ? traceStatementRead({
+          operation: "list_agency_cash_ledger",
+          path: `${cashAccountRef.path}/ledger`,
+          companyId,
+          agencyId,
+          read: getDocs(
+            query(
+              collection(cashAccountRef, "ledger"),
+              where("createdAt", ">=", fromTimestamp),
+              where("createdAt", "<=", toTimestamp),
+              orderBy("createdAt", "asc"),
+              limit(MAX_ROWS)
+            )
+          ),
+        })
           .then((snapshot) => snapshot.docs)
           .catch((error) => {
             if (!tolerateSecondarySourceErrors || !isPermissionDenied(error)) throw error;
@@ -238,13 +285,19 @@ export async function loadAgencyCashStatement(params: {
             return [];
           })
       : Promise.resolve([]),
-    listComptaEncaissementsInRange(
+    traceStatementRead({
+      operation: "list_compta_encaissements",
+      path: `companies/${companyId}/agences/${agencyId}/comptaEncaissements`,
       companyId,
       agencyId,
-      from,
-      rangeToExclusive,
-      MAX_ROWS
-    ).catch((error) => {
+      read: listComptaEncaissementsInRange(
+        companyId,
+        agencyId,
+        from,
+        rangeToExclusive,
+        MAX_ROWS
+      ),
+    }).catch((error) => {
       if (!tolerateSecondarySourceErrors || !isPermissionDenied(error)) throw error;
       unavailableSources.push("comptaEncaissements");
       return [];

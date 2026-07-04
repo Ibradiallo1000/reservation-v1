@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { StandardLayoutWrapper, SectionCard, ActionButton } from "@/ui";
@@ -15,10 +15,8 @@ import { ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/shared/utils/formatCurrency";
 import {
-  approveTransferRequest,
   createTransferRequest,
   listTransferRequests,
-  rejectTransferRequest,
   type TransferRequestDoc,
 } from "@/modules/agence/treasury/transferRequestsService";
 
@@ -29,13 +27,6 @@ type AccountRow = {
 };
 
 type TransferRequestRow = TransferRequestDoc & { id: string };
-
-const TRANSFER_STATUS_LABELS: Record<string, string> = {
-  pending_manager: "En attente chef d'agence",
-  approved: "Validée",
-  rejected: "Refusée",
-  executed: "Exécutée",
-};
 
 export default function AgencyTreasuryTransferPage() {
   const { pathname } = useLocation();
@@ -60,10 +51,10 @@ export default function AgencyTreasuryTransferPage() {
   const [toAccountId, setToAccountId] = useState("");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
-  const [companyBankNameById, setCompanyBankNameById] = useState<Record<string, string>>({});
   const [requests, setRequests] = useState<TransferRequestRow[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(false);
-  const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const submitLockRef = useRef(false);
 
   useEffect(() => {
     if (!companyId || !agencyId) {
@@ -101,17 +92,10 @@ export default function AgencyTreasuryTransferPage() {
               currency: cashData.currency?.trim() || "XOF",
             }
           : null;
-        const bankNames = Object.fromEntries(
-          banksSnapshot.docs.map((bankDoc) => [
-            bankDoc.id,
-            (bankDoc.data() as { name?: string }).name?.trim() || bankDoc.id,
-          ])
-        );
         if (!cancelled) {
           setAgencyCashAccount(cashAccount);
           setCompanyBankAccounts(banks);
           setAvailableAgencyCash(cashAccount?.currentBalance ?? 0);
-          setCompanyBankNameById(bankNames);
           if (agencyDoc?.exists()) {
             const agencyData = agencyDoc.data() as { nom?: string; nomAgence?: string; name?: string };
             const officialName = agencyData.nom ?? agencyData.nomAgence ?? agencyData.name;
@@ -149,8 +133,8 @@ export default function AgencyTreasuryTransferPage() {
     setAgencyDisplayName(fallbackAgencyName);
   }, [fallbackAgencyName]);
 
-  const canInitiateTransfer = hasRole("agency_accountant") || hasRole("admin_compagnie");
-  const canValidateTransfer = hasRole("chefAgence") || hasRole("superviseur") || hasRole("admin_compagnie");
+  const canInitiateTransfer =
+    hasRole("agency_accountant") || hasRole("comptable") || hasRole("Comptable");
 
   useEffect(() => {
     if (!toAccountId && companyBankAccounts.length > 0) {
@@ -165,7 +149,10 @@ export default function AgencyTreasuryTransferPage() {
     const load = async () => {
       setRequestsLoading(true);
       try {
-        const list = await listTransferRequests(companyId, { agencyId, limitCount: 50 });
+        const list = await listTransferRequests(companyId, {
+          agencyId,
+          limitCount: 50,
+        });
         if (!cancelled) setRequests(list);
       } catch {
         if (!cancelled) setRequests([]);
@@ -183,106 +170,121 @@ export default function AgencyTreasuryTransferPage() {
   }, [companyId, agencyId]);
 
   const handleSubmit = async () => {
+    setSubmitError(null);
+    console.log("[Transfer] Click - Début de la soumission");
+
+    if (submitLockRef.current) {
+      console.log("[Transfer] Click - Verrou actif, abandon");
+      return;
+    }
+
     if (!companyId || !user?.uid) {
+      console.log("[Transfer] Click - Session invalide: companyId ou uid manquant");
       toast.error("Session invalide : reconnectez-vous.");
       return;
     }
+
     if (!agencyId) {
+      console.log("[Transfer] Click - AgencyId manquant");
       toast.error("Aucune agence associée à ce compte.");
       return;
     }
+
     const numericAmount = Number(amount.replace(",", "."));
+    console.log("[Transfer] Montant parsé:", { input: amount, numericAmount });
+
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      console.log("[Transfer] Montant invalide:", numericAmount);
       toast.error("Montant invalide.");
       return;
     }
+
     if (!agencyCashAccount) {
+      console.log("[Transfer] Caisse agence non configurée");
       toast.error("Aucune caisse agence configurée.");
       return;
     }
+
     if (!toAccountId) {
+      console.log("[Transfer] Compte de destination non sélectionné");
       toast.error("Sélectionnez la banque compagnie de destination.");
       return;
     }
+
     if (numericAmount > availableAgencyCash) {
+      console.log("[Transfer] Montant supérieur au disponible:", {
+        montant: numericAmount,
+        disponible: availableAgencyCash
+      });
       toast.error("Montant supérieur au cash disponible en caisse.");
       return;
     }
+
     const selectedTo = companyBankAccounts.find((a) => a.id === toAccountId);
     const currency = agencyCashAccount.currency || selectedTo?.currency || "XOF";
 
+    const payload = {
+      companyId,
+      agencyId,
+      fromAccountId: agencyCashAccount.id,
+      toAccountId,
+      amount: numericAmount,
+      currency,
+      initiatedBy: user.uid,
+      initiatedByRoles: roles,
+      description: description.trim() || "Transfert caisse agence vers banque",
+    };
+    console.log("[Transfer] Payload complet:", JSON.stringify(payload, null, 2));
+
+    submitLockRef.current = true;
     setSubmitting(true);
+
     try {
-      await createTransferRequest({
-        companyId,
-        agencyId,
-        fromAccountId: agencyCashAccount.id,
-        toAccountId,
-        amount: numericAmount,
-        currency,
-        initiatedBy: user.uid,
-        initiatedByRoles: roles,
-        description: description.trim() || "Transfert caisse agence vers banque",
-      });
-      toast.success("Demande de transfert créée. En attente de validation chef d'agence.");
+      console.log("[Transfer] Appel à createTransferRequest...");
+      const requestId = await createTransferRequest(payload);
+      console.log("[Transfer] Success - ID de la demande:", requestId);
+
+      toast.success("Versement enregistré et exécuté.");
       setAmount("");
       setDescription("");
-      const list = await listTransferRequests(companyId, { agencyId, limitCount: 50 });
+
+      console.log("[Transfer] Rafraîchissement des données...");
+      const [list, refreshedCash] = await Promise.all([
+        listTransferRequests(companyId, {
+          agencyId,
+          limitCount: 50,
+        }),
+        getDoc(ledgerAccountDocRef(companyId, agencyCashAccount.id)),
+      ]);
       setRequests(list);
+
+      if (refreshedCash.exists()) {
+        const refreshedData = refreshedCash.data() as { balance?: number };
+        setAvailableAgencyCash(Number(refreshedData.balance ?? 0) || 0);
+        console.log("[Transfer] Cash rafraîchi:", refreshedData.balance);
+      }
+      console.log("[Transfer] Fin du processus - succès");
+
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Erreur lors de la création de la demande.");
+      console.error("[Transfer] Error - Détail complet:", error);
+      const detail =
+        error && typeof error === "object" && "message" in error
+          ? String((error as { message?: string }).message)
+          : "Erreur inconnue";
+      console.error("[Transfer] Error - Message:", detail);
+      setSubmitError(detail);
+      toast.error(`Le transfert n'a pas été enregistré. ${detail}`);
     } finally {
+      submitLockRef.current = false;
       setSubmitting(false);
+      console.log("[Transfer] Verrou relâché");
     }
   };
 
-  const handleApprove = async (requestId: string) => {
-    if (!companyId || !user?.uid) return;
-    setBusyRequestId(requestId);
-    try {
-      await approveTransferRequest({
-        companyId,
-        requestId,
-        managerId: user.uid,
-        managerRoles: roles,
-      });
-      toast.success("Versement validé et exécuté.");
-      const list = await listTransferRequests(companyId, { agencyId, limitCount: 50 });
-      setRequests(list);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Erreur lors de la validation.");
-    } finally {
-      setBusyRequestId(null);
-    }
-  };
-
-  const handleReject = async (requestId: string) => {
-    if (!companyId || !user?.uid) return;
-    const reason = window.prompt("Motif du refus (optionnel) :") ?? "";
-    setBusyRequestId(requestId);
-    try {
-      await rejectTransferRequest({
-        companyId,
-        requestId,
-        managerId: user.uid,
-        managerRoles: roles,
-        reason,
-      });
-      toast.success("Demande de versement refusée.");
-      const list = await listTransferRequests(companyId, { agencyId, limitCount: 50 });
-      setRequests(list);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Erreur lors du refus.");
-    } finally {
-      setBusyRequestId(null);
-    }
-  };
-
-  const pendingForValidation = useMemo(
-    () => requests.filter((r) => r.status === "pending_manager"),
+  const recentRequests = useMemo(
+    () => requests.filter((request) => request.status === "executed").slice(0, 12),
     [requests]
   );
-  const recentRequests = useMemo(() => requests.slice(0, 12), [requests]);
 
   if (!companyId) {
     const missing = <div className="p-6 text-gray-500">Compagnie introuvable.</div>;
@@ -359,75 +361,44 @@ export default function AgencyTreasuryTransferPage() {
             </div>
 
             {canInitiateTransfer ? (
-              <ActionButton type="button" onClick={() => void handleSubmit()} disabled={submitting}>
-                {submitting ? "Traitement..." : "Enregistrer le transfert"}
-              </ActionButton>
+              <div className="space-y-2">
+                <ActionButton type="button" onClick={() => void handleSubmit()} disabled={submitting}>
+                  {submitting ? "Traitement..." : "Enregistrer le transfert"}
+                </ActionButton>
+                {submitError && (
+                  <p role="alert" className="text-sm font-medium text-red-700">
+                    Le transfert n&apos;a pas été enregistré : {submitError}
+                  </p>
+                )}
+              </div>
             ) : null}
           </div>
         )}
       </SectionCard>
 
-      {canValidateTransfer && (
-        <SectionCard title="Demandes en attente de validation">
-          {requestsLoading ? (
-            <div className="py-4 text-sm text-gray-500">Chargement des demandes...</div>
-          ) : pendingForValidation.length === 0 ? (
-            <div className="py-4 text-sm text-gray-500">Aucune demande en attente.</div>
-          ) : (
-            <div className="space-y-2">
-              {pendingForValidation.map((r) => (
-                <div key={r.id} className="rounded-lg border border-gray-200 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-sm text-gray-700">
-                      <span className="font-medium">{formatCurrency(r.amount, r.currency)}</span>
-                      {" · "}
-                      <span>{companyBankNameById[r.toAccountId.replace("company_bank_", "")] ?? "Banque compagnie"}</span>
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {r.createdAt?.toDate?.()?.toLocaleString?.("fr-FR") ?? "—"}
-                    </div>
-                  </div>
-                  <div className="mt-1 text-xs text-gray-500">
-                    Initié par: {r.initiatedBy} {r.description ? `· ${r.description}` : ""}
-                  </div>
-                  <div className="mt-3 flex items-center gap-2">
-                    <ActionButton
-                      size="sm"
-                      onClick={() => handleApprove(r.id)}
-                      disabled={busyRequestId === r.id}
-                    >
-                      Valider
-                    </ActionButton>
-                    <ActionButton
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => handleReject(r.id)}
-                      disabled={busyRequestId === r.id}
-                    >
-                      Refuser
-                    </ActionButton>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </SectionCard>
-      )}
-
-      <SectionCard title="Historique des demandes de versement">
+      <SectionCard title="Historique des transferts enregistrés">
         {requestsLoading ? (
           <div className="py-4 text-sm text-gray-500">Chargement...</div>
         ) : recentRequests.length === 0 ? (
-          <div className="py-4 text-sm text-gray-500">Aucune demande enregistrée.</div>
+          <div className="py-4 text-sm text-gray-500">Aucun transfert enregistré.</div>
         ) : (
           <ul className="space-y-2 text-sm">
             {recentRequests.map((r) => (
               <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-gray-200 px-3 py-2">
                 <span>
-                  {formatCurrency(r.amount, r.currency)} · {TRANSFER_STATUS_LABELS[r.status] ?? r.status}
+                  <span className="font-medium">{formatCurrency(r.amount, r.currency)}</span>
+                  {" · "}
+                  {companyBankAccounts.find((account) => account.id === r.toAccountId)?.accountName
+                    ?? "Banque compagnie"}
+                  {r.description ? ` · ${r.description}` : ""}
                 </span>
-                <span className="text-xs text-gray-500">
-                  {r.createdAt?.toDate?.()?.toLocaleString?.("fr-FR") ?? "—"}
+                <span className="text-right text-xs text-gray-500">
+                  <span className="block">
+                    {r.executedAt?.toDate?.()?.toLocaleString?.("fr-FR")
+                      ?? r.createdAt?.toDate?.()?.toLocaleString?.("fr-FR")
+                      ?? "—"}
+                  </span>
+                  <span className="block font-mono">{r.id}</span>
                 </span>
               </li>
             ))}

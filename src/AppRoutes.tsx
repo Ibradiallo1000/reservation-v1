@@ -23,7 +23,6 @@ const ReservationDetailsPage = lazy(() => import("./modules/compagnie/public/pag
 const AdminParametresPlatformPage = lazy(() => import("./modules/plateforme/pages/AdminParametresPlatformPage"));
 const VueGlobale = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.VueGlobale })));
 const Finances = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Finances })));
-const Rapports = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Rapports })));
 const Parametres = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.Parametres })));
 const DepensesPage = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.DepensesPage })));
 const ExpenseDashboard = lazy(() => import("@/modules/compagnie/finances/pages").then((m) => ({ default: m.ExpenseDashboard })));
@@ -98,6 +97,10 @@ const CompanyRoutesPage = lazy(() => import("./modules/compagnie/pages/CompanyRo
 const CompanyCashPage = lazy(() => import("./modules/compagnie/cash/CompanyCashPage"));
 const FinancesPage = lazy(() => import("./modules/compagnie/pages/FinancesPage"));
 const ReservationsReseauPage = lazy(() => import("./modules/compagnie/pages/ReservationsReseauPage"));
+const CompanyFinancialNetworkPage = lazy(() => import("./modules/compagnie/finances/pages/CompanyFinancialNetworkPage"));
+const CompanyTreasuryOverviewPage = lazy(() => import("./modules/compagnie/finances/pages/CompanyTreasuryOverviewPage"));
+const CompanyFinancialFlowsPage = lazy(() => import("./modules/compagnie/finances/pages/CompanyFinancialFlowsPage"));
+const CompanyFinancialReportsPage = lazy(() => import("./modules/compagnie/finances/pages/CompanyFinancialReportsPage"));
 const FlottePage = lazy(() => import("./modules/compagnie/pages/FlottePage"));
 const AuditControlePage = lazy(() => import("./modules/compagnie/pages/AuditControlePage"));
 const CompanySystemErrorsPage = lazy(() => import("./modules/compagnie/pages/CompanySystemErrorsPage"));
@@ -524,7 +527,7 @@ const AppRoutes = () => {
             element={
               <GlobalPeriodProvider>
                 <GlobalDataSnapshotProvider>
-                  <ReservationsReseauPage />
+                  <CompanyFinancialNetworkPage />
                 </GlobalDataSnapshotProvider>
               </GlobalPeriodProvider>
             }
@@ -539,16 +542,30 @@ const AppRoutes = () => {
               </GlobalPeriodProvider>
             }
           />
-          <Route path="finances" element={<Finances />} />
+          <Route
+            path="finances"
+            element={
+              <GlobalPeriodProvider>
+                <CompanyFinancialFlowsPage />
+              </GlobalPeriodProvider>
+            }
+          />
           <Route path="compta" element={<ComptaPage />} />
           <Route path="expenses" element={<DepensesPage />} />
           <Route path="expenses-dashboard" element={<ExpenseDashboard />} />
-          <Route path="treasury" element={<CEOTreasuryPage />} />
+          <Route path="treasury" element={<CompanyTreasuryOverviewPage />} />
           <Route path="treasury/new-operation" element={<TreasuryNewOperationPage />} />
           <Route path="treasury/new-payable" element={<TreasuryNewPayablePage />} />
           <Route path="treasury/transfer" element={<TreasuryTransferPage />} />
           <Route path="supplier-payments" element={<TreasurySupplierPaymentPage />} />
-          <Route path="rapports" element={<Rapports />} />
+          <Route
+            path="rapports"
+            element={
+              <GlobalPeriodProvider>
+                <CompanyFinancialReportsPage />
+              </GlobalPeriodProvider>
+            }
+          />
           <Route path="parametres" element={<Parametres />} />
           <Route
             path="consistency-diagnostics"

@@ -1,4 +1,3 @@
-// src/pages/chef-comptable/VueGlobale.tsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   collection,
@@ -8,47 +7,59 @@ import {
   Timestamp,
   where,
 } from "firebase/firestore";
-import { Building2, CheckCircle2, Clock, Landmark, Receipt, RefreshCw, Wallet } from "lucide-react";
+import { Link } from "react-router-dom";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Building2,
+  Landmark,
+  RefreshCw,
+  Smartphone,
+  Wallet,
+} from "lucide-react";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
-import { SectionCard } from "@/ui";
+import { MetricCard, SectionCard, StatusBadge } from "@/ui";
+import {
+  getAgencyLedgerLiquidityMap,
+  getLiquidityFromAccounts,
+} from "@/modules/compagnie/treasury/ledgerAccounts";
+import {
+  isConfirmedTransactionStatus,
+  listFinancialTransactionsByPeriod,
+} from "@/modules/compagnie/treasury/financialTransactions";
+import { sumComptaEncaissementsInRange } from "@/modules/agence/comptabilite/comptaEncaissementsService";
+import { listAgencyCashAudits } from "@/modules/agence/comptabilite/agencyCashAuditService";
 
-type AgencyRow = {
+type AgencySnapshot = {
   id: string;
   name: string;
-  ventesValidees: number;
-  paiementsOnlineValides: number;
-  totalEncaisse: number;
-  depots: number;
-  depenses: number;
-  ecart: number;
-  sessionsNonValidees: number;
+  cashBalance: number;
+  receiptsToday: number;
+  expensesToday: number;
+  latestCashDifference: number | null;
+  pendingSessions: number;
 };
 
-type ControlTotals = {
-  ventesValidees: number;
-  paiementsOnlineValides: number;
-  totalEncaisse: number;
-  depots: number;
-  depenses: number;
-  ecart: number;
+type DashboardSnapshot = {
+  liquidity: {
+    total: number;
+    cash: number;
+    bank: number;
+    mobileMoney: number;
+  };
+  agencies: AgencySnapshot[];
+  fundsInTransitAmount: number;
 };
 
-const EMPTY_TOTALS: ControlTotals = {
-  ventesValidees: 0,
-  paiementsOnlineValides: 0,
-  totalEncaisse: 0,
-  depots: 0,
-  depenses: 0,
-  ecart: 0,
+const EMPTY_SNAPSHOT: DashboardSnapshot = {
+  liquidity: { total: 0, cash: 0, bank: 0, mobileMoney: 0 },
+  agencies: [],
+  fundsInTransitAmount: 0,
 };
 
-const UNASSIGNED_AGENCY_ID = "__unassigned__";
-const AGENCY_DEPOSIT_REFERENCE_TYPES = new Set(["agency_deposit"]);
-const CONFIRMED_TRANSACTION_STATUSES = new Set(["confirmed", "received", "verified", "refunded"]);
-
-function todayRange() {
+function todayRange(): { start: Date; end: Date } {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
   const end = new Date();
@@ -56,45 +67,40 @@ function todayRange() {
   return { start, end };
 }
 
-function toMillis(value: unknown): number | null {
-  if (!value) return null;
-  if (value instanceof Date) return value.getTime();
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "object") {
-    const maybeTimestamp = value as { toDate?: () => Date; seconds?: number };
-    if (typeof maybeTimestamp.toDate === "function") return maybeTimestamp.toDate().getTime();
-    if (typeof maybeTimestamp.seconds === "number") return maybeTimestamp.seconds * 1000;
-  }
-  return null;
+function agencyName(data: Record<string, unknown>): string {
+  return String(data.nomAgence ?? data.nom ?? data.name ?? data.ville ?? "Agence");
 }
 
-function isInRange(value: unknown, startMs: number, endMs: number): boolean {
-  const ms = toMillis(value);
-  return ms != null && ms >= startMs && ms <= endMs;
+function transactionIsExpense(row: {
+  type?: string;
+  status?: string;
+  agencyId?: string | null;
+}): boolean {
+  return (
+    row.type === "expense"
+    && isConfirmedTransactionStatus(row.status as any)
+    && Boolean(row.agencyId)
+  );
 }
 
-function isConfirmedFinancialTransaction(status: unknown): boolean {
-  const s = String(status ?? "confirmed").toLowerCase();
-  if (s === "pending" || s === "failed" || s === "rejected") return false;
-  return CONFIRMED_TRANSACTION_STATUSES.has(s) || s === "";
+function transactionIsInTransit(row: {
+  type?: string;
+  status?: string;
+}): boolean {
+  const type = row.type === "transfer_to_bank" ? "transfer" : row.type;
+  return type === "transfer" && row.status === "pending";
 }
 
-function createEmptyRow(id: string, name: string): AgencyRow {
-  return {
-    id,
-    name,
-    ventesValidees: 0,
-    paiementsOnlineValides: 0,
-    totalEncaisse: 0,
-    depots: 0,
-    depenses: 0,
-    ecart: 0,
-    sessionsNonValidees: 0,
-  };
+function hasCashDifference(row: AgencySnapshot): boolean {
+  return row.latestCashDifference != null && Math.abs(row.latestCashDifference) > 0.009;
 }
 
-function isClosedNotValidated(status: unknown): boolean {
-  return String(status ?? "").toLowerCase() === "closed";
+function needsAttention(row: AgencySnapshot): boolean {
+  return (
+    row.cashBalance < 0
+    || hasCashDifference(row)
+    || row.pendingSessions > 0
+  );
 }
 
 const VueGlobale: React.FC = () => {
@@ -102,13 +108,12 @@ const VueGlobale: React.FC = () => {
   const money = useFormatCurrency();
   const companyId = user?.companyId ?? "";
 
+  const [snapshot, setSnapshot] = useState<DashboardSnapshot>(EMPTY_SNAPSHOT);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [rows, setRows] = useState<AgencyRow[]>([]);
-  const [totals, setTotals] = useState<ControlTotals>(EMPTY_TOTALS);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const loadFinancialControl = useCallback(async () => {
+  const loadDashboard = useCallback(async () => {
     if (!companyId) {
       setLoading(false);
       return;
@@ -121,391 +126,360 @@ const VueGlobale: React.FC = () => {
       const { start, end } = todayRange();
       const startTs = Timestamp.fromDate(start);
       const endTs = Timestamp.fromDate(end);
-      const startMs = start.getTime();
-      const endMs = end.getTime();
 
-      const agenciesSnap = await getDocs(collection(db, "companies", companyId, "agences"));
-      const agencyRows = new Map<string, AgencyRow>();
-
-      agenciesSnap.docs.forEach((agencyDoc) => {
-        const data = agencyDoc.data() as { nomAgence?: string; nom?: string; name?: string; ville?: string };
-        agencyRows.set(
-          agencyDoc.id,
-          createEmptyRow(agencyDoc.id, data.nomAgence ?? data.nom ?? data.name ?? data.ville ?? "Agence")
-        );
-      });
-
-      const ensureRow = (agencyId: string | null | undefined) => {
-        const id = agencyId && agencyId.trim() ? agencyId : UNASSIGNED_AGENCY_ID;
-        if (!agencyRows.has(id)) {
-          agencyRows.set(id, createEmptyRow(id, id === UNASSIGNED_AGENCY_ID ? "Flux siège" : "Agence inconnue"));
-        }
-        return agencyRows.get(id)!;
-      };
-
-      const [encaissementSnaps, paymentsSnap, transactionsSnap] = await Promise.all([
-        Promise.all(
-          agenciesSnap.docs.map((agencyDoc) =>
-            getDocs(
-              query(
-                collection(db, "companies", companyId, "agences", agencyDoc.id, "comptaEncaissements"),
-                where("createdAt", ">=", startTs),
-                where("createdAt", "<=", endTs),
-                limit(1000)
-              )
-            )
-          )
-        ),
-        getDocs(
-          query(
-            collection(db, "companies", companyId, "payments"),
-            where("validatedAt", ">=", startTs),
-            where("validatedAt", "<=", endTs),
-            limit(3000)
-          )
-        ),
+      const [agenciesSnap, liquidity, transactions, pendingTransactionsSnap] = await Promise.all([
+        getDocs(collection(db, "companies", companyId, "agences")),
+        getLiquidityFromAccounts(companyId),
+        listFinancialTransactionsByPeriod(companyId, startTs, endTs),
         getDocs(
           query(
             collection(db, "companies", companyId, "financialTransactions"),
-            where("performedAt", ">=", startTs),
-            where("performedAt", "<=", endTs),
-            limit(5000)
+            where("status", "==", "pending"),
+            limit(500)
           )
         ),
       ]);
 
-      encaissementSnaps.forEach((snap, index) => {
-        const agencyIdFromPath = agenciesSnap.docs[index]?.id ?? "";
-        snap.docs.forEach((docSnap) => {
-          const data = docSnap.data() as { type?: string; montant?: number; amount?: number; agencyId?: string };
-          if (String(data.type ?? "encaissement") !== "encaissement") return;
-          const amount = Math.max(0, Number(data.montant ?? data.amount ?? 0) || 0);
-          if (amount <= 0) return;
-          ensureRow(String(data.agencyId ?? agencyIdFromPath)).ventesValidees += amount;
-        });
-      });
+      const agencies = agenciesSnap.docs.map((agencyDoc) => ({
+        id: agencyDoc.id,
+        name: agencyName(agencyDoc.data() as Record<string, unknown>),
+      }));
+      const liquidityByAgency = await getAgencyLedgerLiquidityMap(
+        companyId,
+        agencies.map((agency) => agency.id)
+      );
 
-      paymentsSnap.docs.forEach((docSnap) => {
-        const data = docSnap.data() as {
-          amount?: number;
-          agencyId?: string;
-          channel?: string;
-          status?: string;
-          validatedAt?: unknown;
-        };
-        if (String(data.status ?? "") !== "validated") return;
-        if (String(data.channel ?? "").toLowerCase() !== "online") return;
-        if (!isInRange(data.validatedAt, startMs, endMs)) return;
-        const amount = Math.max(0, Number(data.amount ?? 0) || 0);
-        if (amount <= 0) return;
-        ensureRow(String(data.agencyId ?? "")).paiementsOnlineValides += amount;
-      });
-
-      transactionsSnap.docs.forEach((docSnap) => {
-        const data = docSnap.data() as {
-          amount?: number;
-          agencyId?: string | null;
-          type?: string;
-          referenceType?: string;
-          status?: string;
-        };
-        if (!isConfirmedFinancialTransaction(data.status)) return;
-        const amount = Math.abs(Number(data.amount ?? 0) || 0);
-        if (amount <= 0) return;
-
-        const row = ensureRow(data.agencyId ?? null);
-        const type = String(data.type ?? "").toLowerCase();
-        const referenceType = String(data.referenceType ?? "").toLowerCase();
-
-        if (type === "expense") {
-          row.depenses += amount;
-          return;
-        }
-        if (AGENCY_DEPOSIT_REFERENCE_TYPES.has(referenceType)) {
-          row.depots += amount;
+      const expenseByAgency = new Map<string, number>();
+      transactions.forEach((row) => {
+        if (transactionIsExpense(row)) {
+          const id = String(row.agencyId);
+          expenseByAgency.set(
+            id,
+            (expenseByAgency.get(id) ?? 0) + Math.abs(Number(row.amount) || 0)
+          );
         }
       });
+      const fundsInTransitAmount = pendingTransactionsSnap.docs.reduce((sum, transactionDoc) => {
+        const row = transactionDoc.data() as { type?: string; status?: string; amount?: number };
+        return transactionIsInTransit(row)
+          ? sum + Math.abs(Number(row.amount) || 0)
+          : sum;
+      }, 0);
 
-      await Promise.all(
-        agenciesSnap.docs.flatMap((agencyDoc) => {
-          const agencyId = agencyDoc.id;
-          const row = ensureRow(agencyId);
-          const shiftsRef = collection(db, "companies", companyId, "agences", agencyId, "shifts");
-          const courierRef = collection(db, "companies", companyId, "agences", agencyId, "courierSessions");
-          return [
-            getDocs(query(shiftsRef, limit(250))).then((snap) => {
-              snap.docs.forEach((d) => {
-                const data = d.data() as { status?: string; closedAt?: unknown; endAt?: unknown; updatedAt?: unknown };
-                const closedAt = data.closedAt ?? data.endAt ?? data.updatedAt;
-                if (isClosedNotValidated(data.status) && isInRange(closedAt, startMs, endMs)) {
-                  row.sessionsNonValidees += 1;
-                }
-              });
-            }),
-            getDocs(query(courierRef, limit(250))).then((snap) => {
-              snap.docs.forEach((d) => {
-                const data = d.data() as { status?: string; closedAt?: unknown; updatedAt?: unknown };
-                const closedAt = data.closedAt ?? data.updatedAt;
-                if (isClosedNotValidated(data.status) && isInRange(closedAt, startMs, endMs)) {
-                  row.sessionsNonValidees += 1;
-                }
-              });
-            }),
-          ];
+      const agencyRows = await Promise.all(
+        agencies.map(async (agency): Promise<AgencySnapshot> => {
+          const [receipts, audits, shiftsSnap, courierSnap] = await Promise.all([
+            sumComptaEncaissementsInRange(companyId, agency.id, start, new Date(end.getTime() + 1)),
+            listAgencyCashAudits(companyId, agency.id, 1),
+            getDocs(
+              query(
+                collection(db, "companies", companyId, "agences", agency.id, "shifts"),
+                where("status", "==", "closed"),
+                limit(100)
+              )
+            ),
+            getDocs(
+              query(
+                collection(db, "companies", companyId, "agences", agency.id, "courierSessions"),
+                where("status", "==", "CLOSED"),
+                limit(100)
+              )
+            ),
+          ]);
+
+          return {
+            id: agency.id,
+            name: agency.name,
+            cashBalance: liquidityByAgency[agency.id]?.cash ?? 0,
+            receiptsToday: receipts.total,
+            expensesToday: expenseByAgency.get(agency.id) ?? 0,
+            latestCashDifference: audits[0]?.difference ?? null,
+            pendingSessions: shiftsSnap.size + courierSnap.size,
+          };
         })
       );
 
-      const nextRows = Array.from(agencyRows.values())
-        .map((row) => {
-          const totalEncaisse = row.ventesValidees;
-          const ecart = totalEncaisse - row.depots - row.depenses;
-          return { ...row, totalEncaisse, ecart };
-        })
-        .sort((a, b) => {
-          const followUpScore = Number(Math.abs(b.ecart) > 0) - Number(Math.abs(a.ecart) > 0);
-          if (followUpScore !== 0) return followUpScore;
-          return Math.abs(b.ecart) - Math.abs(a.ecart) || b.totalEncaisse - a.totalEncaisse;
-        });
+      agencyRows.sort((left, right) => {
+        const priority = Number(needsAttention(right)) - Number(needsAttention(left));
+        return priority || Math.abs(right.latestCashDifference ?? 0) - Math.abs(left.latestCashDifference ?? 0);
+      });
 
-      const nextTotals = nextRows.reduce<ControlTotals>(
-        (sum, row) => ({
-          ventesValidees: sum.ventesValidees + row.ventesValidees,
-          paiementsOnlineValides: sum.paiementsOnlineValides + row.paiementsOnlineValides,
-          totalEncaisse: sum.totalEncaisse + row.totalEncaisse,
-          depots: sum.depots + row.depots,
-          depenses: sum.depenses + row.depenses,
-          ecart: sum.ecart + row.ecart,
-        }),
-        EMPTY_TOTALS
-      );
-
-      setRows(nextRows);
-      setTotals(nextTotals);
+      setSnapshot({
+        liquidity,
+        agencies: agencyRows,
+        fundsInTransitAmount,
+      });
       setLastUpdated(new Date());
-    } catch (e) {
-      console.error("[VueGlobale] Controle financier:", e);
-      setError(e instanceof Error ? e.message : "Impossible de charger le contrôle financier.");
+    } catch (loadError) {
+      console.error("[CompanyAccountantDashboard] load failed", loadError);
+      setSnapshot(EMPTY_SNAPSHOT);
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Impossible de charger la supervision financière."
+      );
     } finally {
       setLoading(false);
     }
   }, [companyId]);
 
   useEffect(() => {
-    void loadFinancialControl();
-  }, [loadFinancialControl]);
+    void loadDashboard();
+  }, [loadDashboard]);
 
-  const rowsWithRemainder = useMemo(() => rows.filter((row) => Math.abs(row.ecart) > 0.009), [rows]);
-  const missingDepositRows = useMemo(
-    () => rows.filter((row) => row.totalEncaisse > 0 && row.depots <= 0),
-    [rows]
+  const agenciesToWatch = useMemo(
+    () => snapshot.agencies.filter(needsAttention),
+    [snapshot.agencies]
   );
-  const rowsWithUnvalidatedSessions = useMemo(
-    () => rows.filter((row) => row.sessionsNonValidees > 0),
-    [rows]
+  const pendingRemittancesCount = useMemo(
+    () => snapshot.agencies.reduce((sum, agency) => sum + agency.pendingSessions, 0),
+    [snapshot.agencies]
   );
-  const followUpCount = rowsWithRemainder.length + missingDepositRows.length + rowsWithUnvalidatedSessions.length;
-  const hasRemainder = Math.abs(totals.ecart) > 0.009;
-
-  const fmtMoney = (value: number) => money(value);
+  const criticalAnomalies = useMemo(
+    () =>
+      snapshot.agencies
+        .flatMap((agency) => {
+          const anomalies: Array<{
+            id: string;
+            agency: string;
+            label: string;
+            value?: string;
+            severity: "danger" | "warning";
+          }> = [];
+          if (agency.cashBalance < 0) {
+            anomalies.push({
+              id: `${agency.id}-negative-cash`,
+              agency: agency.name,
+              label: "Solde caisse négatif",
+              value: money(agency.cashBalance),
+              severity: "danger",
+            });
+          }
+          if (hasCashDifference(agency)) {
+            anomalies.push({
+              id: `${agency.id}-cash-gap`,
+              agency: agency.name,
+              label: "Écart au dernier contrôle",
+              value: money(agency.latestCashDifference ?? 0),
+              severity: "danger",
+            });
+          }
+          if (agency.pendingSessions > 0) {
+            anomalies.push({
+              id: `${agency.id}-pending-sessions`,
+              agency: agency.name,
+              label: `${agency.pendingSessions} remise${agency.pendingSessions > 1 ? "s" : ""} à régulariser`,
+              severity: "warning",
+            });
+          }
+          return anomalies;
+        })
+        .slice(0, 5),
+    [money, snapshot.agencies]
+  );
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="text-center">
-          <div className="mx-auto mb-3 h-12 w-12 animate-spin rounded-full border-4 border-gray-200 border-t-amber-500" />
-          <div className="text-gray-600">Chargement du contrôle financier...</div>
+          <div className="mx-auto mb-3 h-11 w-11 animate-spin rounded-full border-4 border-slate-200 border-t-emerald-600" />
+          <div className="text-sm text-slate-600">Chargement de la supervision financière...</div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <SectionCard
-        title="Contrôle des caisses du jour"
-        icon={Wallet}
-        description="Lecture séparée des caisses agences et des paiements en ligne déjà sécurisés."
-        right={
-          <button
-            type="button"
-            onClick={() => void loadFinancialControl()}
-            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Actualiser
-          </button>
-        }
-      >
-        {error ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-            {error}
-          </div>
-        ) : null}
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div
-            className={`rounded-xl border-2 p-5 ${
-              hasRemainder ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50"
-            }`}
-          >
-            <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
-              {hasRemainder ? <Clock className="h-4 w-4 text-amber-600" /> : <CheckCircle2 className="h-4 w-4 text-emerald-600" />}
-              Reste à justifier
-            </div>
-            <div className={`mt-2 text-3xl font-bold ${hasRemainder ? "text-amber-700" : "text-emerald-700"}`}>
-              {fmtMoney(totals.ecart)}
-            </div>
-            <p className="mt-2 text-sm text-gray-600">
-              Montants de caisse agence non encore déposés ou utilisés.
-            </p>
-          </div>
-
-          <div
-            className={`rounded-xl border-2 p-5 ${
-              rowsWithRemainder.length > 0 ? "border-amber-300 bg-amber-50" : "border-gray-200 bg-white"
-            }`}
-          >
-            <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
-              <Building2 className="h-4 w-4 text-gray-500" />
-              Agences à suivre
-            </div>
-            <div className={`mt-2 text-3xl font-bold ${rowsWithRemainder.length > 0 ? "text-amber-700" : "text-gray-900"}`}>
-              {rowsWithRemainder.length}
-            </div>
-            <p className="mt-2 text-sm text-gray-600">
-              {rowsWithRemainder.length > 0 ? "Agences avec des montants à suivre." : "Aucun montant non déposé à suivre."}
-            </p>
-          </div>
+    <div className="space-y-5">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase text-emerald-700">Supervision réseau</p>
+          <h1 className="mt-1 text-2xl font-bold text-slate-950">Situation financière</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Patrimoine, liquidités et points de contrôle de la compagnie.
+          </p>
         </div>
-      </SectionCard>
+        <button
+          type="button"
+          onClick={() => void loadDashboard()}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Actualiser
+        </button>
+      </header>
 
-      <SectionCard
-        title="Contrôle des caisses par agence"
-        icon={Building2}
-        right={<span className="text-sm text-gray-600">{rows.length} agence{rows.length > 1 ? "s" : ""}</span>}
-        noPad
-      >
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="border-b border-gray-200 bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-left font-semibold text-gray-700">Agence</th>
-                <th className="px-4 py-3 text-right font-semibold text-gray-700">Encaissé agence</th>
-                <th className="px-4 py-3 text-right font-semibold text-gray-700">Dépôts</th>
-                <th className="px-4 py-3 text-right font-semibold text-gray-700">Dépenses</th>
-                <th className="px-4 py-3 text-right font-semibold text-gray-700">Reste à justifier</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {rows.map((row) => {
-                const rowHasRemainder = Math.abs(row.ecart) > 0.009;
-                return (
-                  <tr key={row.id} className={rowHasRemainder ? "bg-amber-50/70" : "bg-white hover:bg-gray-50"}>
-                    <td className="px-4 py-3 font-medium text-gray-900">{row.name}</td>
-                    <td className="px-4 py-3 text-right text-gray-900">{fmtMoney(row.totalEncaisse)}</td>
-                    <td className="px-4 py-3 text-right text-gray-900">{fmtMoney(row.depots)}</td>
-                    <td className="px-4 py-3 text-right text-gray-900">{fmtMoney(row.depenses)}</td>
-                    <td className={`px-4 py-3 text-right font-bold ${rowHasRemainder ? "text-amber-700" : "text-emerald-700"}`}>
-                      {fmtMoney(row.ecart)}
-                    </td>
+      {error ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {error}
+        </div>
+      ) : null}
+
+      <section aria-label="Patrimoine financier" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <MetricCard
+          label="Patrimoine financier"
+          value={money(snapshot.liquidity.total)}
+          icon={Wallet}
+          hint="Somme des comptes inclus dans la liquidité"
+        />
+        <MetricCard
+          label="Espèces agences"
+          value={money(snapshot.liquidity.cash)}
+          icon={Wallet}
+          hint="Soldes caisse du réseau"
+        />
+        <MetricCard
+          label="Banques compagnie"
+          value={money(snapshot.liquidity.bank)}
+          icon={Landmark}
+          hint="Comptes bancaires liquides"
+        />
+        <MetricCard
+          label="Mobile Money compagnie"
+          value={money(snapshot.liquidity.mobileMoney)}
+          icon={Smartphone}
+          hint="Portefeuilles liquides enregistrés dans le ledger"
+        />
+      </section>
+
+      <div className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
+        <SectionCard
+          title="Agences à surveiller"
+          icon={Building2}
+          description="Agences présentant un écart ou une remise non régularisée."
+          right={
+            <StatusBadge status={agenciesToWatch.length > 0 ? "warning" : "success"}>
+              {agenciesToWatch.length} agence{agenciesToWatch.length > 1 ? "s" : ""}
+            </StatusBadge>
+          }
+          noPad
+        >
+          {agenciesToWatch.length === 0 ? (
+            <p className="px-4 py-8 text-center text-sm text-slate-500">
+              Aucun point de vigilance détecté.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[680px] text-sm">
+                <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Agence</th>
+                    <th className="px-4 py-3 text-right">Caisse</th>
+                    <th className="px-4 py-3 text-right">Encaissements jour</th>
+                    <th className="px-4 py-3 text-right">Dépenses jour</th>
+                    <th className="px-4 py-3 text-right">Écart contrôle</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Contrôle des caisses" icon={Wallet}>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <div className="rounded-lg border border-gray-200 bg-white p-4">
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <Receipt className="h-4 w-4" />
-              Encaissement agence
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {agenciesToWatch.slice(0, 6).map((agency) => (
+                    <tr key={agency.id} className="bg-white">
+                      <td className="px-4 py-3">
+                        <p className="font-semibold text-slate-900">{agency.name}</p>
+                        <p className="text-xs text-slate-500">
+                          {agency.pendingSessions} remise{agency.pendingSessions > 1 ? "s" : ""} à régulariser
+                        </p>
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold">{money(agency.cashBalance)}</td>
+                      <td className="px-4 py-3 text-right">{money(agency.receiptsToday)}</td>
+                      <td className="px-4 py-3 text-right">{money(agency.expensesToday)}</td>
+                      <td className={`px-4 py-3 text-right font-semibold ${hasCashDifference(agency) ? "text-red-700" : "text-emerald-700"}`}>
+                        {agency.latestCashDifference == null ? "Non contrôlé" : money(agency.latestCashDifference)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <div className="mt-2 text-2xl font-bold text-gray-900">{fmtMoney(totals.totalEncaisse)}</div>
-            <div className="mt-2 text-xs text-gray-500">
-              Caisse agence validée uniquement, hors paiements en ligne.
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Anomalies critiques"
+          icon={AlertTriangle}
+          right={
+            <StatusBadge status={criticalAnomalies.length > 0 ? "danger" : "success"}>
+              {criticalAnomalies.length}
+            </StatusBadge>
+          }
+        >
+          {criticalAnomalies.length === 0 ? (
+            <p className="py-6 text-center text-sm text-slate-500">Aucune anomalie critique.</p>
+          ) : (
+            <ul className="space-y-2">
+              {criticalAnomalies.map((anomaly) => (
+                <li key={anomaly.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">{anomaly.agency}</p>
+                      <p className="mt-0.5 text-xs text-slate-600">{anomaly.label}</p>
+                    </div>
+                    {anomaly.value ? (
+                      <span className="text-sm font-bold text-red-700">{anomaly.value}</span>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <SectionCard title="Remises et mouvements à régulariser" icon={Landmark}>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-4">
+              <p className="text-xs font-semibold uppercase text-rose-700">Remises à régulariser</p>
+              <p className="mt-2 text-xl font-bold text-rose-950">{pendingRemittancesCount}</p>
+              <p className="mt-1 text-xs text-rose-800">Sessions billetterie ou courrier clôturées</p>
+            </div>
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+              <p className="text-xs font-semibold uppercase text-blue-700">Fonds en transit</p>
+              <p className="mt-2 text-xl font-bold text-blue-950">{money(snapshot.fundsInTransitAmount)}</p>
+              <p className="mt-1 text-xs text-blue-800">Transactions de transfert en statut pending</p>
             </div>
           </div>
-          <div className="rounded-lg border border-gray-200 bg-white p-4">
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <Landmark className="h-4 w-4" />
-              Dépôts en banque
-            </div>
-            <div className="mt-2 text-2xl font-bold text-gray-900">{fmtMoney(totals.depots)}</div>
-            <div className="mt-2 text-xs text-gray-500">Dépôts en banque enregistrés.</div>
-          </div>
-          <div className="rounded-lg border border-gray-200 bg-white p-4">
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <Wallet className="h-4 w-4" />
-              Dépenses enregistrées
-            </div>
-            <div className="mt-2 text-2xl font-bold text-gray-900">{fmtMoney(totals.depenses)}</div>
-            <div className="mt-2 text-xs text-gray-500">Dépenses enregistrées.</div>
-          </div>
-        </div>
-      </SectionCard>
+        </SectionCard>
 
-      <SectionCard title="Paiements en ligne (déjà sécurisés)" icon={Landmark}>
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-          <div className="text-sm text-emerald-800">
-            Paiements en ligne déjà sécurisés, hors circuit caisse agence.
+        <SectionCard title="Accès rapides" icon={ArrowRight}>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Link
+              to={`/compagnie/${companyId}/accounting/reservations-reseau`}
+              className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+            >
+              Réseau financier
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+            <Link
+              to={`/compagnie/${companyId}/accounting/treasury`}
+              className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+            >
+              Trésorerie
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+            <Link
+              to={`/compagnie/${companyId}/accounting/finances`}
+              className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+            >
+              Flux financiers
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+            <Link
+              to={`/compagnie/${companyId}/accounting/rapports`}
+              className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+            >
+              Rapports
+              <ArrowRight className="h-4 w-4" />
+            </Link>
           </div>
-          <div className="mt-2 text-2xl font-bold text-emerald-900">
-            {fmtMoney(totals.paiementsOnlineValides)}
-          </div>
-        </div>
-      </SectionCard>
+        </SectionCard>
+      </div>
 
-      <SectionCard
-        title="Points à vérifier"
-        icon={Clock}
-        right={
-          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${followUpCount > 0 ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-700"}`}>
-            {followUpCount} point{followUpCount > 1 ? "s" : ""}
-          </span>
-        }
-      >
-        {followUpCount === 0 ? (
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-            Aucun montant à justifier, aucun dépôt à suivre, aucune session fermée en attente de validation.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {rowsWithRemainder.map((row) => (
-              <div key={`remainder-${row.id}`} className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-                <div className="font-semibold text-amber-900">Montant non encore déposé : {row.name}</div>
-                <div className="mt-1 text-sm text-amber-800">
-                  Montant non encore déposé ou utilisé : {fmtMoney(row.ecart)}
-                </div>
-              </div>
-            ))}
-
-            {missingDepositRows.map((row) => (
-              <div key={`deposit-${row.id}`} className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-                <div className="font-semibold text-amber-900">Dépôt non encore enregistré : {row.name}</div>
-                <div className="mt-1 text-sm text-amber-800">
-                  {fmtMoney(row.totalEncaisse)} encaissé, aucun dépôt enregistré aujourd'hui.
-                </div>
-              </div>
-            ))}
-
-            {rowsWithUnvalidatedSessions.map((row) => (
-              <div key={`session-${row.id}`} className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                <div className="font-semibold text-gray-900">Sessions non validées : {row.name}</div>
-                <div className="mt-1 text-sm text-gray-700">
-                  {row.sessionsNonValidees} session{row.sessionsNonValidees > 1 ? "s" : ""} fermée{row.sessionsNonValidees > 1 ? "s" : ""} en attente de validation.
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="mt-4 text-xs text-gray-500">
-          Dernière mise à jour : {lastUpdated ? lastUpdated.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "--"}
-        </div>
-      </SectionCard>
+      <p className="text-right text-xs text-slate-500">
+        Dernière mise à jour :{" "}
+        {lastUpdated
+          ? lastUpdated.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
+          : "—"}
+      </p>
     </div>
   );
 };

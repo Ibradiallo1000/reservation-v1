@@ -643,6 +643,25 @@ export async function validateSessionByAccountant(params: {
     allowedRoles: ['agency_accountant', 'company_accountant', 'admin_compagnie', 'admin_platforme'],
     deniedMessage: 'Validation non autorisee pour cet utilisateur.',
   });
+  let diagnosticRole: unknown = null;
+  try {
+    const userSnap = await getDoc(doc(db, 'users', params.validatedBy.id));
+    diagnosticRole = userSnap.exists()
+      ? (userSnap.data() as Record<string, unknown>).role ?? null
+      : null;
+  } catch (error) {
+    console.warn('[validateSessionByAccountant][context-role-unavailable]', error);
+  }
+  const diagnosticContext = {
+    uid: params.validatedBy.id,
+    authUid: auth.currentUser?.uid ?? null,
+    role: diagnosticRole,
+    companyId: params.companyId,
+    agencyId: params.agencyId,
+    shiftId: params.shiftId,
+  };
+  console.info('[validateSessionByAccountant][context]', diagnosticContext);
+
   const base = `companies/${params.companyId}/agences/${params.agencyId}`;
   const shiftRef = doc(db, `${base}/${SHIFTS_COLLECTION}/${params.shiftId}`);
   const reportRef = doc(db, `${base}/${SHIFT_REPORTS_COLLECTION}/${params.shiftId}`);
@@ -893,6 +912,7 @@ export async function validateSessionByAccountant(params: {
     } catch (error) {
       console.error("[validateSessionByAccountant][failed]", {
         lastStep,
+        ...diagnosticContext,
         error,
       });
       throw error;

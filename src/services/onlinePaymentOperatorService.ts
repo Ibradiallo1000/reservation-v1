@@ -3,9 +3,10 @@
  * La page Digital Cash ne lit pas directement la collection `reservations` : toute la logique est ici.
  */
 
-import { arrayUnion, doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { arrayUnion, collection, doc, getDoc, getDocs, serverTimestamp, updateDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { createCashTransaction } from "@/modules/compagnie/cash/cashService";
+import { createFinancialTransaction } from "@/modules/compagnie/treasury/financialTransactions";
 import { LOCATION_TYPE } from "@/modules/compagnie/cash/cashTypes";
 import { decrementReservedSeats } from "@/modules/compagnie/tripInstances/tripInstanceService";
 import { commitOperatorValidatedOnlineReservation } from "@/modules/compagnie/tripInstances/onlineReservationOperatorCommit";
@@ -19,6 +20,40 @@ function paymentMethodFromProvider(provider: string | undefined | null): string 
   if (p === "cash") return "cash";
   if (p === "wave" || p === "orange" || p === "moov") return "mobile_money";
   return "transfer";
+}
+
+function normalizeProviderKey(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLocaleLowerCase("fr")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+async function resolveOnlinePaymentProvider(reservation: Record<string, unknown>): Promise<string | null> {
+  const selectedProvider = normalizeProviderKey(reservation.preuveVia);
+  if (!selectedProvider) return null;
+
+  try {
+    const methodsSnap = await getDocs(collection(db, "paymentMethods"));
+    for (const methodDoc of methodsSnap.docs) {
+      const data = methodDoc.data() as Record<string, unknown>;
+      const name = String(data.name ?? "").trim();
+      const providerCode = String(data.providerCode ?? "").trim();
+      if (
+        selectedProvider === normalizeProviderKey(name)
+        || selectedProvider === normalizeProviderKey(providerCode)
+      ) {
+        return name || providerCode || null;
+      }
+    }
+  } catch (error) {
+    console.warn("[onlinePaymentOperator] payment provider unresolved", error);
+  }
+
+  return null;
 }
 
 function isPermissionDenied(error: unknown): boolean {
@@ -165,14 +200,36 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
     : reservationData;
 
   const montant = Number(latestData?.montant ?? payment.amount ?? 0);
+  const paymentAmount = Number(payment.amount ?? 0);
   const paymentMethod = paymentMethodFromProvider(payment.provider);
 
-  if (montant <= 0) return;
+  if (montant <= 0 || paymentAmount <= 0) return;
 
-  let cashTxId: string | null = null;
+  const paymentProvider = await resolveOnlinePaymentProvider(latestData);
+
+  await createFinancialTransaction({
+    companyId,
+    type: "payment_received",
+    source: "online",
+    paymentChannel: "online",
+    paymentMethod: "mobile_money",
+    paymentProvider,
+    amount: paymentAmount,
+    currency: payment.currency ?? "XOF",
+    agencyId: payment.agencyId,
+    reservationId: payment.reservationId,
+    referenceType: "payment",
+    referenceId: payment.id,
+    metadata: {
+      validatedBy: uid,
+      accountingScope: "company_mobile_money",
+      provider: paymentProvider,
+      paymentProviderSource: paymentProvider ? "reservation.preuveVia" : null,
+    },
+  });
 
   try {
-    cashTxId = await createCashTransaction({
+    await createCashTransaction({
       companyId,
       reservationId: payment.reservationId,
       sessionId: null,
@@ -196,37 +253,6 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
     return;
   }
 
-  const finalizationPayload = {
-    cashTransactionId: cashTxId,
-    paymentStatus: "paid",
-    paymentMethod,
-    updatedAt: serverTimestamp(),
-  };
-
-  console.warn("[ONLINE_PAYMENT_VALIDATE_FINALIZATION_ATTEMPT]", {
-    path: reservationRef.path,
-    payload: finalizationPayload,
-    payloadKeys: Object.keys(finalizationPayload),
-    companyId,
-    agencyId: payment.agencyId,
-    reservationId: payment.reservationId,
-    uid,
-  });
-
-  
-  try {
-    await updateDoc(reservationRef, finalizationPayload);
-  } catch (err) {
-    console.warn("[ONLINE_PAYMENT_VALIDATE_FINALIZATION_SKIPPED_NON_BLOCKING]", {
-      path: reservationRef.path,
-      payloadKeys: Object.keys(finalizationPayload),
-      companyId,
-      reservationId: payment.reservationId,
-      cashTransactionId: cashTxId,
-      uid,
-      error: err,
-    });
-  }
 }
 
 /**

@@ -114,6 +114,10 @@ type ComptaUserCacheEntry = { name?: string; email?: string; code?: string; prof
 
 type CourierSessionDoc = CourierSession & { id: string };
 
+function isSafeRecordKey(key: string): boolean {
+  return key.length > 0 && key !== '__proto__' && key !== 'prototype' && key !== 'constructor';
+}
+
 type ShiftDoc = {
   id: string;
   userId: string;
@@ -1136,12 +1140,13 @@ const AgenceComptabilitePage: React.FC = () => {
     (async () => {
       if (!user?.companyId || !user?.agencyId) return;
       const rRef = collection(db, `companies/${user.companyId}/agences/${user.agencyId}/reservations`);
-      const map: Record<string, ShiftAgg> = {};
+      const map = Object.create(null) as Record<string, ShiftAgg>;
       const shiftsToAggregate = [...closedShifts, ...validatedAgencyShifts];
       
       console.log(`[AgenceCompta] ${shiftsToAggregate.length} poste(s) clôturé(s) ou validé(s) comptable à analyser`);
       
       for (const s of shiftsToAggregate) {
+        if (!isSafeRecordKey(s.id)) continue;
         const docs = await fetchReservationDocsForShiftSlot(user.companyId, user.agencyId, s.id);
         let reservations = 0, tickets = 0, amount = 0, cashExpected = 0, mmExpected = 0;
         
@@ -1183,9 +1188,12 @@ const AgenceComptabilitePage: React.FC = () => {
     if (pending.length === 0) return;
     setReceptionInputs((prev) => {
       let changed = false;
-      const next = { ...prev };
+      const next = Object.assign(
+        Object.create(null) as Record<string, { cashReceived: string }>,
+        prev
+      );
       for (const s of pending) {
-        if (Object.prototype.hasOwnProperty.call(next, s.id)) continue;
+        if (!isSafeRecordKey(s.id) || s.id in next) continue;
         const payBy = s.payBy || {};
         const agg = aggByShift[s.id];
         const expected = Number(

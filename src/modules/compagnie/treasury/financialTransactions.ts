@@ -237,6 +237,12 @@ function resolveLedgerPair(params: {
     }
     const pm = params.paymentMethod ?? null;
     if (pm === "mobile_money") {
+      if (isOnlineChannel(params.paymentChannel, params.source)) {
+        return {
+          debitId: companyClearingAccountDocId(),
+          creditId: "company_mobile_money",
+        };
+      }
       return {
         debitId: companyClearingAccountDocId(),
         creditId: agencyMobileMoneyAccountDocId(agencyId),
@@ -711,13 +717,35 @@ if (idemSnap.exists()) {
   const creditBal = Number((creditSnap.data() as { balance?: number } | undefined)?.balance ?? 0);
   const debitAfter = debitBal - ledgerAmount;
   const creditAfter = creditBal + ledgerAmount;
+  const newRef = doc(financialTransactionsRef(companyId));
+  const kpiChannel = isGuichetChannel(params.paymentChannel, params.source) ? "guichet" : "online";
+  const paymentMethod = resolveFinancialPaymentMethod({
+    type: params.type,
+    paymentMethod: params.paymentMethod ?? null,
+    paymentProvider: params.paymentProvider ?? null,
+    paymentChannel: params.paymentChannel ?? kpiChannel,
+    source: params.source,
+    metadata: params.metadata ?? null,
+  });
+  const onlineMobilePayment =
+    txTypeNorm === "payment_received"
+    && paymentMethod === "mobile_money"
+    && isOnlineChannel(params.paymentChannel, params.source)
+    && params.referenceType === "payment";
+  const onlinePaymentAccountMarker = onlineMobilePayment
+    ? { lastOnlinePaymentTransactionId: newRef.id }
+    : {};
 
   if (!allowsNegativeBalance(debitId) && debitAfter < -0.0001) {
     throw new Error(`[ledger] Solde insuffisant sur le compte débit ${debitId} (${debitBal} < ${ledgerAmount})`);
   }
 
   if (debitSnap.exists()) {
-    tx.update(debitRef, { balance: increment(-ledgerAmount), updatedAt: serverTimestamp() });
+    tx.update(debitRef, {
+      balance: increment(-ledgerAmount),
+      updatedAt: serverTimestamp(),
+      ...onlinePaymentAccountMarker,
+    });
   } else {
     tx.set(debitRef, {
       ...initialLedgerAccountPayload({
@@ -730,11 +758,16 @@ if (idemSnap.exists()) {
         includeInLiquidity: s0.includeInLiquidity,
       }),
       balance: debitAfter,
+      ...onlinePaymentAccountMarker,
     });
   }
 
   if (creditSnap.exists()) {
-    tx.update(creditRef, { balance: increment(ledgerAmount), updatedAt: serverTimestamp() });
+    tx.update(creditRef, {
+      balance: increment(ledgerAmount),
+      updatedAt: serverTimestamp(),
+      ...onlinePaymentAccountMarker,
+    });
   } else {
     tx.set(creditRef, {
       ...initialLedgerAccountPayload({
@@ -747,19 +780,10 @@ if (idemSnap.exists()) {
         includeInLiquidity: s1.includeInLiquidity,
       }),
       balance: creditAfter,
+      ...onlinePaymentAccountMarker,
     });
   }
 
-  const newRef = doc(financialTransactionsRef(companyId));
-  const kpiChannel = isGuichetChannel(params.paymentChannel, params.source) ? "guichet" : "online";
-  const paymentMethod = resolveFinancialPaymentMethod({
-    type: params.type,
-    paymentMethod: params.paymentMethod ?? null,
-    paymentProvider: params.paymentProvider ?? null,
-    paymentChannel: params.paymentChannel ?? kpiChannel,
-    source: params.source,
-    metadata: params.metadata ?? null,
-  });
   const paymentProviderStored =
     params.paymentProvider ?? (typeof params.metadata?.provider === "string" ? params.metadata.provider : null);
   const storedAmount = txTypeNorm === "refund" ? -ledgerAmount : ledgerAmount;

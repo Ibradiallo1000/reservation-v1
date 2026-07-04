@@ -116,13 +116,11 @@ export default function AgencyTreasuryPage({ embedded = false }: AgencyTreasuryP
       const [acc, primary] = await Promise.all([
         embedded ? Promise.resolve([]) : listAccounts(companyId, { agencyId }),
         getAgencyTreasuryLedgerCashDisplay(companyId, agencyId).catch((err) => {
-          console.info("[AgencyTreasury] Compte caisse agence indisponible, solde affiché à 0.", {
-            path: `companies/${companyId}/accounts/agency_${agencyId}_cash`,
-            role: user?.role ?? null,
-            companyId,
-            agencyId,
-            error: err,
-          });
+          const code =
+            err && typeof err === "object" && "code" in err
+              ? String((err as { code?: unknown }).code ?? "unknown")
+              : "unknown";
+          console.warn("[AgencyTreasury] Lecture caisse indisponible.", { code });
           return { ledgerCash: 0, mirrorCash: null, currency };
         }),
       ]);
