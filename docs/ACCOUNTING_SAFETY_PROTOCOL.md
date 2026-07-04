@@ -78,7 +78,41 @@ Avant toute modification de firestore.rules :
 6. Ne modifier que la règle ciblée.
 7. Ne jamais ouvrir plus de droits que nécessaire.
 
+### Limite d’évaluation des Rules
+
+Une règle peut être correcte sur le plan métier et néanmoins échouer à l’exécution si elle dépasse la limite d’évaluation de Firestore Rules.
+
+Le symptôme côté application peut être un `permission-denied` alors que le rôle, la compagnie, l’agence et l’autorisation métier sont corrects. Le Rules Emulator peut alors afficher :
+
+`maximum of 1000 expressions reached`
+
+Dans ce cas :
+
+- ne pas élargir les droits ;
+- ne pas ajouter une permission globale pour contourner le refus ;
+- simplifier les branches évaluées ;
+- ajouter des gardes rapides et déterministes par `accountId` ;
+- éviter les gros `OR` et les helpers coûteux sans rapport avec le document demandé ;
+- tester le scénario complet dans le Rules Emulator, y compris les cas autorisés et refusés.
+
+### Diagnostic avant correction
+
+Avant toute correction d’un refus Firestore :
+
+- identifier le document exact refusé et son path complet ;
+- identifier l’opération exacte : `get`, `list`, `create`, `update` ou `delete` ;
+- si `lastStep = null`, suspecter en priorité une lecture initiale refusée ;
+- comparer systématiquement la console applicative, le résultat du Rules Emulator et les documents réellement présents dans Firestore ;
+- ne jamais traiter uniquement le symptôme affiché dans l’UI.
+
 ## 7. Protocole avant modification
+
+### Consultation obligatoire
+
+Avant toute modification comptable, lire obligatoirement et intégralement :
+
+- `docs/ACCOUNTING_SAFETY_PROTOCOL.md`
+- `docs/KNOWN_BUGS_AND_FIXES.md`
 
 Avant de modifier un fichier critique, répondre d’abord :
 
@@ -106,6 +140,13 @@ Après toute modification comptable :
 - vérifier ledger créé
 - vérifier aucun permission-denied
 - vérifier affichage dans tableau de bord, caisse, historique
+- valider la comptabilité agence
+- vérifier le `get` de `agency_cash`
+- vérifier la validation d’un poste billetterie
+- vérifier la validation d’un poste courrier
+- vérifier le versement agence vers banque
+- vérifier le paiement online Mobile Money
+- vérifier les vues Chef Comptable : Dashboard, Trésorerie, Flux et Rapports
 
 ## 9. Alignements futurs
 
@@ -120,6 +161,20 @@ Ces espaces doivent prioritairement faire de la lecture, de l’agrégation et d
 
 Ils ne doivent pas modifier les écritures comptables stabilisées sauf besoin métier explicite et validé.
 
+### Comptabilité Chef Comptable
+
+Dashboard, Trésorerie, Flux et Rapports sont exclusivement des vues de lecture, d’agrégation et d’affichage.
+
+Ces vues ne doivent jamais créer, compléter, réparer ou rejouer des écritures financières.
+
+Si une somme manque dans Rapports, vérifier d’abord :
+
+- les documents `financialTransactions` attendus ;
+- le document ou la clé d’idempotence du workflow source ;
+- les champs temporels utilisés par la période affichée.
+
+Ne jamais reconstruire la somme manquante depuis les réservations ou les paiements dans une vue Chef Comptable.
+
 ## 10. Règle de décision
 
 Si une modification peut casser la validation comptable, ne pas la faire directement.
@@ -131,6 +186,33 @@ Faire d’abord :
 4. validation humaine,
 5. correction minimale,
 6. test complet.
+
+### Régularisation historique
+
+Ne jamais régulariser automatiquement la comptabilité depuis les réservations et ne jamais lancer de backfill sans audit préalable.
+
+Pour un paiement validé mais non comptabilisé, vérifier obligatoirement :
+
+- la réservation existe et son statut est `confirme` ;
+- le paiement existe et son statut est `validated` ;
+- la `financialTransaction` attendue est absente ;
+- le document ou la clé d’idempotence attendu est absent ;
+- le compte cible existe, ou sa création est explicitement contrôlée par la procédure.
+
+La régularisation doit :
+
+- écrire uniquement les mouvements réellement manquants ;
+- utiliser une idempotence obligatoire et déterministe ;
+- préserver les mouvements et soldes déjà présents ;
+- s’arrêter immédiatement dès qu’une incohérence apparaît entre réservation, paiement, transaction, idempotence ou comptes.
+
+### Séparation du flux futur et de la correction historique
+
+Une correction du flux futur ne doit jamais modifier les anciennes données.
+
+Les données historiques doivent être traitées par une procédure séparée, auditée, explicitement validée et testée sur un périmètre contrôlé.
+
+Ne jamais rejouer une validation métier déjà confirmée. Une régularisation historique ne doit créer que l’écriture financière manquante après vérification de tous les invariants.
 
 ## 11. Phase 1 — Dépenses directes agence sur Firebase Spark
 
