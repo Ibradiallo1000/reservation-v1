@@ -48,3 +48,79 @@
     "statusCode": 503
   }
 }
+[debug] [2026-07-04T23:40:29.649Z] ----------------------------------------------------------------------
+[debug] [2026-07-04T23:40:29.658Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\DELL\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js login --reauth
+[debug] [2026-07-04T23:40:29.660Z] CLI Version:   14.25.0
+[debug] [2026-07-04T23:40:29.660Z] Platform:      win32
+[debug] [2026-07-04T23:40:29.660Z] Node Version:  v22.15.0
+[debug] [2026-07-04T23:40:29.661Z] Time:          Sat Jul 04 2026 23:40:29 GMT+0000 (temps universel coordonné)
+[debug] [2026-07-04T23:40:29.661Z] ----------------------------------------------------------------------
+[debug] 
+[info] 
+[info] Visit this URL on this device to log in:
+[info] https://accounts.google.com/o/oauth2/auth?client_id=563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com&scope=email%20openid%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloudplatformprojects.readonly%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Ffirebase%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&response_type=code&state=671466318&redirect_uri=http%3A%2F%2Flocalhost%3A9005&login_hint=monbillet1000%40gmail.com
+[info] 
+[info] Waiting for authentication...
+[debug] [2026-07-04T23:40:37.733Z] >>> [apiv2][query] POST https://accounts.google.com/o/oauth2/token [none]
+[debug] [2026-07-04T23:40:37.739Z] >>> [apiv2][body] POST https://accounts.google.com/o/oauth2/token [omitted]
+[debug] [2026-07-04T23:40:38.418Z] *** [apiv2] error from fetch(https://accounts.google.com/o/oauth2/token, {"headers":{},"method":"POST","body":{"_overheadLength":543,"_valueLength":208,"_valuesToMeasure":[],"writable":false,"readable":true,"dataSize":0,"maxDataSize":2097152,"pauseStreams":true,"_released":true,"_streams":[],"_currentStream":null,"_insideLoop":false,"_pendingNext":false,"_boundary":"--------------------------0f9ab4e6a6c0819d478a349f","_events":{},"_eventsCount":1}}): FetchError: request to https://accounts.google.com/o/oauth2/token failed, reason: unable to verify the first certificate
+[debug] [2026-07-04T23:40:38.420Z] Token Fetch Error: FirebaseError: Failed to make request to https://accounts.google.com/o/oauth2/token
+    at RetryOperation._fn (C:\Users\DELL\AppData\Roaming\npm\node_modules\firebase-tools\lib\apiv2.js:271:31)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[error] Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+[debug] [2026-07-04T23:40:38.442Z] >>> [apiv2][query] POST https://auth.firebase.tools/attest [none]
+[debug] [2026-07-04T23:40:38.443Z] >>> [apiv2][body] POST https://auth.firebase.tools/attest {"session_id":"603c4b8e-62fa-4767-a16f-a22add759503"}
+[debug] [2026-07-04T23:40:39.233Z] *** [apiv2] error from fetch(https://auth.firebase.tools/attest, {"headers":{},"method":"POST","body":"{\"session_id\":\"603c4b8e-62fa-4767-a16f-a22add759503\"}"}): FetchError: request to https://auth.firebase.tools/attest failed, reason: unable to verify the first certificate
+[debug] [2026-07-04T23:40:39.239Z] FetchError: request to https://auth.firebase.tools/attest failed, reason: unable to verify the first certificate
+    at ClientRequest.<anonymous> (C:\Users\DELL\AppData\Roaming\npm\node_modules\firebase-tools\node_modules\node-fetch\lib\index.js:1501:11)
+    at ClientRequest.emit (node:events:518:28)
+    at ClientRequest.emit (node:domain:489:12)
+    at emitErrorEvent (node:_http_client:104:11)
+    at TLSSocket.socketErrorListener (node:_http_client:518:5)
+    at TLSSocket.emit (node:events:518:28)
+    at TLSSocket.emit (node:domain:489:12)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+[error] 
+[error] Error: Failed to make request to https://auth.firebase.tools/attest
+[debug] [2026-07-04T23:40:59.213Z] ----------------------------------------------------------------------
+[debug] [2026-07-04T23:40:59.218Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\DELL\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js login --reauth
+[debug] [2026-07-04T23:40:59.218Z] CLI Version:   14.25.0
+[debug] [2026-07-04T23:40:59.219Z] Platform:      win32
+[debug] [2026-07-04T23:40:59.219Z] Node Version:  v22.15.0
+[debug] [2026-07-04T23:40:59.219Z] Time:          Sat Jul 04 2026 23:40:59 GMT+0000 (temps universel coordonné)
+[debug] [2026-07-04T23:40:59.220Z] ----------------------------------------------------------------------
+[debug] 
+[info] 
+[info] Visit this URL on this device to log in:
+[info] https://accounts.google.com/o/oauth2/auth?client_id=563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com&scope=email%20openid%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloudplatformprojects.readonly%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Ffirebase%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&response_type=code&state=787372650&redirect_uri=http%3A%2F%2Flocalhost%3A9005&login_hint=monbillet1000%40gmail.com
+[info] 
+[info] Waiting for authentication...
+[debug] [2026-07-04T23:41:04.651Z] >>> [apiv2][query] POST https://accounts.google.com/o/oauth2/token [none]
+[debug] [2026-07-04T23:41:04.652Z] >>> [apiv2][body] POST https://accounts.google.com/o/oauth2/token [omitted]
+[debug] [2026-07-04T23:41:05.179Z] *** [apiv2] error from fetch(https://accounts.google.com/o/oauth2/token, {"headers":{},"method":"POST","body":{"_overheadLength":543,"_valueLength":208,"_valuesToMeasure":[],"writable":false,"readable":true,"dataSize":0,"maxDataSize":2097152,"pauseStreams":true,"_released":true,"_streams":[],"_currentStream":null,"_insideLoop":false,"_pendingNext":false,"_boundary":"--------------------------7e380a78a850f5ae4f0787f2","_events":{},"_eventsCount":1}}): FetchError: request to https://accounts.google.com/o/oauth2/token failed, reason: unable to verify the first certificate
+[debug] [2026-07-04T23:41:05.183Z] Token Fetch Error: FirebaseError: Failed to make request to https://accounts.google.com/o/oauth2/token
+    at RetryOperation._fn (C:\Users\DELL\AppData\Roaming\npm\node_modules\firebase-tools\lib\apiv2.js:271:31)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[error] Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+[debug] [2026-07-04T23:41:05.233Z] >>> [apiv2][query] POST https://auth.firebase.tools/attest [none]
+[debug] [2026-07-04T23:41:05.248Z] >>> [apiv2][body] POST https://auth.firebase.tools/attest {"session_id":"64bda6e8-a51b-4569-9cee-5fa37be731aa"}
+[debug] [2026-07-04T23:41:05.905Z] *** [apiv2] error from fetch(https://auth.firebase.tools/attest, {"headers":{},"method":"POST","body":"{\"session_id\":\"64bda6e8-a51b-4569-9cee-5fa37be731aa\"}"}): FetchError: request to https://auth.firebase.tools/attest failed, reason: unable to verify the first certificate
+[debug] [2026-07-04T23:41:05.911Z] FetchError: request to https://auth.firebase.tools/attest failed, reason: unable to verify the first certificate
+    at ClientRequest.<anonymous> (C:\Users\DELL\AppData\Roaming\npm\node_modules\firebase-tools\node_modules\node-fetch\lib\index.js:1501:11)
+    at ClientRequest.emit (node:events:518:28)
+    at ClientRequest.emit (node:domain:489:12)
+    at emitErrorEvent (node:_http_client:104:11)
+    at TLSSocket.socketErrorListener (node:_http_client:518:5)
+    at TLSSocket.emit (node:events:518:28)
+    at TLSSocket.emit (node:domain:489:12)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+[error] 
+[error] Error: Failed to make request to https://auth.firebase.tools/attest

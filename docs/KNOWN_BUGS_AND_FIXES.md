@@ -313,6 +313,108 @@ Ne plus refaire
 
 --------------------------------------------------
 
+BUG-008
+
+Date
+
+2026-07-04
+
+Module concerné
+
+Paiements online Mobile Money — cohérence entre agence, trésorerie et rapports
+
+Symptôme
+
+Les paiements online étaient validés, mais les vues affichaient trois montants différents :
+
+- Chef d'agence : 19 000 FCFA ;
+- Trésorerie Chef Comptable : 12 000 FCFA ;
+- Flux financiers et Rapports : 5 000 FCFA.
+
+Après régularisation comptable, la ventilation analytique affichait encore :
+
+- Sarali : 14 000 FCFA ;
+- Mobile Money non identifié : 5 000 FCFA.
+
+Console
+
+Les validations historiques ne produisaient pas nécessairement une erreur métier visible. Les documents attendus étaient absents dans :
+
+- `financialTransactions` ;
+- `financialTransactionIdempotency`.
+
+Cause exacte
+
+Deux paiements online validés de 7 000 FCFA n'avaient créé ni leur `financialTransaction` ni leur document d'idempotence pendant la période où les Firestore Rules dépassaient leur limite d'évaluation.
+
+Une transaction historique de 5 000 FCFA était comptabilisée, mais conservait un fournisseur technique incorrect et aucun marqueur de provenance fiable :
+
+- `paymentProvider = wave` ;
+- `metadata.paymentProviderSource` absent.
+
+Pourquoi ce n'était PAS :
+
+- un mauvais calcul de la Trésorerie ;
+- un solde à reconstruire depuis les réservations ;
+- une raison pour modifier directement `accounts/company_mobile_money` ;
+- une raison pour additionner les réservations et les `financialTransactions` ;
+- une seule anomalie : l'absence d'écritures comptables et l'étiquette fournisseur incorrecte étaient deux problèmes distincts.
+
+Correction appliquée
+
+Une régularisation contrôlée et idempotente a créé uniquement les deux écritures comptables manquantes :
+
+- débit de `company_clearing` ;
+- crédit de `company_mobile_money` ;
+- création des deux `financialTransactions` ;
+- création des deux documents d'idempotence.
+
+Une correction analytique séparée a ensuite mis à jour uniquement les champs fournisseur de la transaction historique :
+
+- `paymentProvider` ;
+- `metadata.provider` ;
+- `metadata.paymentProvider` ;
+- `metadata.paymentProviderSource`.
+
+Aucun montant, compte, solde, statut, type ou champ temporel n'a été modifié pendant cette correction analytique.
+
+Fichiers modifiés
+
+- `scripts/regularizeHistoricalOnlinePayments.cjs`
+- `docs/KNOWN_BUGS_AND_FIXES.md`
+
+Documents régularisés
+
+- paiements `fy2oEA0EguCBOJbzPcad` et `n1BRa9XUJCX7dzYopuW7` ;
+- transaction analytique historique `financialTransactions/Hvzsb8kzJ5c5E4l5D0UP`.
+
+Impact métier
+
+Les vues sont redevenues cohérentes :
+
+- Flux financiers et Rapports : 19 000 FCFA ;
+- ventilation Sarali : 19 000 FCFA ;
+- Mobile Money non identifié : 0 FCFA ;
+- solde `company_mobile_money` : 26 000 FCFA.
+
+Points de vigilance
+
+- comparer systématiquement `reservations`, `payments`, `financialTransactions`, `financialTransactionIdempotency` et `accounts/company_mobile_money` ;
+- vérifier l'absence de transaction sous un identifiant auto-généré, pas seulement sous la clé d'idempotence ;
+- exécuter un dry-run avant toute régularisation historique ;
+- contrôler les soldes avant et après sans les recalculer depuis les réservations ;
+- séparer la réparation d'une écriture comptable manquante de la correction d'une métadonnée analytique.
+
+Ne plus refaire
+
+- modifier directement un solde pour corriger un problème d'affichage ;
+- lancer un backfill global pour quelques paiements identifiés ;
+- confondre `payment.provider` avec `reservation.preuveVia` ;
+- corriger simultanément une anomalie comptable et une anomalie analytique sans contrôles séparés ;
+- exécuter une régularisation sans idempotence ni dry-run préalable.
+
+--------------------------------------------------
+
 # Rapports Chef Comptable
 
 --------------------------------------------------
