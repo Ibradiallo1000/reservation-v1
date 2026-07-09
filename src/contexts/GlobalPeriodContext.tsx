@@ -37,11 +37,12 @@ function dateKeyFromDate(d: Date): string {
 }
 
 function computeRangeForPreset(preset: GlobalPeriodPreset): { startDate: string; endDate: string } {
+  const today = getTodayBamako();
   if (preset === "day") {
-    const today = getTodayBamako();
     return { startDate: today, endDate: today };
   }
-  const range = getDateRangeForPeriod(preset, new Date());
+  const bamakoRef = new Date(`${today}T12:00:00`);
+  const range = getDateRangeForPeriod(preset, bamakoRef);
   return { startDate: dateKeyFromDate(range.start), endDate: dateKeyFromDate(range.end) };
 }
 

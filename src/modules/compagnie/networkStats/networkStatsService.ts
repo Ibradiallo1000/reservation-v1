@@ -47,10 +47,15 @@ import {
   aggregateDailyStatsDocs,
   buildActivityChartBucketsFromDailyStats,
   buildActivityChartBucketsFromLogs,
+  debugCommercialActivityPipeline,
   getUnifiedCommercialActivity,
   queryDailyStatsInRange,
+  shouldPreferActivityLogsOverDailyStats,
   shouldUseDailyStatsForActivity,
+  summarizeActivityLogDocs,
+  summarizeCommercialActivity,
 } from "@/modules/compagnie/networkStats/activityCore";
+import { getInclusiveRangeDays } from "@/shared/date/periodUtils";
 
 /** Billets vendus = uniquement statut confirme ou paye (après normalisation). */
 export function isSoldReservation(statut: string | undefined): boolean {
@@ -463,10 +468,44 @@ export async function getNetworkStatsChartData(
   if (shouldUseDailyStatsForActivity(periodStart, periodEnd)) {
     const docs = await queryDailyStatsInRange(companyId, dateFrom, dateTo);
     const map = buildActivityChartBucketsFromDailyStats(docs, dateFrom, dateTo, TZ_BAMAKO);
-    return Array.from(map.entries())
+    const dailyChart = Array.from(map.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, v]) => ({ date, revenue: v.revenue, reservations: v.reservations }));
+    if (getInclusiveRangeDays(periodStart, periodEnd) <= 31) {
+      try {
+        const logDocs = await queryActivityLogsInRange(companyId, periodStart, periodEnd);
+        const logsActivity = aggregateActivityLogDocs(logDocs);
+        const dailyActivity = aggregateDailyStatsDocs(docs);
+        if (shouldPreferActivityLogsOverDailyStats(dailyActivity, logsActivity)) {
+          debugCommercialActivityPipeline("getNetworkStatsChartData", {
+            companyId,
+            period: { dateFrom, dateTo },
+            sourceRetenue: "activityLogs",
+            dailyStatsDocs: docs.length,
+            dailyStats: summarizeCommercialActivity(dailyActivity),
+            activityLogs: summarizeActivityLogDocs(logDocs),
+          });
+          return buildNetworkChartDataFromActivityLogDocs(logDocs, dateFrom, dateTo, TZ_BAMAKO);
+        }
+      } catch {
+        return dailyChart;
+      }
+    }
+    debugCommercialActivityPipeline("getNetworkStatsChartData", {
+      companyId,
+      period: { dateFrom, dateTo },
+      sourceRetenue: "dailyStats",
+      dailyStatsDocs: docs.length,
+      chartPoints: dailyChart.length,
+    });
+    return dailyChart;
   }
   const docs = await queryActivityLogsInRange(companyId, periodStart, periodEnd);
+  debugCommercialActivityPipeline("getNetworkStatsChartData", {
+    companyId,
+    period: { dateFrom, dateTo },
+    sourceRetenue: "activityLogs",
+    activityLogs: summarizeActivityLogDocs(docs),
+  });
   return buildNetworkChartDataFromActivityLogDocs(docs, dateFrom, dateTo, TZ_BAMAKO);
 }

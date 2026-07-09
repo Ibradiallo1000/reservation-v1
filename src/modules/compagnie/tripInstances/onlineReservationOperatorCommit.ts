@@ -9,6 +9,7 @@ import {
 import { db } from "@/firebaseConfig";
 import {
   buildStatutTransitionPayload,
+  isValidOnlineTicketActivityLog,
   recordOnlineReservationCommercialActivityInTransaction,
 } from "@/modules/agence/services/reservationStatutService";
 import {
@@ -31,8 +32,6 @@ type OperatorCommitParams = {
 
 const PENDING_ONLINE_STATUSES = new Set(["preuve_recue", "verification"]);
 
-// Debug temporaire : ne pas conserver comme solution finale.
-const SKIP_ACTIVITY_LOG_DEBUG = true;
 const SKIP_TRIP_INSTANCE_BOOKING_DEBUG = false;
 
 function hasOwnField(data: Record<string, unknown>, key: string): boolean {
@@ -91,11 +90,10 @@ export async function commitOperatorValidatedOnlineReservation({
       throw new Error("Le paiement doit être validé avant la confirmation de la réservation.");
     }
 
-    if (status === "confirme" && statut === "confirme" && reservation.seatsCommittedAt != null) {
-      return;
-    }
+    const alreadyConfirmedWithSeatsCommitted =
+      status === "confirme" && statut === "confirme" && reservation.seatsCommittedAt != null;
 
-    if (!PENDING_ONLINE_STATUSES.has(status) && !PENDING_ONLINE_STATUSES.has(statut)) {
+    if (!alreadyConfirmedWithSeatsCommitted && !PENDING_ONLINE_STATUSES.has(status) && !PENDING_ONLINE_STATUSES.has(statut)) {
       throw new Error(`Réservation non confirmable : status=${status}, statut=${statut}.`);
     }
 
@@ -104,9 +102,7 @@ export async function commitOperatorValidatedOnlineReservation({
 
     const agencySnap = await tx.get(doc(db, "companies", companyId, "agences", agencyId));
 
-    const onlineLogSnap = SKIP_ACTIVITY_LOG_DEBUG
-      ? null
-      : await tx.get(activityLogRef(companyId, activityLogDocIdOnline(reservationRef.id)));
+    const onlineLogSnap = await tx.get(activityLogRef(companyId, activityLogDocIdOnline(reservationRef.id)));
 
     if (seatHoldOnly && !seatsAlreadyCommitted) {
       const tripInstanceId = String(reservation.tripInstanceId ?? "").trim();
@@ -196,21 +192,26 @@ export async function commitOperatorValidatedOnlineReservation({
       { userId: uid, userRole }
     );
 
-    const commercialActivityPatch =
-      SKIP_ACTIVITY_LOG_DEBUG || !onlineLogSnap
-        ? {}
-        : recordOnlineReservationCommercialActivityInTransaction({
-            tx,
-            reservationRef,
-            data: reservation,
-            agencyTimezone: dailyStatsTimezoneFromAgencyData(
-              agencySnap.data() as { timezone?: string | null } | undefined
-            ),
-            activityLogExists: onlineLogSnap.exists(),
-          });
+    const commercialActivityPatch = recordOnlineReservationCommercialActivityInTransaction({
+      tx,
+      reservationRef,
+      data: reservation,
+      agencyTimezone: dailyStatsTimezoneFromAgencyData(
+        agencySnap.data() as { timezone?: string | null } | undefined
+      ),
+      activityLogAlreadyValid: isValidOnlineTicketActivityLog(
+        onlineLogSnap.data() as Record<string, unknown> | undefined
+      ),
+    });
 
-    if (SKIP_ACTIVITY_LOG_DEBUG) {
-      console.warn("[DEBUG_SKIP_ACTIVITY_LOG] activity log skipped for isolation test");
+    if (alreadyConfirmedWithSeatsCommitted) {
+      if (Object.keys(commercialActivityPatch).length > 0) {
+        tx.update(reservationRef, {
+          ...commercialActivityPatch,
+          updatedAt: serverTimestamp(),
+        });
+      }
+      return;
     }
 
     const updatePayload = {

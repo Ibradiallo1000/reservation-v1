@@ -65,14 +65,22 @@ export function buildStatutTransitionPayload(
   };
 }
 
+export function isValidOnlineTicketActivityLog(data: Record<string, unknown> | undefined | null): boolean {
+  if (!data) return false;
+  const type = String(data.type ?? "").trim().toLowerCase();
+  const source = String(data.source ?? "").trim().toLowerCase();
+  const status = String(data.status ?? "").trim().toLowerCase();
+  return source === "online" && (type === "online" || type === "ticket") && status === "confirmed";
+}
+
 export function recordOnlineReservationCommercialActivityInTransaction(params: {
   tx: Transaction;
   reservationRef: DocumentReference;
   data: Record<string, unknown>;
   agencyTimezone: string;
-  activityLogExists: boolean;
+  activityLogAlreadyValid: boolean;
 }): { ticketRevenueCountedInDailyStats?: true } {
-  const { tx, reservationRef, data, agencyTimezone, activityLogExists } = params;
+  const { tx, reservationRef, data, agencyTimezone, activityLogAlreadyValid } = params;
   const companyId = String(data.companyId ?? "").trim();
   const agencyId = String(data.agencyId ?? "").trim();
   const canal = String(data.canal ?? "").trim().toLowerCase();
@@ -84,7 +92,20 @@ export function recordOnlineReservationCommercialActivityInTransaction(params: {
     paymentChannel === "online";
   const amount = Number(data.montant ?? 0);
 
-  if (!isOnline || !companyId || !agencyId || amount <= 0) return {};
+  if (!isOnline || !companyId || !agencyId || amount <= 0) {
+    if (import.meta.env.DEV) {
+      console.info("[ONLINE_ACTIVITY_WRITE_DEBUG] skipped", {
+        reservationId: reservationRef.id,
+        isOnline,
+        companyId,
+        agencyId,
+        canal,
+        paymentChannel,
+        amount,
+      });
+    }
+    return {};
+  }
 
   const updatePayload: { ticketRevenueCountedInDailyStats?: true } = {};
   if (!Boolean(data.ticketRevenueCountedInDailyStats)) {
@@ -95,8 +116,19 @@ export function recordOnlineReservationCommercialActivityInTransaction(params: {
     updatePayload.ticketRevenueCountedInDailyStats = true;
   }
 
-  if (!activityLogExists) {
+  if (!activityLogAlreadyValid) {
     const seats = Number(data.seatsGo ?? 0) + Number(data.seatsReturn ?? 0);
+    if (import.meta.env.DEV) {
+      console.info("[ONLINE_ACTIVITY_WRITE_DEBUG] writing online activityLog", {
+        reservationId: reservationRef.id,
+        companyId,
+        agencyId,
+        amount,
+        seats: Math.max(1, seats || 1),
+        depart: String(data.depart ?? "").trim() || null,
+        arrivee: String(data.arrivee ?? "").trim() || null,
+      });
+    }
     writeOnlineTicketActivityInTransaction(tx, {
       companyId,
       agencyId,
@@ -106,9 +138,61 @@ export function recordOnlineReservationCommercialActivityInTransaction(params: {
       depart: String(data.depart ?? "").trim() || undefined,
       arrivee: String(data.arrivee ?? "").trim() || undefined,
     });
+  } else if (import.meta.env.DEV) {
+    console.info("[ONLINE_ACTIVITY_WRITE_DEBUG] valid online activityLog already present", {
+      reservationId: reservationRef.id,
+      companyId,
+      agencyId,
+      amount,
+    });
   }
 
   return updatePayload;
+}
+
+export async function ensureOnlineReservationCommercialActivityLog(
+  reservationRef: DocumentReference
+): Promise<void> {
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(reservationRef);
+    if (!snap.exists()) throw new Error("Réservation introuvable.");
+
+    const data = snap.data() as Record<string, unknown>;
+    const companyId = String(data.companyId ?? "").trim();
+    const agencyId = String(data.agencyId ?? "").trim();
+
+    if (!companyId || !agencyId) {
+      if (import.meta.env.DEV) {
+        console.info("[ONLINE_ACTIVITY_WRITE_DEBUG] ensure skipped: missing companyId/agencyId", {
+          reservationId: reservationRef.id,
+          companyId,
+          agencyId,
+        });
+      }
+      return;
+    }
+
+    const agencySnap = await tx.get(doc(db, "companies", companyId, "agences", agencyId));
+    const onlineLogSnap = await tx.get(activityLogRef(companyId, activityLogDocIdOnline(reservationRef.id)));
+    const patch = recordOnlineReservationCommercialActivityInTransaction({
+      tx,
+      reservationRef,
+      data,
+      agencyTimezone: dailyStatsTimezoneFromAgencyData(
+        agencySnap.data() as { timezone?: string | null } | undefined
+      ),
+      activityLogAlreadyValid: isValidOnlineTicketActivityLog(
+        onlineLogSnap.data() as Record<string, unknown> | undefined
+      ),
+    });
+
+    if (Object.keys(patch).length > 0) {
+      tx.update(reservationRef, {
+        ...patch,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  });
 }
 
 /**
@@ -196,7 +280,9 @@ export async function transitionToConfirmedOrPaidWithDailyStats(
       reservationRef: ref,
       data,
       agencyTimezone: agencyTz,
-      activityLogExists: onlineLogSnap?.exists() ?? false,
+      activityLogAlreadyValid: isValidOnlineTicketActivityLog(
+        onlineLogSnap?.data() as Record<string, unknown> | undefined
+      ),
     });
 
     const updatePayload: Record<string, unknown> = {

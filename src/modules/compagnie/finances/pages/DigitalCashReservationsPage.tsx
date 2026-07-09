@@ -67,7 +67,12 @@ type DigitalReservationRow = {
   referenceCode?: string;
   email?: string | null;
   createdAt: string | Date | Timestamp;
-  ticketValidatedAt?: unknown;
+  ticketValidatedAt?: string | Date | Timestamp | null;
+  validatedAt?: string | Date | Timestamp | null;
+  refusedAt?: string | Date | Timestamp | null;
+  validatedBy?: string | null;
+  refusedBy?: string | null;
+  refusalReason?: string | null;
   seatsGo?: number;
   seatsReturn?: number;
   tripInstanceId?: string | null;
@@ -146,6 +151,19 @@ const asReservationCreatedAt = (value: unknown): string | Date | Timestamp => {
   return Timestamp.now();
 };
 
+const dateValueMs = (date?: string | Date | Timestamp | null) => {
+  if (!date) return 0;
+  if (date instanceof Timestamp) return date.toMillis();
+  if (date instanceof Date) return date.getTime();
+  const ms = new Date(date).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+};
+
+const asOptionalDateValue = (value: unknown): string | Date | Timestamp | null => {
+  if (value instanceof Timestamp || value instanceof Date || typeof value === "string") return value;
+  return null;
+};
+
 const getProofUrlFromRaw = (source: Record<string, unknown>) =>
   asOptionalString(source.preuveUrl) ??
   asOptionalString(source.paymentProofUrl) ??
@@ -185,7 +203,22 @@ const buildDigitalReservationRow = ({
     referenceCode: normalized.reservation.reference ?? asOptionalString(raw.referenceCode),
     email: asOptionalString(raw.email) ?? null,
     createdAt: asReservationCreatedAt(raw.createdAt),
-    ticketValidatedAt: raw.ticketValidatedAt,
+    ticketValidatedAt: asOptionalDateValue(raw.ticketValidatedAt),
+    validatedAt:
+      asOptionalDateValue(raw.validatedAt) ??
+      asOptionalDateValue(raw.ticketValidatedAt) ??
+      asOptionalDateValue(rawPayment.validatedAt),
+    refusedAt:
+      asOptionalDateValue(raw.refusedAt) ??
+      asOptionalDateValue(raw.rejectedAt) ??
+      asOptionalDateValue(rawPayment.rejectedAt),
+    validatedBy: asOptionalString(raw.validatedBy) ?? asOptionalString(rawPayment.validatedBy) ?? null,
+    refusedBy: asOptionalString(raw.refusedBy) ?? asOptionalString(rawPayment.rejectedBy) ?? null,
+    refusalReason:
+      asOptionalString(raw.refusalReason) ??
+      asOptionalString(raw.rejectionReason) ??
+      asOptionalString(rawPayment.rejectionReason) ??
+      null,
     seatsGo: asOptionalNumber(raw.seatsGo),
     seatsReturn: asOptionalNumber(raw.seatsReturn),
     tripInstanceId: asOptionalString(raw.tripInstanceId) ?? null,
@@ -235,10 +268,31 @@ const ITEMS_PER_PAGE = 20;
 
 /* ================= TYPES POUR LA PAGINATION ET FILTRES ================= */
 interface FilterOptions {
-  period: 'today' | 'tomorrow' | 'week' | 'all';
+  period: 'today' | 'tomorrow' | 'week' | 'month' | 'custom' | 'all';
   startDate?: Date;
   endDate?: Date;
 }
+
+type DigitalOperatorView = "dashboard" | "pending" | "validated" | "refused";
+
+type OnlineFinancialRow = {
+  id: string;
+  amount: number;
+  agencyId?: string | null;
+  reservationId?: string | null;
+  paymentProvider?: string | null;
+  paymentMethod?: string | null;
+  paymentChannel?: string | null;
+  performedAt?: Timestamp | null;
+  createdAt?: Timestamp | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+type ConfiguredPaymentMethod = {
+  id: string;
+  label: string;
+  providerCode?: string | null;
+};
 
 /* ================= HOOK POUR LA NOTIFICATION SONORE (son Shopify : splash/son.mp3) ================= */
 const useNotificationSound = () => {
@@ -460,6 +514,8 @@ const ReservationsEnLigne: React.FC = () => {
   const { user, company, logout } = useAuth() as any;
   const navigate = useNavigate();
   const theme = useCompanyTheme(company) || { primary: '#2563eb', secondary: '#3b82f6' };
+  const primaryColor = (theme as any)?.primary ?? "#FF6600";
+  const secondaryColor = (theme as any)?.secondary ?? "#F97316";
   const money = useFormatCurrency();
   const { initializeAudio, playNotification, resetNotification, playSoundNow, isAudioReady } = useNotificationSound();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
@@ -479,13 +535,20 @@ const ReservationsEnLigne: React.FC = () => {
   const [otherPage, setOtherPage] = useState(1);
   const [showStats, setShowStats] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  // Temporal filtering mobile-first: aujourd'hui / demain / semaine / tout.
-  const [filterPeriod, setFilterPeriod] = useState<FilterOptions['period']>('all');
+  // Temporal filtering mobile-first: jour par défaut pour le dashboard digital.
+  const [filterPeriod, setFilterPeriod] = useState<FilterOptions['period']>('today');
   const [filterAgencyId, setFilterAgencyId] = useState<string>('');
   const [expandedCardKeys, setExpandedCardKeys] = useState<Record<string, boolean>>({});
   const [requestedOtherReservations, setRequestedOtherReservations] = useState(false);
   const [filterTab, setFilterTab] = useState<"today" | "pending" | "history" | "all">("pending");
   const [recentlyRefusedReservations, setRecentlyRefusedReservations] = useState<DigitalReservationRow[]>([]);
+  const [activeView, setActiveView] = useState<DigitalOperatorView>("dashboard");
+  const [customStartDate, setCustomStartDate] = useState("");
+  const [customEndDate, setCustomEndDate] = useState("");
+  const [onlineFinancialRows, setOnlineFinancialRows] = useState<OnlineFinancialRow[]>([]);
+  const [monthlyOnlineFinancialRows, setMonthlyOnlineFinancialRows] = useState<OnlineFinancialRow[]>([]);
+  const [configuredPaymentMethods, setConfiguredPaymentMethods] = useState<ConfiguredPaymentMethod[]>([]);
+  const [financeLoading, setFinanceLoading] = useState(false);
 
   const toggleExpandedCard = (key: string) => {
     setExpandedCardKeys((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -514,12 +577,27 @@ const ReservationsEnLigne: React.FC = () => {
       return { start: tomorrowStart, end: tomorrowEnd };
     }
 
-    // week: aujourd'hui + 6 jours (prochaine semaine)
-    const weekStart = todayStart;
-    const weekEnd = new Date(todayStart);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-    weekEnd.setHours(23, 59, 59, 999);
-    return { start: weekStart, end: weekEnd };
+    if (period === 'week') {
+      const weekStart = todayStart;
+      const weekEnd = new Date(todayStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      weekEnd.setHours(23, 59, 59, 999);
+      return { start: weekStart, end: weekEnd };
+    }
+
+    if (period === 'month') {
+      const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+      const monthEnd = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, 0, 23, 59, 59, 999);
+      return { start: monthStart, end: monthEnd };
+    }
+
+    if (period === 'custom') {
+      const start = customStartDate ? new Date(`${customStartDate}T00:00:00`) : todayStart;
+      const end = customEndDate ? new Date(`${customEndDate}T23:59:59.999`) : todayEnd;
+      return { start, end };
+    }
+
+    return { start: todayStart, end: todayEnd };
   };
 
   /* ================= INITIALISATION AUDIO AU PREMIER CLIC ================= */
@@ -583,7 +661,9 @@ const ReservationsEnLigne: React.FC = () => {
         where('canal', '==', 'en_ligne'),
         or(
           where('status', 'in', ['preuve_recue', 'verification']),
-          where('statut', 'in', ['preuve_recue', 'verification'])
+          where('statut', 'in', ['preuve_recue', 'verification']),
+          where('payment.status', '==', 'pending'),
+          where('paymentStatus', '==', 'pending')
         )
       ),
       orderBy('createdAt', 'desc'),
@@ -680,8 +760,14 @@ const ReservationsEnLigne: React.FC = () => {
 
       const qRef = query(
           collectionGroup(db, 'reservations'),
-          where('companyId', '==', user.companyId),
-          where('status', 'in', ['confirme', 'annulé']),
+          and(
+            where('companyId', '==', user.companyId),
+            where('canal', '==', 'en_ligne'),
+            or(
+              where('status', 'in', ['confirme', 'refuse', 'annulé', 'annule']),
+              where('statut', 'in', ['confirme', 'refuse', 'annulé', 'annule'])
+            )
+          ),
           orderBy('createdAt', 'desc'),
           limit(Math.min(ITEMS_PER_PAGE * page, 200))
         );
@@ -710,6 +796,147 @@ const ReservationsEnLigne: React.FC = () => {
       console.error('Erreur chargement autres réservations:', error);
     }
   };
+
+  useEffect(() => {
+    if (!user?.companyId) return;
+
+    let cancelled = false;
+
+    const loadConfiguredPaymentMethods = async () => {
+      try {
+        const configsSnap = await getDocs(
+          query(
+            collection(db, "companies", user.companyId!, "paymentConfigs"),
+            where("active", "==", true),
+            where("isEnabled", "==", true)
+          )
+        );
+
+        const methods: Array<ConfiguredPaymentMethod | null> = await Promise.all(
+          configsSnap.docs.map(async (configDoc) => {
+            const config = configDoc.data() as Record<string, unknown>;
+            const methodId = asOptionalString(config.methodId) ?? configDoc.id;
+            if (!methodId) return null;
+
+            const methodSnap = await getDoc(doc(db, "paymentMethods", methodId));
+            const method = methodSnap.exists() ? (methodSnap.data() as Record<string, unknown>) : {};
+            const label = asOptionalString(method.name) ?? asOptionalString(config.name) ?? methodId;
+
+            return {
+              id: methodId,
+              label,
+              providerCode: asOptionalString(method.providerCode) ?? asOptionalString(config.providerCode) ?? null,
+            };
+          })
+        );
+
+        if (!cancelled) {
+          setConfiguredPaymentMethods(
+            methods
+              .filter((method): method is ConfiguredPaymentMethod => Boolean(method?.id && method.label))
+              .sort((a, b) => a.label.localeCompare(b.label, "fr"))
+          );
+        }
+      } catch (error) {
+        console.warn("[DigitalCash] Configuration Mobile Money indisponible", error);
+        if (!cancelled) setConfiguredPaymentMethods([]);
+      }
+    };
+
+    void loadConfiguredPaymentMethods();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.companyId]);
+
+  useEffect(() => {
+    if (!user?.companyId) return;
+
+    let cancelled = false;
+    const { start, end } = getPeriodDates(filterPeriod);
+
+    const toOnlineFinancialRow = (row: { id: string; data: () => Record<string, unknown> }): OnlineFinancialRow => {
+      const data = row.data();
+      return {
+        id: row.id,
+        amount: Number(data.amount ?? 0) || 0,
+        agencyId: asOptionalString(data.agencyId) ?? null,
+        reservationId: asOptionalString(data.reservationId) ?? null,
+        paymentProvider: asOptionalString(data.paymentProvider) ?? null,
+        paymentMethod: asOptionalString(data.paymentMethod) ?? null,
+        paymentChannel: asOptionalString(data.paymentChannel) ?? null,
+        performedAt: data.performedAt instanceof Timestamp ? data.performedAt : null,
+        createdAt: data.createdAt instanceof Timestamp ? data.createdAt : null,
+        metadata: isRecordValue(data.metadata) ? data.metadata : null,
+      };
+    };
+
+    const loadConfirmedMobileMoney = async () => {
+      setFinanceLoading(true);
+      try {
+        const baseRef = collection(db, "companies", user.companyId!, "financialTransactions");
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const weekStart = new Date(now);
+        weekStart.setDate(now.getDate() - 6);
+        weekStart.setHours(0, 0, 0, 0);
+        const reportStart = weekStart < monthStart ? weekStart : monthStart;
+        const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        const constraints =
+          filterPeriod === "all"
+            ? [
+                where("companyId", "==", user.companyId),
+                where("type", "==", "payment_received"),
+                where("paymentMethod", "==", "mobile_money"),
+                where("paymentChannel", "==", "online"),
+                orderBy("performedAt", "desc"),
+                limit(500),
+              ]
+            : [
+                where("companyId", "==", user.companyId),
+                where("type", "==", "payment_received"),
+                where("paymentMethod", "==", "mobile_money"),
+                where("paymentChannel", "==", "online"),
+                where("performedAt", ">=", Timestamp.fromDate(start)),
+                where("performedAt", "<=", Timestamp.fromDate(end)),
+                orderBy("performedAt", "desc"),
+                limit(1000),
+              ];
+        const [snap, monthSnap] = await Promise.all([
+          getDocs(query(baseRef, ...constraints)),
+          getDocs(query(
+            baseRef,
+            where("companyId", "==", user.companyId),
+            where("type", "==", "payment_received"),
+            where("paymentMethod", "==", "mobile_money"),
+            where("paymentChannel", "==", "online"),
+            where("performedAt", ">=", Timestamp.fromDate(reportStart)),
+            where("performedAt", "<=", Timestamp.fromDate(monthEnd)),
+            orderBy("performedAt", "desc"),
+            limit(1500)
+          )),
+        ]);
+        if (cancelled) return;
+        setOnlineFinancialRows(snap.docs.map((row) => toOnlineFinancialRow(row as any)));
+        setMonthlyOnlineFinancialRows(monthSnap.docs.map((row) => toOnlineFinancialRow(row as any)));
+      } catch (error) {
+        console.warn("[DigitalCash] Mobile Money confirmé indisponible", error);
+        if (!cancelled) {
+          setOnlineFinancialRows([]);
+          setMonthlyOnlineFinancialRows([]);
+        }
+      } finally {
+        if (!cancelled) setFinanceLoading(false);
+      }
+    };
+
+    void loadConfirmedMobileMoney();
+    return () => {
+      cancelled = true;
+    };
+    // getPeriodDates depends on the custom dates used below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.companyId, filterPeriod, customStartDate, customEndDate]);
 
   /* ================= CORRECTION CRITIQUE : FUSION DES RÉSERVATIONS POUR LE FILTRAGE ================= */
   const allReservations = useMemo(() => {
@@ -759,6 +986,30 @@ const ReservationsEnLigne: React.FC = () => {
         return false;
       }
       
+      return reservationDate >= start && reservationDate <= end;
+    });
+  };
+
+  const statusDateForReservation = (reservation: DigitalReservationRow) => {
+    if (reservation.reservation.status === "confirme") {
+      return reservation.validatedAt ?? reservation.ticketValidatedAt ?? reservation.createdAt;
+    }
+    if (reservation.reservation.status === "refuse") {
+      return reservation.refusedAt ?? reservation.createdAt;
+    }
+    return reservation.createdAt;
+  };
+
+  const filterReservationsByBusinessPeriod = (
+    reservations: DigitalReservationRow[],
+    period: FilterOptions['period']
+  ) => {
+    const { start, end } = getPeriodDates(period);
+
+    return reservations.filter((reservation) => {
+      const ms = dateValueMs(statusDateForReservation(reservation));
+      if (!ms) return false;
+      const reservationDate = new Date(ms);
       return reservationDate >= start && reservationDate <= end;
     });
   };
@@ -950,6 +1201,7 @@ const ReservationsEnLigne: React.FC = () => {
 
       // Afficher immédiatement les actions de suivi (copie lien + WhatsApp)
       setFilterTab('history');
+      setActiveView('validated');
       
       // Réinitialiser la notification pour cette réservation
       resetNotification(`${reservation.agencyId}_${reservation.id}`);
@@ -1098,6 +1350,7 @@ const ReservationsEnLigne: React.FC = () => {
 
       // Afficher l'historique tout de suite
       setFilterTab('history');
+      setActiveView('refused');
       
       // Réinitialiser la notification pour cette réservation
       resetNotification(`${reservation.agencyId}_${reservation.id}`);
@@ -1287,14 +1540,14 @@ const ReservationsEnLigne: React.FC = () => {
   /* Chargement "sur demande" des autres statuts */
   useEffect(() => {
     if (!user?.companyId) return;
-    if (filterTab !== "pending" && otherReservations.length === 0) {
+    if ((filterTab !== "pending" || activeView === "validated" || activeView === "refused") && otherReservations.length === 0) {
       if (!requestedOtherReservations) {
         setRequestedOtherReservations(true);
         loadOtherReservations(1);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterTab, user?.companyId, otherReservations.length, requestedOtherReservations]);
+  }, [filterTab, activeView, user?.companyId, otherReservations.length, requestedOtherReservations]);
 
   /* ================= RENDU ================= */
   const pendingReservations = verificationReservations;
@@ -1320,6 +1573,313 @@ const ReservationsEnLigne: React.FC = () => {
       return tb - ta;
     });
   }, [recentlyValidatedReservations, recentlyRefusedReservations, otherReservations]);
+
+  const periodReservations = useMemo(
+    () => filterReservationsByBusinessPeriod([...pendingReservations, ...historyReservations], filterPeriod),
+    [pendingReservations, historyReservations, filterPeriod, customStartDate, customEndDate]
+  );
+
+  const validatedReservations = useMemo(
+    () => historyReservations.filter((r) => r.reservation.status === "confirme"),
+    [historyReservations]
+  );
+
+  const refusedReservations = useMemo(
+    () => historyReservations.filter((r) => r.reservation.status === "refuse"),
+    [historyReservations]
+  );
+
+  const visibleValidatedReservations = useMemo(
+    () =>
+      filterReservationsByBusinessPeriod(validatedReservations, filterPeriod).sort(
+        (a, b) => dateValueMs(statusDateForReservation(b)) - dateValueMs(statusDateForReservation(a))
+      ),
+    [validatedReservations, filterPeriod, customStartDate, customEndDate]
+  );
+
+  const visibleRefusedReservations = useMemo(
+    () =>
+      filterReservationsByBusinessPeriod(refusedReservations, filterPeriod).sort(
+        (a, b) => dateValueMs(statusDateForReservation(b)) - dateValueMs(statusDateForReservation(a))
+      ),
+    [refusedReservations, filterPeriod, customStartDate, customEndDate]
+  );
+
+  const providerLabel = (value?: string | null) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return "Autre";
+    return raw
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\b\p{L}/gu, (letter) => letter.toLocaleUpperCase("fr"));
+  };
+
+  const providerMatchKey = (value?: string | null) =>
+    String(value ?? "")
+      .trim()
+      .toLocaleLowerCase("fr")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ");
+
+  const reservationProviderLabel = (reservation: DigitalReservationRow) => {
+    const method = reservation.payment.method || reservation.payment.wallet || reservation.proof.message || "";
+    return providerLabel(method);
+  };
+
+  const rowTimeMs = (date?: string | Date | Timestamp | null) => {
+    return dateValueMs(date);
+  };
+
+  const ageLabel = (date?: string | Date | Timestamp | null) => {
+    const ms = rowTimeMs(date);
+    if (!ms) return "Non disponible";
+    const minutes = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} h`;
+    return `${Math.floor(hours / 24)} j`;
+  };
+
+  const financialRowTimeMs = (row: OnlineFinancialRow) =>
+    row.performedAt?.toMillis() ?? row.createdAt?.toMillis() ?? 0;
+
+  const inDateRange = (ms: number, start: Date, end: Date) =>
+    ms >= start.getTime() && ms <= end.getTime();
+
+  const shortDayLabel = (date: Date) =>
+    date.toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit" }).replace(".", "");
+
+  const digitalStats = useMemo(() => {
+    const today = new Date();
+    const dayRows = Array.from({ length: 7 }, (_, index) => {
+      const day = new Date(today);
+      day.setDate(today.getDate() - (6 - index));
+      day.setHours(0, 0, 0, 0);
+      const end = new Date(day);
+      end.setHours(23, 59, 59, 999);
+
+      const validated = validatedReservations.filter((row) =>
+        inDateRange(dateValueMs(statusDateForReservation(row)), day, end)
+      ).length;
+      const refused = refusedReservations.filter((row) =>
+        inDateRange(dateValueMs(statusDateForReservation(row)), day, end)
+      ).length;
+      const confirmedAmount = monthlyOnlineFinancialRows
+        .filter((row) => inDateRange(financialRowTimeMs(row), day, end))
+        .reduce((sum, row) => sum + Math.abs(Number(row.amount ?? 0)), 0);
+
+      return {
+        key: day.toISOString().slice(0, 10),
+        label: shortDayLabel(day),
+        validated,
+        refused,
+        confirmedAmount,
+        total: validated + refused,
+      };
+    });
+
+    const peak = Math.max(1, ...dayRows.map((row) => row.total));
+    return { dayRows, peak };
+  }, [monthlyOnlineFinancialRows, refusedReservations, validatedReservations]);
+
+  const digitalReports = useMemo(() => {
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now);
+    todayEnd.setHours(23, 59, 59, 999);
+    const weekStart = new Date(todayStart);
+    weekStart.setDate(todayStart.getDate() - 6);
+    const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+    const monthEnd = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    const makeReport = (label: string, start: Date, end: Date) => {
+      const validated = validatedReservations.filter((row) =>
+        inDateRange(dateValueMs(statusDateForReservation(row)), start, end)
+      );
+      const refused = refusedReservations.filter((row) =>
+        inDateRange(dateValueMs(statusDateForReservation(row)), start, end)
+      );
+      const confirmedAmount = monthlyOnlineFinancialRows
+        .filter((row) => inDateRange(financialRowTimeMs(row), start, end))
+        .reduce((sum, row) => sum + Math.abs(Number(row.amount ?? 0)), 0);
+
+      return {
+        label,
+        validated: validated.length,
+        refused: refused.length,
+        confirmedAmount,
+      };
+    };
+
+    const agencyValidationRows = [...validatedReservations]
+      .reduce((map, row) => {
+        const key = row.agencyId || "unknown";
+        const current = map.get(key) ?? { id: key, label: agencies[key]?.name || "Agence inconnue", count: 0 };
+        current.count += 1;
+        map.set(key, current);
+        return map;
+      }, new Map<string, { id: string; label: string; count: number }>());
+
+    const refusalReasonRows = [...visibleRefusedReservations]
+      .reduce((map, row) => {
+        const label = row.refusalReason || "Motif non renseigné";
+        map.set(label, (map.get(label) ?? 0) + 1);
+        return map;
+      }, new Map<string, number>());
+
+    return {
+      periodRows: [
+        makeReport("Rapport du jour", todayStart, todayEnd),
+        makeReport("Rapport semaine", weekStart, todayEnd),
+        makeReport("Rapport mois", monthStart, monthEnd),
+      ],
+      agencyValidationRows: Array.from(agencyValidationRows.values())
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 4),
+      refusalReasonRows: Array.from(refusalReasonRows.entries())
+        .map(([label, count]) => ({ label, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 4),
+    };
+  }, [
+    agencies,
+    monthlyOnlineFinancialRows,
+    refusedReservations,
+    validatedReservations,
+    visibleRefusedReservations,
+  ]);
+
+  const digitalDashboard = useMemo(() => {
+    const pendingAmount = pendingReservations.reduce((sum, row) => sum + Number(row.payment.amount ?? 0), 0);
+    const confirmedAmount = onlineFinancialRows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+    const validatedCount = visibleValidatedReservations.length;
+    const refusedCount = visibleRefusedReservations.length;
+    const handled = validatedCount + refusedCount;
+    const acceptanceRate = handled > 0 ? Math.round((validatedCount / handled) * 100) : null;
+
+    const providerTotals = new Map<string, number>();
+    onlineFinancialRows.forEach((row) => {
+      const reliable = row.metadata?.paymentProviderSource === "reservation.preuveVia";
+      const label = providerLabel(reliable ? row.paymentProvider : null);
+      providerTotals.set(label, (providerTotals.get(label) ?? 0) + Math.abs(Number(row.amount ?? 0)));
+    });
+
+    const agencyTotals = new Map<string, { count: number; amount: number }>();
+    periodReservations.forEach((row) => {
+      const current = agencyTotals.get(row.agencyId) ?? { count: 0, amount: 0 };
+      current.count += 1;
+      current.amount += Number(row.payment.amount ?? 0);
+      agencyTotals.set(row.agencyId, current);
+    });
+
+    const routeTotals = new Map<string, { count: number; amount: number }>();
+    periodReservations.forEach((row) => {
+      const route = `${row.trip.departure || "Trajet incomplet"} → ${row.trip.arrival || "Trajet incomplet"}`;
+      const current = routeTotals.get(route) ?? { count: 0, amount: 0 };
+      current.count += 1;
+      current.amount += Number(row.payment.amount ?? 0);
+      routeTotals.set(route, current);
+    });
+
+    const providerRows = Array.from(providerTotals.entries())
+      .map(([label, amount]) => ({ label, amount }))
+      .sort((a, b) => b.amount - a.amount);
+    const agencyRows = Array.from(agencyTotals.entries())
+      .map(([agencyId, value]) => ({
+        id: agencyId,
+        label: agencies[agencyId]?.name || "Agence inconnue",
+        ...value,
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+    const routeRows = Array.from(routeTotals.entries())
+      .map(([label, value]) => ({ label, ...value }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    const urgentRows = [...pendingReservations]
+      .filter((row) => {
+        const info = getPaymentInfo(row);
+        const ageMinutes = rowTimeMs(row.createdAt) ? (Date.now() - rowTimeMs(row.createdAt)) / 60000 : 0;
+        const detectedAmount = info.parsedAmount;
+        const expectedAmount = Number(row.payment.amount ?? 0);
+        return (
+          ageMinutes >= 30 ||
+          info.validationLevel === "suspicious" ||
+          info.validationLevel === "invalid" ||
+          (detectedAmount != null && expectedAmount > 0 && detectedAmount !== expectedAmount)
+        );
+      })
+      .sort((a, b) => rowTimeMs(a.createdAt) - rowTimeMs(b.createdAt))
+      .slice(0, 6);
+
+    return {
+      pendingCount: pendingReservations.length,
+      validatedCount,
+      refusedCount,
+      pendingAmount,
+      confirmedAmount,
+      acceptanceRate,
+      providerRows,
+      agencyRows,
+      routeRows,
+      dominantProvider: providerRows[0]?.label ?? "Aucun",
+      topAgency: agencyRows[0]?.label ?? "Aucun",
+      topRoute: routeRows[0]?.label ?? "Aucun",
+      urgentRows,
+    };
+  }, [
+    agencies,
+    onlineFinancialRows,
+    pendingReservations,
+    periodReservations,
+    visibleRefusedReservations,
+    visibleValidatedReservations,
+  ]);
+
+  const mobileMoneyReadout = useMemo(() => {
+    const methodAliases = configuredPaymentMethods.map((method) => ({
+      method,
+      aliases: [method.id, method.label, method.providerCode]
+        .map((value) => providerMatchKey(value))
+        .filter(Boolean),
+    }));
+
+    const findConfiguredMethod = (row: OnlineFinancialRow) => {
+      const providerKey = providerMatchKey(row.paymentProvider ?? asOptionalString(row.metadata?.provider));
+      if (!providerKey) return null;
+      return methodAliases.find(({ aliases }) => aliases.includes(providerKey))?.method ?? null;
+    };
+
+    const totalsByMethod = new Map(configuredPaymentMethods.map((method) => [method.id, 0]));
+    const configuredPayments = onlineFinancialRows.filter((row) => {
+      const method = findConfiguredMethod(row);
+      if (!method) return false;
+      totalsByMethod.set(method.id, (totalsByMethod.get(method.id) ?? 0) + Math.abs(Number(row.amount ?? 0)));
+      return true;
+    });
+
+    const providerRows = configuredPaymentMethods.map((method) => ({
+      id: method.id,
+      label: method.label,
+      amount: totalsByMethod.get(method.id) ?? 0,
+    }));
+    const lastPayment = [...configuredPayments].sort(
+      (a, b) => financialRowTimeMs(b) - financialRowTimeMs(a)
+    )[0] ?? null;
+    const lastPaymentMethod = lastPayment ? findConfiguredMethod(lastPayment) : null;
+
+    return {
+      providerRows,
+      totalAmount: providerRows.reduce((sum, row) => sum + row.amount, 0),
+      lastPayment,
+      lastPaymentLabel: lastPaymentMethod?.label ?? null,
+    };
+  }, [configuredPaymentMethods, onlineFinancialRows]);
 
   const visibleReservations = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -1370,7 +1930,7 @@ const ReservationsEnLigne: React.FC = () => {
       ]
         .join(" ")
         .toLowerCase();
-      return searchable.includes(term);
+    return searchable.includes(term);
     });
   }, [
     filterTab,
@@ -1379,6 +1939,60 @@ const ReservationsEnLigne: React.FC = () => {
     filterAgencyId,
     searchTerm,
   ]);
+
+  const viewReservations = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    let list: DigitalReservationRow[] = [];
+
+    if (activeView === "pending") {
+      list = [...pendingReservations].sort((a, b) => {
+        const pa = getPriorityRank(a);
+        const pb = getPriorityRank(b);
+        if (pa !== pb) return pa - pb;
+        return rowTimeMs(a.createdAt) - rowTimeMs(b.createdAt);
+      });
+    } else if (activeView === "validated") {
+      list = visibleValidatedReservations;
+    } else if (activeView === "refused") {
+      list = visibleRefusedReservations;
+    }
+
+    if (filterAgencyId) list = list.filter((row) => row.agencyId === filterAgencyId);
+    if (!term) return list;
+
+    return list.filter((row) => {
+      const proofText = row.payment.reference || row.payment.wallet || row.proof.message || "";
+      const info = getPaymentInfo(row);
+      return [
+        row.customer.name || "",
+        row.customer.phone || "",
+        row.referenceCode || "",
+        proofText,
+        String(info.parsedTransactionId ?? ""),
+        String(info.parsedAmount ?? ""),
+        row.trip.departure || "",
+        row.trip.arrival || "",
+        reservationProviderLabel(row),
+      ].join(" ").toLowerCase().includes(term);
+    });
+  }, [
+    activeView,
+    filterAgencyId,
+    pendingReservations,
+    searchTerm,
+    visibleRefusedReservations,
+    visibleValidatedReservations,
+  ]);
+
+  const switchDigitalView = (next: DigitalOperatorView) => {
+    setActiveView(next);
+    if (next === "pending") setFilterTab("pending");
+    if (next === "validated" || next === "refused") setFilterTab("history");
+    if (next !== "dashboard" && otherReservations.length === 0 && !requestedOtherReservations) {
+      setRequestedOtherReservations(true);
+      loadOtherReservations(1);
+    }
+  };
 
   const waitingCount = useMemo(() => {
     let list = pendingReservations;
@@ -1483,12 +2097,44 @@ const ReservationsEnLigne: React.FC = () => {
 
         <div className="px-2 py-2 space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-2 rounded-full border border-amber-200 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 px-3 py-1 text-xs font-semibold text-amber-800 dark:text-amber-200 truncate">
-              🔥 {waitingCount} en attente
-            </span>
+            <div className="min-w-0">
+              <h1 className="text-base sm:text-xl font-bold truncate">Réservations en ligne</h1>
+              <p className="text-xs text-gray-500 dark:text-gray-300 truncate">
+                {waitingCount} preuve{waitingCount > 1 ? "s" : ""} à vérifier
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleRefresh}
+              className="h-9 w-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex items-center justify-center"
+              title="Actualiser"
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            </button>
           </div>
 
-          {/* Barre filtre compacte */}
+          <div className="hidden md:grid grid-cols-4 gap-1 rounded-xl bg-gray-100 dark:bg-gray-800 p-1 sticky top-0 z-20">
+            {[
+              { id: "dashboard", label: "Aujourd'hui" },
+              { id: "pending", label: "À traiter" },
+              { id: "validated", label: "Validées" },
+              { id: "refused", label: "Refusées" },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => switchDigitalView(tab.id as DigitalOperatorView)}
+                className={`h-9 rounded-lg px-2 text-xs font-semibold transition ${
+                  activeView === tab.id
+                    ? "bg-white text-gray-950 shadow-sm dark:bg-gray-900 dark:text-white"
+                    : "text-gray-600 dark:text-gray-300"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
           <div className="flex items-center gap-2 overflow-x-auto pb-1 flex-nowrap">
             <div className="relative flex-1 min-w-[140px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 dark:text-gray-400" />
@@ -1502,14 +2148,15 @@ const ReservationsEnLigne: React.FC = () => {
             </div>
 
             <select
-              value={filterTab}
-              onChange={(e) => setFilterTab(e.target.value as "today" | "pending" | "history" | "all")}
+              value={filterPeriod}
+              onChange={(e) => setFilterPeriod(e.target.value as FilterOptions["period"])}
               className="h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white px-2 text-sm shrink-0"
             >
+              <option value="today">Jour</option>
+              <option value="week">Semaine</option>
+              <option value="month">Mois</option>
+              <option value="custom">Personnalisé</option>
               <option value="all">Tout</option>
-              <option value="today">Aujourd'hui</option>
-              <option value="pending">En attente</option>
-              <option value="history">Historique</option>
             </select>
 
             <select
@@ -1527,10 +2174,350 @@ const ReservationsEnLigne: React.FC = () => {
             </select>
           </div>
 
-          {/* Liste cartes compactes */}
+          {filterPeriod === "custom" && (
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="date"
+                value={customStartDate}
+                onChange={(e) => setCustomStartDate(e.target.value)}
+                className="h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-sm"
+              />
+              <input
+                type="date"
+                value={customEndDate}
+                onChange={(e) => setCustomEndDate(e.target.value)}
+                className="h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-sm"
+              />
+            </div>
+          )}
+
+          {activeView === "dashboard" && (
+            <div className="space-y-3 pb-20 sm:pb-2">
+              <div className="grid grid-cols-1 min-[380px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 dark:border-amber-800 dark:bg-amber-950/30">
+                  <div className="text-[11px] text-amber-700 dark:text-amber-200 truncate">Demandes en attente</div>
+                  <div className="mt-1 text-xl font-bold text-amber-900 dark:text-amber-100">{digitalDashboard.pendingCount}</div>
+                </div>
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 dark:border-emerald-800 dark:bg-emerald-950/30">
+                  <div className="text-[11px] text-emerald-700 dark:text-emerald-200 truncate">Validées</div>
+                  <div className="mt-1 text-xl font-bold text-emerald-900 dark:text-emerald-100">{digitalDashboard.validatedCount}</div>
+                </div>
+                <div className="rounded-lg border border-red-200 bg-red-50 p-2.5 dark:border-red-800 dark:bg-red-950/30">
+                  <div className="text-[11px] text-red-700 dark:text-red-200 truncate">Refusées</div>
+                  <div className="mt-1 text-xl font-bold text-red-900 dark:text-red-100">{digitalDashboard.refusedCount}</div>
+                </div>
+                <div className="rounded-lg border border-violet-200 bg-violet-50 p-2.5 dark:border-violet-800 dark:bg-violet-950/30">
+                  <div className="text-[11px] text-violet-700 dark:text-violet-200 truncate">Montant confirmé</div>
+                  <div className="mt-1 text-base font-bold text-violet-900 dark:text-violet-100 truncate">
+                    {financeLoading ? "Chargement..." : fmtMoney(digitalDashboard.confirmedAmount)}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-orange-200 bg-orange-50 p-2.5 dark:border-orange-800 dark:bg-orange-950/30">
+                  <div className="text-[11px] text-orange-700 dark:text-orange-200 truncate">Montant en attente</div>
+                  <div className="mt-1 text-base font-bold text-orange-900 dark:text-orange-100 truncate">{fmtMoney(digitalDashboard.pendingAmount)}</div>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-white p-2.5 dark:border-gray-700 dark:bg-gray-800">
+                  <div className="text-[11px] text-gray-500 dark:text-gray-300 truncate">Portefeuille dominant</div>
+                  <div className="mt-1 text-sm font-bold text-gray-950 dark:text-white truncate">{digitalDashboard.dominantProvider}</div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-bold text-gray-950 dark:text-white">Statistiques digitales</div>
+                    <div className="text-xs text-gray-500 dark:text-gray-300">Activité online courte, validations et refus</div>
+                  </div>
+                  <TrendingUp className="h-4 w-4 text-gray-500" />
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                  <div className="rounded-lg bg-gray-50 p-2 dark:bg-gray-900">
+                    <div className="text-[11px] text-gray-500">Validations période</div>
+                    <div className="text-lg font-bold text-emerald-700 dark:text-emerald-300">{digitalDashboard.validatedCount}</div>
+                  </div>
+                  <div className="rounded-lg bg-gray-50 p-2 dark:bg-gray-900">
+                    <div className="text-[11px] text-gray-500">Refus période</div>
+                    <div className="text-lg font-bold text-red-700 dark:text-red-300">{digitalDashboard.refusedCount}</div>
+                  </div>
+                  <div className="rounded-lg bg-gray-50 p-2 dark:bg-gray-900">
+                    <div className="text-[11px] text-gray-500">Confirmé</div>
+                    <div className="text-sm font-bold text-gray-950 dark:text-white truncate">{fmtMoney(digitalDashboard.confirmedAmount)}</div>
+                  </div>
+                  <div className="rounded-lg bg-gray-50 p-2 dark:bg-gray-900">
+                    <div className="text-[11px] text-gray-500">En attente</div>
+                    <div className="text-sm font-bold text-gray-950 dark:text-white truncate">{fmtMoney(digitalDashboard.pendingAmount)}</div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1.5 items-end h-28">
+                  {digitalStats.dayRows.map((row) => (
+                    <div key={row.key} className="flex h-full min-w-0 flex-col justify-end gap-1">
+                      <div className="flex h-20 items-end gap-0.5">
+                        <div
+                          className="flex-1 rounded-t bg-emerald-500"
+                          style={{ height: `${Math.max(6, (row.validated / digitalStats.peak) * 100)}%` }}
+                          title={`${row.validated} validation(s)`}
+                        />
+                        <div
+                          className="flex-1 rounded-t bg-red-400"
+                          style={{ height: `${Math.max(6, (row.refused / digitalStats.peak) * 100)}%` }}
+                          title={`${row.refused} refus`}
+                        />
+                      </div>
+                      <div className="truncate text-center text-[10px] text-gray-500 dark:text-gray-400">{row.label}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex items-center gap-3 text-[11px] text-gray-500">
+                  <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Validations</span>
+                  <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-400" /> Refus</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                <div className="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+                  <div className="mb-2 text-sm font-bold">Répartition par portefeuille</div>
+                  {digitalDashboard.providerRows.length === 0 ? (
+                    <p className="text-sm text-gray-500">Aucune donnée</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {digitalDashboard.providerRows.map((row) => (
+                        <div key={row.label}>
+                          <div className="flex items-center justify-between gap-2 text-sm">
+                            <span className="truncate">{row.label}</span>
+                            <span className="font-semibold">{fmtMoney(row.amount)}</span>
+                          </div>
+                          <div className="mt-1 h-2 rounded-full bg-gray-100 dark:bg-gray-700">
+                            <div
+                              className="h-2 rounded-full bg-violet-600"
+                              style={{ width: `${Math.min(100, (row.amount / Math.max(1, digitalDashboard.confirmedAmount)) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+                  <div className="mb-2 text-sm font-bold">Répartition par agence</div>
+                  {digitalDashboard.agencyRows.length === 0 ? (
+                    <p className="text-sm text-gray-500">Aucune donnée</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {digitalDashboard.agencyRows.map((row) => (
+                        <div key={row.id} className="flex items-center justify-between gap-3 text-sm">
+                          <span className="truncate">{row.label}</span>
+                          <span className="font-semibold">{row.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+                  <div className="mb-2 text-sm font-bold">Répartition par trajet</div>
+                  {digitalDashboard.routeRows.length === 0 ? (
+                    <p className="text-sm text-gray-500">Aucune donnée</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {digitalDashboard.routeRows.map((row) => (
+                        <div key={row.label} className="flex items-center justify-between gap-3 text-sm">
+                          <span className="break-words">{row.label}</span>
+                          <span className="font-semibold">{row.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                <div className="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-bold text-gray-950 dark:text-white">Rapports</div>
+                      <div className="text-xs text-gray-500 dark:text-gray-300">Synthèse simple du canal online</div>
+                    </div>
+                    <FileText className="h-4 w-4 text-gray-500" />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {digitalReports.periodRows.map((report) => (
+                      <div key={report.label} className="rounded-lg bg-gray-50 p-2 dark:bg-gray-900">
+                        <div className="text-[11px] font-semibold text-gray-600 dark:text-gray-300">{report.label}</div>
+                        <div className="mt-1 flex items-center justify-between text-xs">
+                          <span>Validées</span>
+                          <span className="font-bold text-emerald-700 dark:text-emerald-300">{report.validated}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span>Refus</span>
+                          <span className="font-bold text-red-700 dark:text-red-300">{report.refused}</span>
+                        </div>
+                        <div className="mt-1 truncate text-xs font-bold text-gray-950 dark:text-white">
+                          {fmtMoney(report.confirmedAmount)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="rounded-lg border border-gray-100 p-2 dark:border-gray-700">
+                      <div className="mb-1 text-[11px] font-bold text-gray-500">Validations par agence</div>
+                      {digitalReports.agencyValidationRows.length === 0 ? (
+                        <div className="text-xs text-gray-500">Aucune donnée</div>
+                      ) : (
+                        <div className="space-y-1">
+                          {digitalReports.agencyValidationRows.map((row) => (
+                            <div key={row.id} className="flex items-center justify-between gap-2 text-xs">
+                              <span className="truncate">{row.label}</span>
+                              <span className="font-bold">{row.count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-lg border border-gray-100 p-2 dark:border-gray-700">
+                      <div className="mb-1 text-[11px] font-bold text-gray-500">Validations par portefeuille</div>
+                      {digitalDashboard.providerRows.length === 0 ? (
+                        <div className="text-xs text-gray-500">Aucune donnée</div>
+                      ) : (
+                        <div className="space-y-1">
+                          {digitalDashboard.providerRows.slice(0, 4).map((row) => (
+                            <div key={row.label} className="flex items-center justify-between gap-2 text-xs">
+                              <span className="truncate">{row.label}</span>
+                              <span className="font-bold">{fmtMoney(row.amount)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-lg border border-gray-100 p-2 dark:border-gray-700">
+                      <div className="mb-1 text-[11px] font-bold text-gray-500">Refus et motifs</div>
+                      {digitalReports.refusalReasonRows.length === 0 ? (
+                        <div className="text-xs text-gray-500">Aucune donnée</div>
+                      ) : (
+                        <div className="space-y-1">
+                          {digitalReports.refusalReasonRows.map((row) => (
+                            <div key={row.label} className="flex items-center justify-between gap-2 text-xs">
+                              <span className="truncate">{row.label}</span>
+                              <span className="font-bold">{row.count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-violet-200 bg-violet-50 p-3 dark:border-violet-800 dark:bg-violet-950/20">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-bold text-violet-950 dark:text-violet-100">Lecture Mobile Money</div>
+                      <div className="text-xs text-violet-700 dark:text-violet-200">Consultation uniquement, pilotage trésorerie séparé</div>
+                    </div>
+                    <Smartphone className="h-4 w-4 text-violet-700 dark:text-violet-200" />
+                  </div>
+
+                  <div className="rounded-lg bg-white p-2 dark:bg-gray-900">
+                    <div className="text-[11px] text-gray-500">Total confirmé Mobile Money</div>
+                    <div className="mt-1 text-xl font-bold text-gray-950 dark:text-white">
+                      {financeLoading ? "Chargement..." : fmtMoney(mobileMoneyReadout.totalAmount)}
+                    </div>
+                  </div>
+
+                  {mobileMoneyReadout.providerRows.length === 0 ? (
+                    <div className="mt-2 rounded-lg bg-white p-3 text-sm text-gray-500 dark:bg-gray-900">
+                      Aucun portefeuille Mobile Money configuré.
+                    </div>
+                  ) : (
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {mobileMoneyReadout.providerRows.map((row) => (
+                        <div key={row.id} className="rounded-lg bg-white p-2 dark:bg-gray-900">
+                          <div className="text-[11px] text-gray-500">{row.label}</div>
+                          <div className="mt-1 truncate text-sm font-bold text-gray-950 dark:text-white">{fmtMoney(row.amount)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {mobileMoneyReadout.providerRows.length > 0 && (
+                    <div className="mt-2 rounded-lg bg-white p-2 dark:bg-gray-900">
+                      <div className="text-[11px] text-gray-500">Dernier paiement validé</div>
+                      {mobileMoneyReadout.lastPayment ? (
+                        <div className="mt-1 space-y-1">
+                          <div className="text-sm font-bold text-gray-950 dark:text-white">
+                            {fmtMoney(mobileMoneyReadout.lastPayment.amount)} • {mobileMoneyReadout.lastPaymentLabel}
+                          </div>
+                          <div className="text-[11px] text-gray-500">
+                            {fmtDate(mobileMoneyReadout.lastPayment.performedAt ?? mobileMoneyReadout.lastPayment.createdAt)}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-xs text-gray-500">Aucun paiement confirmé sur la période.</div>
+                      )}
+                    </div>
+                  )}
+
+                  {user?.companyId && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/compagnie/${user.companyId}/accounting/treasury`)}
+                      className="mt-2 inline-flex h-9 w-full items-center justify-center rounded-lg border border-violet-200 bg-white px-3 text-sm font-semibold text-violet-800 hover:bg-violet-100 dark:border-violet-800 dark:bg-gray-900 dark:text-violet-100 dark:hover:bg-violet-950"
+                    >
+                      Voir trésorerie
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/30">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-sm font-bold text-red-950 dark:text-red-100">File d'urgence</div>
+                  <button type="button" className="text-xs font-semibold text-red-800 dark:text-red-200" onClick={() => setActiveView("pending")}>
+                    Voir à traiter
+                  </button>
+                </div>
+                {digitalDashboard.urgentRows.length === 0 ? (
+                  <p className="text-sm text-red-700 dark:text-red-200">Aucune demande urgente.</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {digitalDashboard.urgentRows.map((row) => {
+                      const info = getPaymentInfo(row);
+                      return (
+                        <button
+                          key={`${row.agencyId}_${row.id}`}
+                          type="button"
+                          onClick={() => {
+                            setActiveView("pending");
+                            setExpandedCardKeys((prev) => ({ ...prev, [`${row.agencyId}_${row.id}`]: true }));
+                          }}
+                          className="rounded-lg border border-red-200 bg-white p-3 text-left text-sm dark:border-red-800 dark:bg-gray-900"
+                        >
+                          <div className="font-semibold text-gray-950 dark:text-white">{row.customer.name || "Client non renseigné"}</div>
+                          <div className="mt-1 text-xs text-gray-600 dark:text-gray-300 break-words">
+                            {row.trip.departure || "Trajet incomplet"} → {row.trip.arrival || "Trajet incomplet"}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <StatusBadge status={info.validationLevel === "valid" ? "success" : "warning"}>
+                              {info.validationLevel === "valid" ? "Fiable" : "À vérifier"}
+                            </StatusBadge>
+                            <span className="text-xs font-semibold text-red-700 dark:text-red-200">{ageLabel(row.createdAt)}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeView !== "dashboard" && (
           <AnimatePresence mode="popLayout">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {visibleReservations.map((reservation) => {
+              {viewReservations.map((reservation) => {
                 const cardKey = `${reservation.agencyId}_${reservation.id}`;
                 const isExpanded = Boolean(expandedCardKeys[cardKey]);
                 const proofUrl = getProofUrl(reservation);
@@ -1547,13 +2534,21 @@ const ReservationsEnLigne: React.FC = () => {
                 const rawPaymentMethod = reservation.payment.method || "";
                 const pm = String(rawPaymentMethod || "").toLowerCase();
                 const paymentMethodLabel =
-                  pm.includes("orange") || pm.includes("mobile_money")
-                    ? "Orange Money"
+                  pm.includes("mobile_money")
+                    ? "Mobile Money"
                     : pm === "transfer" || pm.includes("virement")
                       ? "Virement"
                       : rawPaymentMethod
                         ? String(rawPaymentMethod)
-                        : "—";
+                        : reservationProviderLabel(reservation);
+                const travelDate = [reservation.trip.date, reservation.trip.time].filter(Boolean).join(" ");
+                const treatmentDate = statusDateForReservation(reservation);
+                const operatorLabel =
+                  reservation.reservation.status === "confirme"
+                    ? reservation.validatedBy
+                    : reservation.reservation.status === "refuse"
+                      ? reservation.refusedBy
+                      : null;
 
                 return (
                   <motion.div
@@ -1594,9 +2589,39 @@ const ReservationsEnLigne: React.FC = () => {
                         </div>
 
                         {/* Trajet */}
-                        <div className="text-xs text-gray-700 dark:text-gray-200 truncate">
+                        <div className="text-xs text-gray-700 dark:text-gray-200 break-words">
                           {reservation.trip.departure || "—"} → {reservation.trip.arrival || "—"}
                         </div>
+                        <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-600 dark:text-gray-300">
+                          <div>
+                            <span className="font-semibold">Voyage: </span>
+                            {travelDate || "Non disponible"}
+                          </div>
+                          <div>
+                            <span className="font-semibold">Ancienneté: </span>
+                            {ageLabel(reservation.createdAt)}
+                          </div>
+                        </div>
+                        {(reservation.reservation.status === "confirme" || reservation.reservation.status === "refuse") && (
+                          <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-600 dark:text-gray-300">
+                            <div>
+                              <span className="font-semibold">
+                                {reservation.reservation.status === "confirme" ? "Validée: " : "Refusée: "}
+                              </span>
+                              {fmtDate(treatmentDate)}
+                            </div>
+                            <div className="truncate">
+                              <span className="font-semibold">Opérateur: </span>
+                              {operatorLabel || "Non disponible"}
+                            </div>
+                          </div>
+                        )}
+                        {reservation.reservation.status === "refuse" && (
+                          <div className="rounded-md border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20 px-2 py-1 text-[11px] text-red-800 dark:text-red-100 break-words">
+                            <span className="font-semibold">Motif refus: </span>
+                            {reservation.refusalReason || "Motif non disponible"}
+                          </div>
+                        )}
 
                         {/* Voir preuve */}
                         <Button
@@ -1751,13 +2776,49 @@ const ReservationsEnLigne: React.FC = () => {
                   </motion.div>
                 );
               })}
-              {visibleReservations.length === 0 && (
+              {viewReservations.length === 0 && (
                 <div className="col-span-full text-center py-6 text-sm text-gray-600 dark:text-gray-300">
-                  Aucune réservation en attente.
+                  Aucune réservation à afficher.
                 </div>
               )}
             </div>
           </AnimatePresence>
+          )}
+
+          <div
+            className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-4 gap-1 border-t border-white/40 p-1.5 shadow-[0_-10px_30px_rgba(15,23,42,0.10)] backdrop-blur md:hidden dark:border-gray-800/80"
+            style={{
+              background: darkMode
+                ? `linear-gradient(135deg, ${primaryColor}24, ${secondaryColor}18), rgba(15,23,42,0.96)`
+                : `linear-gradient(135deg, ${primaryColor}14, ${secondaryColor}10), rgba(255,255,255,0.96)`,
+            }}
+          >
+            {[
+              { id: "dashboard", label: "Aujourd'hui", icon: Calendar },
+              { id: "pending", label: "À traiter", icon: Clock },
+              { id: "validated", label: "Validées", icon: CheckCircle },
+              { id: "refused", label: "Refusées", icon: XCircle },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const active = activeView === tab.id;
+              return (
+                <button
+                  key={`bottom-${tab.id}`}
+                  type="button"
+                  onClick={() => switchDigitalView(tab.id as DigitalOperatorView)}
+                  className={`flex h-12 flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-bold transition ${
+                    active
+                      ? "text-white shadow-sm"
+                      : "bg-white/55 text-gray-600 dark:bg-gray-900/50 dark:text-gray-300"
+                  }`}
+                  style={active ? { background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})` } : undefined}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span className="leading-none">{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     );

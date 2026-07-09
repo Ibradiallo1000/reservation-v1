@@ -81,6 +81,8 @@ const CEOExpensesPage = lazy(() => import("./modules/compagnie/pages/CEOExpenses
 const CompagnieAgencesPage = lazy(() => import("./modules/compagnie/pages/CompagnieAgencesPage"));
 const CompagnieParametresTabsPage = lazy(() => import("./modules/compagnie/pages/CompagnieParametresTabsPage"));
 const CompagnieReservationsPage = lazy(() => import("./modules/compagnie/pages/CompagnieReservationsPage"));
+const AgencyPerformancePage = lazy(() => import("./modules/compagnie/pages/AgencyPerformancePage"));
+const RoutePerformancePage = lazy(() => import("./modules/compagnie/pages/RoutePerformancePage"));
 const CompagnieCustomersPage = lazy(() => import("./modules/compagnie/pages/CompagnieCustomersPage"));
 const CompagnieCustomerProfilePage = lazy(() => import("./modules/compagnie/pages/CompagnieCustomerProfilePage"));
 const CompagnieComptabilitePage = lazy(() => import("./modules/compagnie/pages/CompagnieComptabilitePage"));
@@ -249,6 +251,11 @@ function RoleLanding() {
 
   const target = ROLE_LANDING[role] ?? landingTargetForRoles(role);
   return <Navigate to={target} replace />;
+}
+
+function LegacyNetworkReservationsRedirect() {
+  const { companyId } = useParams();
+  return <Navigate to={`/compagnie/${companyId}/reservations`} replace />;
 }
 
 function LegacyUploadRedirect() {
@@ -458,8 +465,10 @@ const AppRoutes = () => {
           <Route path="fleet-finance" element={<Navigate to="flotte?tab=rentabilite" replace />} />
           <Route path="dashboard" element={<Navigate to="command-center" replace />} />
           <Route path="reservations-reseau" element={<ReservationsReseauPage />} />
-          <Route path="reservations-reseau/reservations" element={<CompagnieReservationsPage />} />
-          <Route path="reservations" element={<Navigate to="reservations-reseau/reservations" replace />} />
+          <Route path="reservations-reseau/reservations" element={<LegacyNetworkReservationsRedirect />} />
+          <Route path="reservations" element={<CompagnieReservationsPage />} />
+          <Route path="performance-agence" element={<AgencyPerformancePage />} />
+          <Route path="performance-trajet" element={<RoutePerformancePage />} />
           <Route path="flotte" element={<FlottePage />} />
           <Route path="comptabilite/validation" element={<CompagnieComptabiliteValidationPage />} />
           <Route path="comptabilite" element={<Navigate to="audit-controle?tab=controle" replace />} />

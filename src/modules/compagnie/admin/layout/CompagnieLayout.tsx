@@ -9,10 +9,13 @@ import {
   DollarSign,
   Truck,
   TrendingUp,
+  ClipboardList,
   FileCheck,
   Users,
   ShieldCheck,
   Building2,
+  Moon,
+  Sun,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -55,7 +58,7 @@ interface Company {
 const CompagnieLayout: React.FC = () => {
   const params = useParams();
   const { user, logout, company, loading, refreshUser } = useAuth();
-  const [darkMode] = useAgencyDarkMode();
+  const [darkMode, toggleDarkMode] = useAgencyDarkMode();
 
   const urlCompanyId = params.companyId;
   const userCompanyId = user?.companyId;
@@ -207,7 +210,12 @@ const CompagnieLayout: React.FC = () => {
         icon: TrendingUp,
         path: `${basePath}/reservations-reseau`,
         end: false,
-        badge: onlineProofsCount,
+      },
+      {
+        label: "Réservations",
+        icon: ClipboardList,
+        path: `${basePath}/reservations`,
+        badge: onlineProofsCount || undefined,
       },
       { label: "Finances", icon: DollarSign, path: `${basePath}/finances` },
       { label: "Agences", icon: Building2, path: `${basePath}/agences` },
@@ -331,14 +339,73 @@ const CompagnieLayout: React.FC = () => {
           primaryColor={theme.colors.primary}
           secondaryColor={theme.colors.secondary}
           onLogout={logout}
-          headerActionsOnly
-          banner={bannerContent}
+          headerLeft={
+            <div className="flex min-w-0 items-center gap-2 lg:hidden">
+              {currentCompany?.logoUrl ? (
+                <img
+                  src={currentCompany.logoUrl}
+                  alt={currentCompany?.nom || "Compagnie"}
+                  className="h-8 w-8 shrink-0 rounded-full bg-white object-cover p-0.5"
+                />
+              ) : (
+                <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/80 text-sm font-bold text-slate-700">
+                  {(currentCompany?.nom || "C").charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold leading-tight text-slate-950 dark:text-white">
+                  {currentCompany?.nom || "Compagnie"}
+                </p>
+                <p className="truncate text-[11px] font-medium leading-tight text-slate-500 dark:text-slate-400">
+                  Command Center
+                </p>
+              </div>
+            </div>
+          }
           headerRight={
-            <NotificationsBell
-              companyId={currentCompanyId}
-              userId={user?.uid}
-              role={user?.role}
-            />
+            <div className="flex items-center gap-1 lg:hidden">
+              <NotificationsBell
+                companyId={currentCompanyId}
+                userId={user?.uid}
+                role={user?.role}
+              />
+              <button
+                type="button"
+                onClick={toggleDarkMode}
+                className="grid h-9 w-9 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                title={darkMode ? "Mode jour" : "Mode nuit"}
+                aria-label={darkMode ? "Mode jour" : "Mode nuit"}
+              >
+                {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+            </div>
+          }
+          headerActionsOnly
+          hideDesktopHeader
+          hideThemeToggle
+          banner={bannerContent}
+          sidebarFooterActions={
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-white/70">
+                Commandes
+              </span>
+              <div className="flex items-center gap-2">
+                <NotificationsBell
+                  companyId={currentCompanyId}
+                  userId={user?.uid}
+                  role={user?.role}
+                />
+                <button
+                  type="button"
+                  onClick={toggleDarkMode}
+                  className="grid h-9 w-9 place-items-center rounded-full bg-white/15 text-white transition hover:bg-white/25"
+                  title={darkMode ? "Mode jour" : "Mode nuit"}
+                  aria-label={darkMode ? "Mode jour" : "Mode nuit"}
+                >
+                  {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
           }
           mainClassName="agency-content-transition"
         />

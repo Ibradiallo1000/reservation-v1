@@ -9,11 +9,11 @@ export function RevenueMiniChart({ data, height = 48 }: RevenueMiniChartProps) {
   const maxValue = Math.max(...data.map((d) => d.value), 1);
 
   return (
-    <div className="flex items-end gap-1" style={{ height }}>
+    <div className="flex min-w-0 items-end gap-1 overflow-hidden" style={{ height }}>
       {data.map((item, index) => {
         const barHeight = (item.value / maxValue) * height;
         return (
-          <div key={index} className="flex-1 flex flex-col items-center gap-1">
+          <div key={index} className="flex min-w-0 flex-1 flex-col items-center gap-1">
             <div
               className="w-full rounded-t-sm transition-all duration-500"
               style={{
@@ -22,7 +22,7 @@ export function RevenueMiniChart({ data, height = 48 }: RevenueMiniChartProps) {
                 opacity: item.value > 0 ? 0.9 : 0.3,
               }}
             />
-            <span className="text-[8px] text-gray-400 truncate w-full text-center">
+            <span className="block w-full truncate text-center text-[8px] text-gray-400">
               {item.label}
             </span>
           </div>

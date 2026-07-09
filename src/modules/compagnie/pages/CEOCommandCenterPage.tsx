@@ -7,6 +7,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useGlobalPeriodContext } from "@/contexts/GlobalPeriodContext";
 import { StandardLayoutWrapper } from "@/ui";
 import { type PeriodKind } from "@/shared/date/periodUtils";
+import { getTodayBamako } from "@/shared/date/dateUtilsTz";
+import { formatActivityPeriodLabelFr } from "@/shared/date/formatActivityPeriodFr";
 import CeoPilotageDashboard from "@/modules/compagnie/commandCenter/CeoPilotageDashboard";
 
 export default function CEOCommandCenterPage() {
@@ -27,13 +29,27 @@ export default function CEOCommandCenterPage() {
     (v: string) => globalPeriod.setCustomRange(globalPeriod.startDate, v),
     [globalPeriod]
   );
+  const activePeriodLabel = React.useMemo(
+    () =>
+      formatActivityPeriodLabelFr(
+        globalPeriod.startDate,
+        globalPeriod.endDate,
+        getTodayBamako()
+      ),
+    [globalPeriod.startDate, globalPeriod.endDate]
+  );
 
   return (
     <StandardLayoutWrapper noVerticalPadding className="!py-4">
       <header className="flex w-full flex-row flex-wrap items-center justify-between gap-3">
-        <h1 className="text-base font-semibold tracking-tight text-gray-900 dark:text-white">
-          Dashboard
-        </h1>
+        <div>
+          <h1 className="text-base font-semibold tracking-tight text-gray-900 dark:text-white">
+            Dashboard CEO
+          </h1>
+          <p className="mt-0.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+            {activePeriodLabel}
+          </p>
+        </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <label htmlFor="ceo-period" className="sr-only">
             Période
@@ -44,9 +60,9 @@ export default function CEOCommandCenterPage() {
             onChange={(e) => setPeriod(e.target.value as PeriodKind)}
             className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
           >
-            <option value="day">Aujourd&apos;hui</option>
-            <option value="week">Cette semaine</option>
-            <option value="month">Ce mois</option>
+            <option value="day">Jour</option>
+            <option value="week">Semaine</option>
+            <option value="month">Mois</option>
             <option value="custom">Personnalisé</option>
           </select>
           {period === "custom" && (

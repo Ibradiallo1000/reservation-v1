@@ -10,7 +10,10 @@ import { createFinancialTransaction } from "@/modules/compagnie/treasury/financi
 import { LOCATION_TYPE } from "@/modules/compagnie/cash/cashTypes";
 import { decrementReservedSeats } from "@/modules/compagnie/tripInstances/tripInstanceService";
 import { commitOperatorValidatedOnlineReservation } from "@/modules/compagnie/tripInstances/onlineReservationOperatorCommit";
-import { buildStatutTransitionPayload } from "@/modules/agence/services/reservationStatutService";
+import {
+  buildStatutTransitionPayload,
+  ensureOnlineReservationCommercialActivityLog,
+} from "@/modules/agence/services/reservationStatutService";
 import type { Payment } from "@/types/payment";
 import { confirmPayment, rejectPayment } from "./paymentService";
 
@@ -194,6 +197,8 @@ export async function validatePendingOnlinePaymentAndSyncReservation(
     }
   }
 
+  await ensureOnlineReservationCommercialActivityLog(reservationRef);
+
   const latestSnap = await getDoc(reservationRef);
   const latestData = latestSnap.exists()
     ? (latestSnap.data() as Record<string, unknown>)
@@ -306,6 +311,17 @@ export async function rejectPendingOnlinePaymentAndSyncReservation(
   const reservationData = reservationSnap.data() as Record<string, unknown>;
   const lifecycle = String(reservationData?.status ?? "").toLowerCase();
   const legacyStatut = String(reservationData?.statut ?? "").toLowerCase();
+
+  if (lifecycle === "refuse" || legacyStatut === "refuse") {
+    console.warn("[ONLINE_PAYMENT_REJECT_RESERVATION_ALREADY_REFUSED]", {
+      path: reservationRef.path,
+      companyId,
+      agencyId: payment.agencyId,
+      reservationId: payment.reservationId,
+      uid,
+    });
+    return;
+  }
 
   const oldStatus = ["preuve_recue", "verification"].includes(legacyStatut)
     ? legacyStatut

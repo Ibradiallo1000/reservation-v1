@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import {
   FaChevronLeft,
   FaChevronRight,
@@ -69,6 +69,7 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
   const { user, company } = useAuth();
   const money = useFormatCurrency();
   const { companyId: companyIdFromUrl } = useParams();
+  const [searchParams] = useSearchParams();
 
   // 🔥 LOGIQUE UNIFIÉE
   const companyId = companyIdFromUrl ?? user?.companyId ?? "";
@@ -104,7 +105,7 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
   // Filtres "détails"
   const [filterDepart, setFilterDepart] = useState("");
   const [filterArrivee, setFilterArrivee] = useState("");
-  const [filterCanal, setFilterCanal] = useState<"tous" | "guichet" | "en ligne">("tous");
+  const [filterCanal, setFilterCanal] = useState<"tous" | "guichet" | "en ligne" | "courrier">("tous");
 
   // Pagination "détails"
   const [currentPage, setCurrentPage] = useState(1);
@@ -207,6 +208,18 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
     };
   }, [companyId, agences, start, end, networkPage, pageCursors]);
 
+  useEffect(() => {
+    const canal = (searchParams.get("canal") || "").toLowerCase();
+    const agency = searchParams.get("agency");
+    if (canal === "guichet") setFilterCanal("guichet");
+    else if (canal === "digital" || canal === "online" || canal === "en-ligne") setFilterCanal("en ligne");
+    else if (canal === "courrier") setFilterCanal("courrier");
+    else setFilterCanal("tous");
+    if (agency) setSelectedAgencyId(agency);
+    if (canal || agency) setShowFilters(true);
+    setCurrentPage(1);
+  }, [searchParams]);
+
   const goNextNetworkPage = () => {
     if (!hasNextPage || !lastVisible) return;
     setPageCursors((prev) => {
@@ -235,10 +248,22 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
     return `${a.nom}${loc}`;
   };
 
+  const groupedDataFilteredByCanal = useMemo(() => {
+    if (filterCanal === "tous") return groupedData;
+    return groupedData
+      .map((group) => ({
+        ...group,
+        reservations: group.reservations.filter(
+          (r) => (r.canal || "").toLowerCase() === filterCanal,
+        ),
+      }))
+      .filter((group) => group.reservations.length > 0);
+  }, [filterCanal, groupedData]);
+
   // Détails (liste agrégée par trajet)
   const aggregatedByTrajet = useMemo(() => {
     const rows =
-      groupedData.find((g) => g.agencyId === selectedAgencyId)?.reservations ||
+      groupedDataFilteredByCanal.find((g) => g.agencyId === selectedAgencyId)?.reservations ||
       [];
     // Filtres de la zone détails
     let filtered = rows;
@@ -250,11 +275,6 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
       filtered = filtered.filter((r) =>
         (r.arrivee || "").toLowerCase().includes(filterArrivee.toLowerCase())
       );
-    if (filterCanal !== "tous")
-      filtered = filtered.filter(
-        (r) => (r.canal || "").toLowerCase() === filterCanal
-      );
-
     // Agrégation par "Départ → Arrivée"
     const map: Record<
       string,
@@ -289,7 +309,7 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
     }
     const arr = Object.values(map).sort((a, b) => b.ca - a.ca);
     return arr;
-  }, [groupedData, selectedAgencyId, filterDepart, filterArrivee, filterCanal]);
+  }, [groupedDataFilteredByCanal, selectedAgencyId, filterDepart, filterArrivee]);
 
   // Pagination des détails agrégés
   const totalPages = Math.ceil(aggregatedByTrajet.length / 10);
@@ -301,14 +321,14 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
   // Totaux agence sélectionnée
   const totalsSelected = useMemo(() => {
     const rows =
-      groupedData.find((g) => g.agencyId === selectedAgencyId)?.reservations ||
+      groupedDataFilteredByCanal.find((g) => g.agencyId === selectedAgencyId)?.reservations ||
       [];
     const ca = rows.reduce((s, r) => s + (r.montant || 0), 0);
     const billets = rows.length;
     const guichet = rows.filter((r) => r.canal === "guichet").length;
     const enLigne = rows.filter((r) => r.canal === "en ligne").length;
     return { ca, billets, guichet, enLigne };
-  }, [groupedData, selectedAgencyId]);
+  }, [groupedDataFilteredByCanal, selectedAgencyId]);
 
   /* ----------------------------- Export CSV ----------------------------- */
   const exportAggregatedCSV = () => {
@@ -380,9 +400,7 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
     </>
   );
 
-  const basePath = `/compagnie/${companyId}`;
   const breadcrumb = [
-    { label: "Réservations réseau", path: `${basePath}/reservations-reseau` },
     { label: "Réservations" },
   ];
 
@@ -396,8 +414,8 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
         primaryColorVar=""
         titleClassName="text-gray-900 dark:text-white"
       />
-        {/* Filtres détails (départ, arrivée, canal) — affichés quand une agence est sélectionnée */}
-        {showFilters && selectedAgencyId && (
+        {/* Filtres détails (départ, arrivée, canal) */}
+        {showFilters && (
           <div
             className="rounded-xl p-4 mb-6 border shadow-sm"
             style={{
@@ -436,6 +454,7 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
                   <option value="tous">Tous</option>
                   <option value="guichet">Guichet</option>
                   <option value="en ligne">En ligne</option>
+                  <option value="courrier">Courrier</option>
                 </select>
               </div>
             </div>
@@ -450,7 +469,7 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
         ) : (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6 mb-8">
-              {groupedData.map((group) => {
+              {groupedDataFilteredByCanal.map((group) => {
                 const a = findAgency(group.agencyId);
                 const ca = group.reservations.reduce((s, r) => s + (r.montant || 0), 0);
                 const billets = group.reservations.length;
@@ -548,6 +567,12 @@ const CompagnieReservationsPage: React.FC<CompagnieReservationsPageProps> = ({ e
                 );
               })}
             </div>
+
+            {groupedDataFilteredByCanal.length === 0 && (
+              <div className="mb-8 rounded-xl border border-dashed border-gray-300 bg-white/70 px-4 py-8 text-center text-sm text-gray-600 dark:border-slate-600 dark:bg-slate-800/70 dark:text-slate-300">
+                Aucune réservation ne correspond au filtre sélectionné sur cette période.
+              </div>
+            )}
 
             {/* Détails agence (agrégés par trajet) */}
             <div className="mb-8 flex items-center justify-between rounded-xl border bg-white/70 px-4 py-3 text-sm dark:bg-slate-800/70">

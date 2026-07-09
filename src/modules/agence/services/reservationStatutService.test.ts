@@ -20,7 +20,10 @@ vi.mock("@/modules/compagnie/activity/activityLogsService", () => ({
   writeOnlineTicketActivityInTransaction: mocks.writeOnlineTicketActivityInTransaction,
 }));
 
-import { recordOnlineReservationCommercialActivityInTransaction } from "./reservationStatutService";
+import {
+  isValidOnlineTicketActivityLog,
+  recordOnlineReservationCommercialActivityInTransaction,
+} from "./reservationStatutService";
 
 const tx = {} as Transaction;
 const reservationRef = { id: "res-1" } as DocumentReference;
@@ -46,7 +49,7 @@ describe("recordOnlineReservationCommercialActivityInTransaction", () => {
       reservationRef,
       data: onlineReservation,
       agencyTimezone: "Africa/Bamako",
-      activityLogExists: false,
+      activityLogAlreadyValid: false,
     });
 
     expect(mocks.addTicketRevenueToDailyStats).toHaveBeenCalledWith(
@@ -75,7 +78,7 @@ describe("recordOnlineReservationCommercialActivityInTransaction", () => {
       reservationRef,
       data: { ...onlineReservation, ticketRevenueCountedInDailyStats: true },
       agencyTimezone: "Africa/Bamako",
-      activityLogExists: true,
+      activityLogAlreadyValid: true,
     });
 
     expect(mocks.addTicketRevenueToDailyStats).not.toHaveBeenCalled();
@@ -89,12 +92,17 @@ describe("recordOnlineReservationCommercialActivityInTransaction", () => {
       reservationRef,
       data: { ...onlineReservation, ticketRevenueCountedInDailyStats: true },
       agencyTimezone: "Africa/Bamako",
-      activityLogExists: false,
+      activityLogAlreadyValid: false,
     });
 
     expect(mocks.addTicketRevenueToDailyStats).not.toHaveBeenCalled();
     expect(mocks.writeOnlineTicketActivityInTransaction).toHaveBeenCalledOnce();
     expect(patch).toEqual({});
+  });
+
+  it("treats malformed existing online activity logs as invalid", () => {
+    expect(isValidOnlineTicketActivityLog({ type: "ticket", source: "guichet", status: "confirmed" })).toBe(false);
+    expect(isValidOnlineTicketActivityLog({ type: "online", source: "online", status: "confirmed" })).toBe(true);
   });
 
   it("does not account a guichet reservation", () => {
@@ -103,7 +111,7 @@ describe("recordOnlineReservationCommercialActivityInTransaction", () => {
       reservationRef,
       data: { ...onlineReservation, canal: "guichet" },
       agencyTimezone: "Africa/Bamako",
-      activityLogExists: false,
+      activityLogAlreadyValid: false,
     });
 
     expect(mocks.addTicketRevenueToDailyStats).not.toHaveBeenCalled();

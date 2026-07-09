@@ -4,11 +4,18 @@
 import type { DocumentData, QueryDocumentSnapshot, Timestamp } from "firebase/firestore";
 import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
 import {
+  aggregateActivityLogDocs,
+  aggregateDailyStatsDocs,
+  debugCommercialActivityPipeline,
   queryDailyStatsInRange,
   parseCommercialActivityLog,
+  shouldPreferActivityLogsOverDailyStats,
   shouldUseDailyStatsForActivity,
+  summarizeActivityLogDocs,
+  summarizeCommercialActivity,
 } from "@/modules/compagnie/networkStats/activityCore";
 import { getDateKeyInTimezone, TZ_BAMAKO } from "@/shared/date/dateUtilsTz";
+import { getInclusiveRangeDays } from "@/shared/date/periodUtils";
 
 export type AgencyActivityRow = {
   agencyId: string;
@@ -35,6 +42,18 @@ function logCreatedAt(data: Record<string, unknown>): Date {
 
 function emptyAgencyTotals() {
   return { ventes: 0, billets: 0, colis: 0, placesGuichet: 0, placesOnline: 0 };
+}
+
+function agencyRowsScore(rows: AgencyActivityRow[]): number {
+  return rows.reduce(
+    (sum, row) =>
+      sum +
+      (Number(row.ventes) || 0) +
+      (Number(row.billets) || 0) +
+      (Number(row.colis) || 0) +
+      (Number(row.placesOnline) || 0),
+    0
+  );
 }
 
 /** Agrège par agence à partir de documents `activityLogs` déjà chargés (une seule lecture Firestore). */
@@ -107,10 +126,48 @@ export async function getNetworkActivityByAgency(
       cur.colis += Number(data.courierParcels ?? data.parcelCount ?? 0) || 0;
       byAgency.set(aid, cur);
     }
-    return agencyMeta.map((a) => ({ agencyId: a.id, ...(byAgency.get(a.id) ?? emptyAgencyTotals()) }));
+    const dailyRows = agencyMeta.map((a) => ({ agencyId: a.id, ...(byAgency.get(a.id) ?? emptyAgencyTotals()) }));
+    if (getInclusiveRangeDays(start, end) <= 31) {
+      try {
+        const logDocs = await queryActivityLogsInRange(companyId, start, end);
+        const logRows = aggregateNetworkActivityByAgencyFromDocs(logDocs, agencyMeta);
+        const logsActivity = aggregateActivityLogDocs(logDocs);
+        const dailyActivity = aggregateDailyStatsDocs(docs);
+        if (
+          shouldPreferActivityLogsOverDailyStats(dailyActivity, logsActivity) ||
+          agencyRowsScore(logRows) > agencyRowsScore(dailyRows)
+        ) {
+          debugCommercialActivityPipeline("getNetworkActivityByAgency", {
+            companyId,
+            sourceRetenue: "activityLogs",
+            dailyStatsDocs: docs.length,
+            dailyStats: summarizeCommercialActivity(dailyActivity),
+            activityLogs: summarizeActivityLogDocs(logDocs),
+            rows: logRows,
+          });
+          return logRows;
+        }
+      } catch {
+        return dailyRows;
+      }
+    }
+    debugCommercialActivityPipeline("getNetworkActivityByAgency", {
+      companyId,
+      sourceRetenue: "dailyStats",
+      dailyStatsDocs: docs.length,
+      rows: dailyRows,
+    });
+    return dailyRows;
   }
   const docs = await queryActivityLogsInRange(companyId, start, end);
-  return aggregateNetworkActivityByAgencyFromDocs(docs, agencyMeta);
+  const rows = aggregateNetworkActivityByAgencyFromDocs(docs, agencyMeta);
+  debugCommercialActivityPipeline("getNetworkActivityByAgency", {
+    companyId,
+    sourceRetenue: "activityLogs",
+    activityLogs: summarizeActivityLogDocs(docs),
+    rows,
+  });
+  return rows;
 }
 
 export function aggregateRouteActivityRowsFromDocs(docs: QueryDocumentSnapshot<DocumentData>[]): RouteActivityRow[] {

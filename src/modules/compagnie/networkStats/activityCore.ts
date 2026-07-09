@@ -76,11 +76,11 @@ export function parseCommercialActivityLog(data: Record<string, unknown>): Parse
   const agencyId = String(data.agencyId ?? "").trim();
   const amount = Number(data.amount ?? 0);
   const seats = Number(data.seats ?? 0);
-  const type = String(data.type ?? "");
-  const source = String(data.source ?? "");
+  const type = String(data.type ?? "").toLowerCase().trim();
+  const source = String(data.source ?? "").toLowerCase().trim();
   if (type === "courier") return { kind: "courier", amount, agencyId };
   if (type === "ticket" && source === "guichet") return { kind: "guichet_ticket", amount, seats, agencyId };
-  if (type === "online" && source === "online") return { kind: "online_ticket", amount, seats, agencyId };
+  if (source === "online" && (type === "online" || type === "ticket")) return { kind: "online_ticket", amount, seats, agencyId };
   return null;
 }
 
@@ -203,6 +203,103 @@ export function aggregateDailyStatsDocs(docs: DailyStatsActivityDoc[]): UnifiedC
   };
 }
 
+export function commercialActivityScore(activity: UnifiedCommercialActivity): number {
+  return (
+    (Number(activity.totalAmount) || 0) +
+    (Number(activity.billets.tickets) || 0) +
+    (Number(activity.billets.reservationCount) || 0) +
+    (Number(activity.courier.parcels) || 0)
+  );
+}
+
+export function summarizeCommercialActivity(activity: UnifiedCommercialActivity) {
+  return {
+    totalAmount: Number(activity.totalAmount) || 0,
+    billetsAmount: Number(activity.billets.amount) || 0,
+    billetsTickets: Number(activity.billets.tickets) || 0,
+    billetsReservations: Number(activity.billets.reservationCount) || 0,
+    guichetAmount: Number(activity.billets.guichet.amount) || 0,
+    guichetTickets: Number(activity.billets.guichet.tickets) || 0,
+    guichetReservations: Number(activity.billets.guichet.reservationCount) || 0,
+    onlineAmount: Number(activity.billets.online.amount) || 0,
+    onlineTickets: Number(activity.billets.online.tickets) || 0,
+    onlineReservations: Number(activity.billets.online.reservationCount) || 0,
+    courierAmount: Number(activity.courier.amount) || 0,
+    courierParcels: Number(activity.courier.parcels) || 0,
+  };
+}
+
+export function summarizeActivityLogDocs(docs: QueryDocumentSnapshot<DocumentData>[]) {
+  let onlineLogCount = 0;
+  let guichetLogCount = 0;
+  let courierLogCount = 0;
+  let ignoredLogCount = 0;
+  const onlineLogIds: string[] = [];
+  const ignoredSamples: Array<{ id: string; type: unknown; source: unknown; status: unknown }> = [];
+
+  for (const d of docs) {
+    const data = d.data() as Record<string, unknown>;
+    const parsed = parseCommercialActivityLog(data);
+    if (!parsed) {
+      ignoredLogCount += 1;
+      if (ignoredSamples.length < 5) {
+        ignoredSamples.push({ id: d.id, type: data.type, source: data.source, status: data.status });
+      }
+      continue;
+    }
+    if (parsed.kind === "online_ticket") {
+      onlineLogCount += 1;
+      if (onlineLogIds.length < 10) onlineLogIds.push(d.id);
+    } else if (parsed.kind === "guichet_ticket") {
+      guichetLogCount += 1;
+    } else {
+      courierLogCount += 1;
+    }
+  }
+
+  return {
+    logCount: docs.length,
+    onlineLogCount,
+    guichetLogCount,
+    courierLogCount,
+    ignoredLogCount,
+    onlineLogIds,
+    ignoredSamples,
+    ...summarizeCommercialActivity(aggregateActivityLogDocs(docs)),
+  };
+}
+
+export function debugCommercialActivityPipeline(label: string, payload: Record<string, unknown>): void {
+  if (!import.meta.env.DEV) return;
+  console.info(`[CEO_ACTIVITY_DEBUG] ${label}`, payload);
+}
+
+export function hasOnlineCommercialActivity(activity: UnifiedCommercialActivity): boolean {
+  return (
+    (Number(activity.billets.online.amount) || 0) > 0 ||
+    (Number(activity.billets.online.tickets) || 0) > 0 ||
+    (Number(activity.billets.online.reservationCount) || 0) > 0
+  );
+}
+
+export function shouldPreferActivityLogsOverDailyStats(
+  dailyActivity: UnifiedCommercialActivity,
+  logsActivity: UnifiedCommercialActivity
+): boolean {
+  const logsScore = commercialActivityScore(logsActivity);
+  const dailyScore = commercialActivityScore(dailyActivity);
+  if (logsScore <= 0) return false;
+  if (hasOnlineCommercialActivity(logsActivity) && logsScore >= dailyScore) return true;
+  return logsScore > dailyScore;
+}
+
+function chooseMostCompleteCommercialActivity(
+  dailyActivity: UnifiedCommercialActivity,
+  logsActivity: UnifiedCommercialActivity
+): UnifiedCommercialActivity {
+  return shouldPreferActivityLogsOverDailyStats(dailyActivity, logsActivity) ? logsActivity : dailyActivity;
+}
+
 export function buildActivityChartBucketsFromDailyStats(
   docs: DailyStatsActivityDoc[],
   dateFrom: string,
@@ -250,10 +347,58 @@ export async function getUnifiedCommercialActivity(
   const end = getEndOfDayForDate(period.dateTo, tz);
   if (shouldUseDailyStatsForActivity(start, end)) {
     const docs = await queryDailyStatsInRange(companyId, period.dateFrom, period.dateTo, options?.agencyId);
-    return aggregateDailyStatsDocs(docs);
+    const dailyActivity = aggregateDailyStatsDocs(docs);
+    if (getInclusiveRangeDays(start, end) <= 31) {
+      try {
+        const logDocs = await queryActivityLogsInRange(companyId, start, end, options?.agencyId);
+        const logsActivity = aggregateActivityLogDocs(logDocs);
+        const chosen = chooseMostCompleteCommercialActivity(dailyActivity, logsActivity);
+        debugCommercialActivityPipeline("getUnifiedCommercialActivity", {
+          companyId,
+          agencyId: options?.agencyId ?? null,
+          period,
+          sourceRetenue: chosen === logsActivity ? "activityLogs" : "dailyStats",
+          dailyStatsDocs: docs.length,
+          dailyStats: summarizeCommercialActivity(dailyActivity),
+          activityLogs: summarizeActivityLogDocs(logDocs),
+          final: summarizeCommercialActivity(chosen),
+        });
+        return chosen;
+      } catch {
+        debugCommercialActivityPipeline("getUnifiedCommercialActivity", {
+          companyId,
+          agencyId: options?.agencyId ?? null,
+          period,
+          sourceRetenue: "dailyStats",
+          dailyStatsDocs: docs.length,
+          dailyStats: summarizeCommercialActivity(dailyActivity),
+          activityLogsUnavailable: true,
+          final: summarizeCommercialActivity(dailyActivity),
+        });
+        return dailyActivity;
+      }
+    }
+    debugCommercialActivityPipeline("getUnifiedCommercialActivity", {
+      companyId,
+      agencyId: options?.agencyId ?? null,
+      period,
+      sourceRetenue: "dailyStats",
+      dailyStatsDocs: docs.length,
+      final: summarizeCommercialActivity(dailyActivity),
+    });
+    return dailyActivity;
   }
   const docs = await queryActivityLogsInRange(companyId, start, end, options?.agencyId);
-  return aggregateActivityLogDocs(docs);
+  const activity = aggregateActivityLogDocs(docs);
+  debugCommercialActivityPipeline("getUnifiedCommercialActivity", {
+    companyId,
+    agencyId: options?.agencyId ?? null,
+    period,
+    sourceRetenue: "activityLogs",
+    activityLogs: summarizeActivityLogDocs(docs),
+    final: summarizeCommercialActivity(activity),
+  });
+  return activity;
 }
 
 function logDocCreatedAt(d: QueryDocumentSnapshot<DocumentData>): Date {

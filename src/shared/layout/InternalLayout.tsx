@@ -62,8 +62,14 @@ export interface InternalLayoutProps {
   headerLeft?: React.ReactNode;
   /** Content rendered in the header's right area before logout (e.g. notification bell) */
   headerRight?: React.ReactNode;
+  /** Content rendered above the sidebar profile footer (e.g. module-scoped actions) */
+  sidebarFooterActions?: React.ReactNode;
   /** Keep only custom actions and the theme toggle in the header. */
   headerActionsOnly?: boolean;
+  /** Hide the desktop top header when a sidebar module owns its chrome. */
+  hideDesktopHeader?: boolean;
+  /** Hide the built-in theme toggle. */
+  hideThemeToggle?: boolean;
   /** Render Outlet (default) or children */
   children?: React.ReactNode;
   /** Optional class for main content area (e.g. agency-content-transition) */
@@ -108,7 +114,10 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
   secondaryColor,
   headerLeft,
   headerRight,
+  sidebarFooterActions,
   headerActionsOnly = false,
+  hideDesktopHeader = false,
+  hideThemeToggle = false,
   onLogout,
   banner,
   children,
@@ -138,7 +147,10 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
       secondary={secondary}
       headerLeft={headerLeft}
       headerRight={headerRight}
+      sidebarFooterActions={sidebarFooterActions}
       headerActionsOnly={headerActionsOnly}
+      hideDesktopHeader={hideDesktopHeader}
+      hideThemeToggle={hideThemeToggle}
       onLogout={onLogout}
       banner={banner}
       mainClassName={mainClassName}
@@ -162,6 +174,8 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
       headerLeft={headerLeft}
       headerRight={headerRight}
       headerActionsOnly={headerActionsOnly}
+      hideDesktopHeader={hideDesktopHeader}
+      hideThemeToggle={hideThemeToggle}
       onLogout={onLogout}
       banner={banner}
       mainClassName={mainClassName}
@@ -189,7 +203,10 @@ interface LayoutVariantProps {
   secondary: string;
   headerLeft?: React.ReactNode;
   headerRight?: React.ReactNode;
+  sidebarFooterActions?: React.ReactNode;
   headerActionsOnly?: boolean;
+  hideDesktopHeader?: boolean;
+  hideThemeToggle?: boolean;
   onLogout: () => void;
   banner?: React.ReactNode;
   children?: React.ReactNode;
@@ -295,7 +312,10 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
   secondary,
   headerLeft,
   headerRight,
+  sidebarFooterActions,
   headerActionsOnly = false,
+  hideDesktopHeader = false,
+  hideThemeToggle = false,
   onLogout,
   banner,
   children,
@@ -308,6 +328,15 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
   const { isDark, cycleTheme } = useTheme(themeStorageKey, binaryThemeToggle);
   const location = useLocation();
   const pathname = location.pathname;
+  const mobileBottomSections = useMemo(
+    () => {
+      if (role !== "CEO") return [];
+      return sections.filter((section) =>
+        ["Dashboard", "Activité réseau", "Réservations", "Finances"].includes(section.label)
+      );
+    },
+    [role, sections]
+  );
 
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => {
     const initial = new Set<string>();
@@ -495,6 +524,12 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
         })}
       </nav>
 
+      {sidebarFooterActions && !collapsed && (
+        <div className="border-t border-white/15 px-4 py-3">
+          {sidebarFooterActions}
+        </div>
+      )}
+
       {/* Profile footer */}
       <div className="px-4 py-3 border-t border-white/15" style={{ backgroundColor: `${primary}DD` }}>
         <div className="flex items-center justify-between">
@@ -578,6 +613,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
           <header
             className={cn(
               "sticky top-0 flex min-w-0 items-center gap-2 border-b border-gray-200/60 px-3 shadow-sm dark:border-slate-600/50 sm:gap-4 sm:px-4 md:px-6",
+              hideDesktopHeader && "lg:hidden",
               DESIGN.zIndex.header,
               DESIGN.layout.headerHeight,
             )}
@@ -603,15 +639,17 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
                 </div>
               )}
               {headerRight}
-              <button
-                type="button"
-                onClick={cycleTheme}
-                className="p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
-                title={isDark ? "Mode clair" : "Mode sombre"}
-                aria-label={isDark ? "Mode clair" : "Mode sombre"}
-              >
-                {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-              </button>
+              {!hideThemeToggle && (
+                <button
+                  type="button"
+                  onClick={cycleTheme}
+                  className="p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
+                  title={isDark ? "Mode clair" : "Mode sombre"}
+                  aria-label={isDark ? "Mode clair" : "Mode sombre"}
+                >
+                  {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                </button>
+              )}
               {!headerActionsOnly && (
                 <button
                   onClick={onLogout}
@@ -628,13 +666,45 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
           {banner}
 
           {/* Page content */}
-          <main className={cn("flex-1 overflow-y-auto overflow-x-hidden min-w-0", DESIGN.pagePadding)}>
+          <main className={cn("flex-1 overflow-y-auto overflow-x-hidden min-w-0", DESIGN.pagePadding, "pb-24 lg:pb-4")}>
             <div className={cn("w-full min-w-0", DESIGN.pageWidth, mainClassName)}>
               {children ?? <Outlet />}
             </div>
           </main>
         </div>
       </div>
+
+      {mobileBottomSections.length > 0 && (
+        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:hidden">
+          <div className="mx-auto grid max-w-md grid-cols-4 gap-1">
+            {mobileBottomSections.map(({ label, icon: Icon, path, badge, end }) => {
+              const active = isNavPathActive(pathname, path, end);
+              return (
+                <NavLink
+                  key={path}
+                  to={path}
+                  end={end}
+                  className={cn(
+                    "relative flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-[10px] font-semibold leading-tight transition",
+                    active
+                      ? "bg-orange-50 text-orange-700 dark:bg-orange-950/35 dark:text-orange-200"
+                      : "text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-slate-100"
+                  )}
+                  onClick={() => setMobileOpen(false)}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="max-w-full truncate">{label === "Activité réseau" ? "Activité" : label}</span>
+                  {typeof badge === "number" && badge > 0 && (
+                    <span className="absolute right-2 top-1 rounded-full bg-red-500 px-1 text-[9px] leading-3 text-white">
+                      {badge > 9 ? "9+" : badge}
+                    </span>
+                  )}
+                </NavLink>
+              );
+            })}
+          </div>
+        </nav>
+      )}
     </div>
   );
 };
@@ -654,6 +724,7 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
   secondary,
   headerLeft,
   headerRight,
+  hideThemeToggle = false,
   onLogout,
   banner,
   children,
@@ -731,15 +802,17 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
                 <div className="text-xs text-gray-500 dark:text-slate-400 truncate">{role}</div>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={cycleTheme}
-              className="p-1.5 sm:p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
-              title={isDark ? "Mode clair" : "Mode sombre"}
-              aria-label={isDark ? "Mode clair" : "Mode sombre"}
-            >
-              {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            </button>
+            {!hideThemeToggle && (
+              <button
+                type="button"
+                onClick={cycleTheme}
+                className="p-1.5 sm:p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"
+                title={isDark ? "Mode clair" : "Mode sombre"}
+                aria-label={isDark ? "Mode clair" : "Mode sombre"}
+              >
+                {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </button>
+            )}
             <button
               onClick={onLogout}
               className="p-1.5 sm:p-2 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-600 dark:text-slate-300"

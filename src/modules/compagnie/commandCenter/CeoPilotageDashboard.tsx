@@ -4,6 +4,7 @@
  * getNetworkStatsChartData, getNetworkActivityByAgency.
  */
 import React, { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { collection, getDocs } from "firebase/firestore";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -19,29 +20,42 @@ import {
   getStartOfDayInBamako,
   getEndOfDayInBamako,
 } from "@/shared/date/dateUtilsTz";
-import { formatActivityPeriodLabelFr } from "@/shared/date/formatActivityPeriodFr";
-import { getUnifiedCommercialActivity } from "@/modules/compagnie/networkStats/activityCore";
-import { RevenueReservationsChart } from "@/modules/compagnie/admin/components/CompanyDashboard/RevenueReservationsChart";
-import { getNetworkStatsChartData } from "@/modules/compagnie/networkStats/networkStatsService";
 import {
+  aggregateActivityLogDocs,
+  debugCommercialActivityPipeline,
+  getUnifiedCommercialActivity,
+  shouldPreferActivityLogsOverDailyStats,
+  shouldUseDailyStatsForActivity,
+  summarizeActivityLogDocs,
+  summarizeCommercialActivity,
+} from "@/modules/compagnie/networkStats/activityCore";
+import { queryActivityLogsInRange } from "@/modules/compagnie/activity/activityLogsService";
+import { RevenueMiniChart } from "@/modules/agence/dashboard/components";
+import {
+  buildNetworkChartDataFromActivityLogDocs,
+  getNetworkStatsChartData,
+} from "@/modules/compagnie/networkStats/networkStatsService";
+import {
+  aggregateNetworkActivityByAgencyFromDocs,
   getNetworkActivityByAgency,
   type AgencyActivityRow,
 } from "@/modules/compagnie/networkStats/networkActivityService";
 import type { PeriodKind } from "@/shared/date/periodUtils";
-import { isInteractiveRangeTooLarge, largeRangeMessage } from "@/shared/date/periodUtils";
+import { getInclusiveRangeDays, isInteractiveRangeTooLarge, largeRangeMessage } from "@/shared/date/periodUtils";
 import {
-  Activity,
+  ArrowRight,
   Building2,
+  CreditCard,
   Eye,
   EyeOff,
   Landmark,
   Minus,
+  Package,
+  ShieldAlert,
   TrendingDown,
   TrendingUp,
-  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import InfoTooltip from "@/shared/ui/InfoTooltip";
 import { resolveLiquidCompanyColors } from "@/modules/compagnie/finances/financesLiquidityCardStyles";
 
 dayjs.extend(utc);
@@ -58,6 +72,14 @@ type GapLevel = "ok" | "warn" | "bad";
 type AlertSeverity = "warn" | "bad";
 
 type AlertItem = { message: string; severity: AlertSeverity; action?: string };
+type CommercialActivity = Awaited<ReturnType<typeof getUnifiedCommercialActivity>>;
+type CompanyFinance = Awaited<ReturnType<typeof getUnifiedCompanyFinance>>;
+type NetworkActivityBundle = {
+  activity: CommercialActivity;
+  chartData: Awaited<ReturnType<typeof getNetworkStatsChartData>>;
+  rows: AgencyActivityRow[];
+  unavailable?: boolean;
+};
 
 /** Inchangé : utilisé uniquement pour les alertes intelligentes (seuils relatifs). */
 function gapLevel(activity: number, encaissement: number): { gap: number; level: GapLevel } {
@@ -117,31 +139,263 @@ function trendPhrase(stable: boolean, delta: number): string {
   return delta >= 0 ? "en hausse" : "en baisse";
 }
 
-/** Carte dashboard (style unique mobile / desktop). */
 const DASH_CARD =
-  "rounded-xl bg-white p-4 shadow-sm dark:bg-slate-900 sm:p-5";
-
-const sectionTitle = "text-base font-semibold tracking-tight text-gray-900 dark:text-white";
-
-const kpiLabel = "text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400";
-
-const kpiAmount =
-  "text-2xl font-bold tabular-nums tracking-tight text-slate-900 dark:text-slate-50";
-
-const iconBox =
-  "mb-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-700 dark:bg-slate-800 dark:text-slate-200";
+  "rounded-xl bg-white p-3 shadow-sm dark:bg-slate-900 sm:p-4";
 
 type AgencyNamedRow = AgencyActivityRow & { nom: string };
+
+function compactCount(value: number): string {
+  return new Intl.NumberFormat("fr-FR").format(Math.round(Number(value) || 0));
+}
+
+function formatTrend(value: number | null): string | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  const rounded = Math.round(value * 10) / 10;
+  if (Math.abs(rounded) < 0.1) return "stable";
+  return `${rounded > 0 ? "+" : ""}${rounded}%`;
+}
+
+function trendTone(value: number | null, inverse = false): "neutral" | "success" | "warning" {
+  if (value == null || !Number.isFinite(value) || Math.abs(value) < 0.1) return "neutral";
+  const positive = value > 0;
+  if (inverse) return positive ? "warning" : "success";
+  return positive ? "success" : "warning";
+}
+
+function deltaPct(current: number, previous: number): number | null {
+  if (!Number.isFinite(current) || !Number.isFinite(previous) || previous <= 0) return null;
+  return ((current - previous) / previous) * 100;
+}
+
+function emptyCommercialActivity(): CommercialActivity {
+  return {
+    billets: {
+      guichet: { reservationCount: 0, tickets: 0, amount: 0 },
+      online: { reservationCount: 0, tickets: 0, amount: 0 },
+      reservationCount: 0,
+      tickets: 0,
+      amount: 0,
+    },
+    courier: { parcels: 0, amount: 0 },
+    totalAmount: 0,
+  };
+}
+
+function emptyCompanyFinance(): CompanyFinance {
+  return {
+    realMoney: { cash: 0, mobileMoney: 0, bank: 0, total: 0 },
+    activity: {
+      sales: { reservationCount: 0, tickets: 0, amountHint: 0 },
+      encaissements: { total: 0 },
+      deposits: { total: 0 },
+      expenses: { total: 0 },
+      financialGap: 0,
+      caNet: 0,
+      split: { paiementsEnLigne: 0, paiementsGuichet: 0 },
+    },
+  };
+}
+
+function isPermissionDeniedError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  return (error as { code?: unknown }).code === "permission-denied";
+}
+
+function warnIfUnexpectedReadError(message: string, error: unknown, context?: Record<string, string>): void {
+  if (isPermissionDeniedError(error)) return;
+  if (context) {
+    console.warn(message, { ...context, error });
+    return;
+  }
+  console.warn(message, error);
+}
+
+function activityBundleScore(bundle: NetworkActivityBundle): number {
+  const rowTotal = bundle.rows.reduce(
+    (sum, row) => sum + (Number(row.ventes) || 0) + (Number(row.billets) || 0) + (Number(row.colis) || 0),
+    0
+  );
+  const chartTotal = bundle.chartData.reduce(
+    (sum, point) => sum + (Number(point.revenue) || 0) + (Number(point.reservations) || 0),
+    0
+  );
+  return (
+    (Number(bundle.activity.totalAmount) || 0) +
+    (Number(bundle.activity.billets.tickets) || 0) +
+    (Number(bundle.activity.courier.parcels) || 0) +
+    rowTotal +
+    chartTotal
+  );
+}
+
+function formatMiniTrendAxisLabel(rawDate: string, index: number, total: number, periodKind: PeriodKind): string {
+  const value = String(rawDate || "");
+  if (periodKind === "day" || value.includes("T")) {
+    const hour = value.includes("T") ? value.slice(11, 13) : "";
+    if (["00", "06", "12", "18", "23"].includes(hour)) return `${hour}h`;
+    return "";
+  }
+  const parsed = dayjs(value.slice(0, 10));
+  if (!parsed.isValid()) return "";
+  if (periodKind === "month" || total > 10) {
+    const day = parsed.date();
+    const isLast = index === total - 1;
+    if (day === 1 || day === 8 || day === 15 || day === 22 || isLast) return parsed.format("DD/MM");
+    return "";
+  }
+  return parsed.format("DD/MM");
+}
+
+function ExecutiveCard({
+  to,
+  icon,
+  label,
+  value,
+  detail,
+  tooltipDetail,
+  trend,
+  tone = "neutral",
+}: {
+  to: string;
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+  detail: string;
+  tooltipDetail?: string;
+  trend?: React.ReactNode;
+  tone?: "neutral" | "success" | "warning" | "danger";
+}) {
+  const toneClass =
+    tone === "danger"
+      ? "border-red-200 bg-red-50/80 text-red-950 dark:border-red-900/50 dark:bg-red-950/25 dark:text-red-100"
+      : tone === "warning"
+        ? "border-amber-200 bg-amber-50/80 text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/25 dark:text-amber-100"
+        : tone === "success"
+          ? "border-emerald-200 bg-emerald-50/80 text-emerald-950 dark:border-emerald-900/50 dark:bg-emerald-950/25 dark:text-emerald-100"
+          : "border-slate-200 bg-white text-slate-950 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-50";
+
+  return (
+    <Link
+      to={to}
+      title={tooltipDetail ?? detail}
+      className={cn(
+        "group flex min-w-0 flex-col rounded-xl border px-3 py-2.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500/40",
+        toneClass
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-white/70 text-slate-700 shadow-sm dark:bg-slate-950/40 dark:text-slate-100">
+          {icon}
+          </span>
+          <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-wide opacity-70">{label}</p>
+        </div>
+        {trend ? <span className="shrink-0 rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-semibold leading-4 opacity-80 dark:bg-slate-950/35">{trend}</span> : null}
+      </div>
+      <div className="mt-1.5 min-w-0 whitespace-nowrap text-[15px] font-bold leading-tight tabular-nums text-current sm:text-base">
+        {value}
+      </div>
+      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] font-semibold leading-4 opacity-70">
+        <span className="truncate">{detail}</span>
+        <ArrowRight className="h-3.5 w-3.5 shrink-0 opacity-60 transition group-hover:translate-x-0.5 group-hover:opacity-90" />
+      </div>
+    </Link>
+  );
+}
+
+function SectionHeading({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <div className="mb-2 flex flex-col gap-0.5">
+      <h2 className="text-sm font-semibold text-slate-950 dark:text-white">{title}</h2>
+      <p className="text-xs text-slate-500 dark:text-slate-400">{subtitle}</p>
+    </div>
+  );
+}
+
+function CompactMetric({
+  label,
+  value,
+  detail,
+  tone = "neutral",
+}: {
+  label: string;
+  value: React.ReactNode;
+  detail?: string;
+  tone?: "neutral" | "success" | "warning" | "danger";
+}) {
+  const toneClass =
+    tone === "danger"
+      ? "border-red-200 bg-red-50 text-red-900 dark:border-red-900/50 dark:bg-red-950/25 dark:text-red-100"
+      : tone === "warning"
+        ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/25 dark:text-amber-100"
+        : tone === "success"
+          ? "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/25 dark:text-emerald-100"
+          : "border-slate-200 bg-slate-50 text-slate-900 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-100";
+
+  return (
+    <div className={cn("rounded-xl border px-3 py-2", toneClass)}>
+      <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">{label}</p>
+      <p className="mt-1 text-base font-bold tabular-nums">{value}</p>
+      {detail ? <p className="mt-0.5 text-[11px] opacity-70">{detail}</p> : null}
+    </div>
+  );
+}
+
+function DistributionBar({
+  items,
+}: {
+  items: Array<{ label: string; value: number; color: string; detail: string }>;
+}) {
+  const total = Math.max(items.reduce((sum, item) => sum + Math.max(0, item.value), 0), 1);
+  return (
+    <div className="space-y-2.5">
+      {items.map((item) => {
+        const pct = Math.round((Math.max(0, item.value) / total) * 100);
+        return (
+          <div key={item.label} className="space-y-1.5 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-800/50">
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="font-semibold text-slate-700 dark:text-slate-200">{item.label}</span>
+              <span className="shrink-0 whitespace-nowrap font-bold tabular-nums text-slate-900 dark:text-white">{item.detail}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-white dark:bg-slate-900">
+                <div
+                  className="h-full rounded-full"
+                  style={{ width: `${pct}%`, backgroundColor: item.color }}
+                />
+              </div>
+              <span className="w-10 shrink-0 text-right text-[11px] font-semibold tabular-nums text-slate-500 dark:text-slate-400">
+                {pct}%
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AgencyStatusBadge({ status }: { status: "excellent" | "normal" | "watch" }) {
+  const cls =
+    status === "excellent"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/25 dark:text-emerald-100"
+      : status === "watch"
+        ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/25 dark:text-amber-100"
+        : "border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-300";
+  const label = status === "excellent" ? "Excellent" : status === "watch" ? "À surveiller" : "Normal";
+  return <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-semibold", cls)}>{label}</span>;
+}
 
 export default function CeoPilotageDashboard({
   companyId,
   periodStartStr,
   periodEndStr,
+  periodKind,
 }: Props) {
   const money = useFormatCurrency();
   const { currency } = useCurrency();
   const { company } = useAuth();
-  const { primary: themePrimary, secondary: themeSecondary } = useMemo(
+  const { primary: themePrimary } = useMemo(
     () => resolveLiquidCompanyColors(company ?? undefined),
     [company]
   );
@@ -155,6 +409,12 @@ export default function CeoPilotageDashboard({
     mobileMoney: number;
     bank: number;
   } | null>(null);
+  const [commercialActivity, setCommercialActivity] = useState<CommercialActivity | null>(null);
+  const [previousCommercialActivity, setPreviousCommercialActivity] = useState<CommercialActivity | null>(null);
+  const [commercialActivityUnavailable, setCommercialActivityUnavailable] = useState(false);
+  const [financeSnapshot, setFinanceSnapshot] = useState<CompanyFinance | null>(null);
+  const [previousFinanceSnapshot, setPreviousFinanceSnapshot] = useState<CompanyFinance | null>(null);
+  const [financeUnavailable, setFinanceUnavailable] = useState(false);
   const [todayActivity, setTodayActivity] = useState<number | null>(null);
   const [yesterdayActivity, setYesterdayActivity] = useState<number | null>(null);
   const [yesterdayEnc, setYesterdayEnc] = useState<number | null>(null);
@@ -164,9 +424,7 @@ export default function CeoPilotageDashboard({
   const [agencyTodayRows, setAgencyTodayRows] = useState<AgencyActivityRow[]>([]);
   const [agencyTrendRows, setAgencyTrendRows] = useState<AgencyActivityRow[]>([]);
   const [agencyPrevRows, setAgencyPrevRows] = useState<AgencyActivityRow[]>([]);
-  const [agencyYesterdayRows, setAgencyYesterdayRows] = useState<AgencyActivityRow[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const [gapSheetOpen, setGapSheetOpen] = useState(false);
   const [rangeError, setRangeError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -192,6 +450,12 @@ export default function CeoPilotageDashboard({
         if (isInteractiveRangeTooLarge(rangeStartDj.toDate(), rangeEndDj.toDate())) {
           setRangeError(largeRangeMessage());
           setLedger(null);
+          setCommercialActivity(null);
+          setPreviousCommercialActivity(null);
+          setCommercialActivityUnavailable(false);
+          setFinanceSnapshot(null);
+          setPreviousFinanceSnapshot(null);
+          setFinanceUnavailable(false);
           setTodayActivity(null);
           setYesterdayActivity(null);
           setYesterdayEnc(null);
@@ -199,11 +463,12 @@ export default function CeoPilotageDashboard({
           setAgencyTodayRows([]);
           setAgencyTrendRows([]);
           setAgencyPrevRows([]);
-          setAgencyYesterdayRows([]);
           setAlerts([]);
           return;
         }
         setRangeError(null);
+        setCommercialActivityUnavailable(false);
+        setFinanceUnavailable(false);
 
         const periodLenDays = rangeEndDj.diff(rangeStartDj, "day") + 1;
         const prevPeriodEndDj = rangeStartDj.subtract(1, "day");
@@ -214,64 +479,195 @@ export default function CeoPilotageDashboard({
         const dayBeforeEnd = rangeEndDj.subtract(1, "day").format("YYYY-MM-DD");
         const dayBefore2End = rangeEndDj.subtract(2, "day").format("YYYY-MM-DD");
 
-        const agSnap = await getDocs(collection(db, "companies", companyId, "agences"));
-        const meta = agSnap.docs.map((d) => {
-          const data = d.data() as { nom?: string; nomAgence?: string };
-          return { id: d.id, nom: data.nom ?? data.nomAgence ?? d.id };
-        });
+        const meta = await getDocs(collection(db, "companies", companyId, "agences"))
+          .then((agSnap) =>
+            agSnap.docs.map((d) => {
+              const data = d.data() as { nom?: string; nomAgence?: string };
+              return { id: d.id, nom: data.nom ?? data.nomAgence ?? d.id };
+            })
+          )
+          .catch((error) => {
+            warnIfUnexpectedReadError("[CeoPilotageDashboard] Agencies metadata unavailable", error);
+            return [] as { id: string; nom: string }[];
+          });
         if (cancelled) return;
 
+        const loadActivityFromNetworkSource = async (dateFrom: string, dateTo: string): Promise<NetworkActivityBundle> => {
+          const start = getStartOfDayInBamako(dateFrom);
+          const end = getEndOfDayInBamako(dateTo);
+          const canUseActivityLogsFallback = getInclusiveRangeDays(start, end) <= 31;
+
+          const loadActivityLogsBundle = async (): Promise<NetworkActivityBundle | null> => {
+            try {
+              const docs = await queryActivityLogsInRange(companyId, start, end);
+              const activity = aggregateActivityLogDocs(docs);
+              debugCommercialActivityPipeline("CeoPilotageDashboard.activityLogsBundle", {
+                companyId,
+                period: { dateFrom, dateTo },
+                sourceRetenue: "activityLogs",
+                activityLogs: summarizeActivityLogDocs(docs),
+                final: summarizeCommercialActivity(activity),
+              });
+              return {
+                activity,
+                chartData: buildNetworkChartDataFromActivityLogDocs(docs, dateFrom, dateTo, TZ_BAMAKO),
+                rows: aggregateNetworkActivityByAgencyFromDocs(docs, meta),
+              };
+            } catch (error) {
+              warnIfUnexpectedReadError("[CeoPilotageDashboard] Activity logs fallback unavailable", error, {
+                dateFrom,
+                dateTo,
+              });
+              return null;
+            }
+          };
+
+          try {
+            if (shouldUseDailyStatsForActivity(start, end)) {
+              const [activity, chartData, rows] = await Promise.all([
+                getUnifiedCommercialActivity(companyId, { dateFrom, dateTo }, { timeZone: TZ_BAMAKO }),
+                getNetworkStatsChartData(companyId, dateFrom, dateTo).catch((error) => {
+                  warnIfUnexpectedReadError("[CeoPilotageDashboard] Network chart unavailable", error);
+                  return [] as Awaited<ReturnType<typeof getNetworkStatsChartData>>;
+                }),
+                getNetworkActivityByAgency(companyId, start, end, meta).catch((error) => {
+                  warnIfUnexpectedReadError("[CeoPilotageDashboard] Agency activity unavailable", error);
+                  return [] as AgencyActivityRow[];
+                }),
+              ]);
+              const dailyStatsBundle = { activity, chartData, rows };
+              if (canUseActivityLogsFallback) {
+                const logsBundle = await loadActivityLogsBundle();
+                if (
+                  logsBundle &&
+                  (shouldPreferActivityLogsOverDailyStats(dailyStatsBundle.activity, logsBundle.activity) ||
+                    activityBundleScore(logsBundle) > activityBundleScore(dailyStatsBundle))
+                ) {
+                  debugCommercialActivityPipeline("CeoPilotageDashboard.sourceSelected", {
+                    companyId,
+                    period: { dateFrom, dateTo },
+                    sourceRetenue: "activityLogs",
+                    final: summarizeCommercialActivity(logsBundle.activity),
+                    rows: logsBundle.rows,
+                  });
+                  return logsBundle;
+                }
+              }
+              debugCommercialActivityPipeline("CeoPilotageDashboard.sourceSelected", {
+                companyId,
+                period: { dateFrom, dateTo },
+                sourceRetenue: "dailyStats",
+                final: summarizeCommercialActivity(dailyStatsBundle.activity),
+                rows: dailyStatsBundle.rows,
+              });
+              return dailyStatsBundle;
+            }
+
+            const logsBundle = await loadActivityLogsBundle();
+            if (logsBundle) return logsBundle;
+          } catch (error) {
+            warnIfUnexpectedReadError("[CeoPilotageDashboard] Commercial activity unavailable", error, { dateFrom, dateTo });
+            if (canUseActivityLogsFallback) {
+              const logsBundle = await loadActivityLogsBundle();
+              if (logsBundle) return logsBundle;
+            }
+            return {
+              activity: emptyCommercialActivity(),
+              chartData: [],
+              rows: meta.map((agency) => ({
+                agencyId: agency.id,
+                ventes: 0,
+                billets: 0,
+                placesGuichet: 0,
+                placesOnline: 0,
+                colis: 0,
+              })),
+              unavailable: true,
+            };
+          }
+          return {
+            activity: emptyCommercialActivity(),
+            chartData: [],
+            rows: meta.map((agency) => ({
+              agencyId: agency.id,
+              ventes: 0,
+              billets: 0,
+              placesGuichet: 0,
+              placesOnline: 0,
+              colis: 0,
+            })),
+            unavailable: true,
+          };
+        };
+
+        let financeReadUnavailable = false;
         const [
-          actPeriodRes,
+          periodActivityBundle,
           finPeriodRes,
           finLedgerEnd,
-          chart,
-          rowsPeriod,
-          rowsPrevPeriod,
+          prevActivityBundle,
+          finPrevPeriod,
           actDayBeforeEnd,
           actDayBefore2End,
-          rowsEndDay,
         ] = await Promise.all([
-          getUnifiedCommercialActivity(
-            companyId,
-            { dateFrom: rangeStart, dateTo: rangeEnd },
-            { timeZone: TZ_BAMAKO }
-          ),
-          getUnifiedCompanyFinance(companyId, rangeStart, rangeEnd),
-          getUnifiedCompanyFinance(companyId, rangeEnd, rangeEnd),
-          getNetworkStatsChartData(companyId, rangeStart, rangeEnd),
-          getNetworkActivityByAgency(
-            companyId,
-            getStartOfDayInBamako(rangeStart),
-            getEndOfDayInBamako(rangeEnd),
-            meta
-          ),
-          getNetworkActivityByAgency(
-            companyId,
-            getStartOfDayInBamako(prevPeriodStart),
-            getEndOfDayInBamako(prevPeriodEnd),
-            meta
-          ),
+          loadActivityFromNetworkSource(rangeStart, rangeEnd),
+          getUnifiedCompanyFinance(companyId, rangeStart, rangeEnd).catch((error) => {
+            warnIfUnexpectedReadError("[CeoPilotageDashboard] Finance period unavailable", error, {
+              dateFrom: rangeStart,
+              dateTo: rangeEnd,
+            });
+            financeReadUnavailable = true;
+            return emptyCompanyFinance();
+          }),
+          getUnifiedCompanyFinance(companyId, rangeEnd, rangeEnd).catch((error) => {
+            warnIfUnexpectedReadError("[CeoPilotageDashboard] Finance ledger unavailable", error, {
+              dateFrom: rangeEnd,
+              dateTo: rangeEnd,
+            });
+            financeReadUnavailable = true;
+            return emptyCompanyFinance();
+          }),
+          loadActivityFromNetworkSource(prevPeriodStart, prevPeriodEnd),
+          getUnifiedCompanyFinance(companyId, prevPeriodStart, prevPeriodEnd).catch((error) => {
+            warnIfUnexpectedReadError("[CeoPilotageDashboard] Previous finance period unavailable", error, {
+              dateFrom: prevPeriodStart,
+              dateTo: prevPeriodEnd,
+            });
+            financeReadUnavailable = true;
+            return emptyCompanyFinance();
+          }),
           getUnifiedCommercialActivity(
             companyId,
             { dateFrom: dayBeforeEnd, dateTo: dayBeforeEnd },
             { timeZone: TZ_BAMAKO }
-          ),
+          ).catch((error) => {
+            warnIfUnexpectedReadError("[CeoPilotageDashboard] Previous day activity unavailable", error, { date: dayBeforeEnd });
+            return emptyCommercialActivity();
+          }),
           getUnifiedCommercialActivity(
             companyId,
             { dateFrom: dayBefore2End, dateTo: dayBefore2End },
             { timeZone: TZ_BAMAKO }
-          ),
-          getNetworkActivityByAgency(
-            companyId,
-            getStartOfDayInBamako(rangeEnd),
-            getEndOfDayInBamako(rangeEnd),
-            meta
-          ),
+          ).catch((error) => {
+            warnIfUnexpectedReadError("[CeoPilotageDashboard] Two days before activity unavailable", error, { date: dayBefore2End });
+            return emptyCommercialActivity();
+          }),
         ]);
         if (cancelled) return;
 
+        const actPeriodRes = periodActivityBundle.activity;
+        const actPrevPeriod = prevActivityBundle.activity;
+        const chart = periodActivityBundle.chartData;
+        const rowsPeriod = periodActivityBundle.rows;
+        const rowsPrevPeriod = prevActivityBundle.rows;
+
         setLedger(finLedgerEnd.realMoney);
+        setCommercialActivity(actPeriodRes);
+        setPreviousCommercialActivity(actPrevPeriod);
+        setCommercialActivityUnavailable(Boolean(periodActivityBundle.unavailable));
+        setFinanceSnapshot(finPeriodRes);
+        setPreviousFinanceSnapshot(finPrevPeriod);
+        setFinanceUnavailable(financeReadUnavailable);
         setTodayActivity(actPeriodRes.totalAmount);
         setYesterdayActivity(actPeriodRes.totalAmount);
         setYesterdayEnc(finPeriodRes.activity.encaissements.total);
@@ -280,7 +676,13 @@ export default function CeoPilotageDashboard({
         setAgencyTodayRows(rowsPeriod);
         setAgencyTrendRows(rowsPeriod);
         setAgencyPrevRows(rowsPrevPeriod);
-        setAgencyYesterdayRows(rowsEndDay);
+        debugCommercialActivityPipeline("CeoPilotageDashboard.finalToUI", {
+          companyId,
+          period: { dateFrom: periodStartStr, dateTo: periodEndStr },
+          resultFinalDashboardCEO: summarizeCommercialActivity(actPeriodRes),
+          chartPoints: chart.length,
+          agencyRows: rowsPeriod,
+        });
 
         const alertBag: AlertItem[] = [];
 
@@ -299,14 +701,19 @@ export default function CeoPilotageDashboard({
         const dates7 = Array.from({ length: 7 }).map((_, i) => rangeEndDj.subtract(i, "day").format("YYYY-MM-DD"));
         const dayChecks = await Promise.all(
           dates7.map(async (date) => {
-            const [a, f] = await Promise.all([
-              getUnifiedCommercialActivity(companyId, { dateFrom: date, dateTo: date }, { timeZone: TZ_BAMAKO }),
-              getUnifiedCompanyFinance(companyId, date, date),
-            ]);
-            const act = a.totalAmount;
-            const enc = f.activity.encaissements.total;
-            const base = Math.max(act, enc, 1);
-            return act >= 20_000 && Math.abs(act - enc) / base > 0.15;
+            try {
+              const [a, f] = await Promise.all([
+                getUnifiedCommercialActivity(companyId, { dateFrom: date, dateTo: date }, { timeZone: TZ_BAMAKO }),
+                getUnifiedCompanyFinance(companyId, date, date),
+              ]);
+              const act = a.totalAmount;
+              const enc = f.activity.encaissements.total;
+              const base = Math.max(act, enc, 1);
+              return act >= 20_000 && Math.abs(act - enc) / base > 0.15;
+            } catch (error) {
+              warnIfUnexpectedReadError("[CeoPilotageDashboard] Daily anomaly check unavailable", error, { date });
+              return false;
+            }
           })
         );
         const anomalyDays = dayChecks.filter(Boolean).length;
@@ -375,6 +782,12 @@ export default function CeoPilotageDashboard({
       } catch (e) {
         console.error("[CeoPilotageDashboard]", e);
         setLedger(null);
+        setCommercialActivity(null);
+        setPreviousCommercialActivity(null);
+        setCommercialActivityUnavailable(false);
+        setFinanceSnapshot(null);
+        setPreviousFinanceSnapshot(null);
+        setFinanceUnavailable(false);
         setTodayActivity(null);
         setYesterdayActivity(null);
         setYesterdayEnc(null);
@@ -382,7 +795,6 @@ export default function CeoPilotageDashboard({
         setAgencyTodayRows([]);
         setAgencyTrendRows([]);
         setAgencyPrevRows([]);
-        setAgencyYesterdayRows([]);
         setAlerts([]);
       } finally {
         if (!cancelled) setLoading(false);
@@ -405,36 +817,6 @@ export default function CeoPilotageDashboard({
     const b = dayjs.tz(`${periodEndStr}T12:00:00`, TZ_BAMAKO);
     return Math.max(1, b.diff(a, "day") + 1);
   }, [periodStartStr, periodEndStr]);
-
-  const pilotagePeriodLabelFr = useMemo(() => {
-    const t = getTodayBamako();
-    return formatActivityPeriodLabelFr(periodStartStr || t, periodEndStr || t, t);
-  }, [periodStartStr, periodEndStr]);
-
-  const singleDayPeriod = periodStartStr === periodEndStr;
-
-  const periodCaption = useMemo(() => {
-    const t = getTodayBamako();
-    if (periodStartStr === t && periodEndStr === t) return "Aujourd'hui";
-    return pilotagePeriodLabelFr;
-  }, [periodStartStr, periodEndStr, pilotagePeriodLabelFr]);
-
-  const top3YesterdayByActivity = useMemo(() => {
-    const named = agencyYesterdayRows.map((r) => ({
-      ...r,
-      nom: agenciesMeta.find((a) => a.id === r.agencyId)?.nom ?? r.agencyId,
-    }));
-    return [...named].sort((a, b) => b.ventes - a.ventes).slice(0, 3);
-  }, [agencyYesterdayRows, agenciesMeta]);
-
-  useEffect(() => {
-    if (!gapSheetOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setGapSheetOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [gapSheetOpen]);
 
   const activeAgenciesCount = useMemo(
     () => agencyTodayRows.filter((r) => r.ventes > 0 || r.colis > 0).length,
@@ -473,343 +855,345 @@ export default function CeoPilotageDashboard({
     [agencyTrendRows, agenciesMeta]
   );
 
-  const topAgencies = useMemo(() => [...namedTrendRows].sort((a, b) => b.ventes - a.ventes).slice(0, 3), [namedTrendRows]);
-  const weakAgencies = useMemo(() => [...namedTrendRows].sort((a, b) => a.ventes - b.ventes).slice(0, 3), [namedTrendRows]);
-
-  const mask = hideTreasury ? "••••••" : null;
-
-  const hasPeriodSales = namedTrendRows.some(
-    (r) => (Number(r.ventes) || 0) > 0 || (Number(r.colis) || 0) > 0
+  const topAgencies = useMemo(
+    () =>
+      namedTrendRows
+        .filter((row) => (Number(row.ventes) || 0) > 0 || (Number(row.billets) || 0) > 0 || (Number(row.colis) || 0) > 0)
+        .sort((a, b) => b.ventes - a.ventes)
+        .slice(0, 3),
+    [namedTrendRows]
   );
-
-  const showAgenciesKpi = loading || totalAgencies > 0;
-  const showActivityChart = loading || chartPoints.length > 0;
-  const showAgencyRanking = loading || hasPeriodSales;
-
-  const heroEcartBorder =
-    ecartHier?.status === "critical"
-      ? "border-l-4 border-l-red-500"
-      : ecartHier?.status === "info"
-        ? "border-l-4 border-l-amber-500"
-        : ecartHier?.status === "ok"
-          ? "border-l-4 border-l-emerald-500"
-          : "";
+  const maskedMoney = (amount: number) => (hideTreasury ? "••••••" : money(amount));
+  const basePath = `/compagnie/${companyId}`;
+  const encaissements = financeSnapshot?.activity.encaissements.total ?? 0;
+  const expenses = financeSnapshot?.activity.expenses.total ?? 0;
+  const financialGap = financeSnapshot?.activity.financialGap ?? 0;
+  const tickets = commercialActivity?.billets.tickets ?? 0;
+  const parcels = commercialActivity?.courier.parcels ?? 0;
+  const inactiveAgencies = Math.max(0, totalAgencies - activeAgenciesCount);
+  const agenciesToWatch = useMemo(() => {
+    return namedTrendRows
+      .filter((row) => (Number(row.ventes) || 0) <= 0 && (Number(row.colis) || 0) <= 0)
+      .slice(0, 3);
+  }, [namedTrendRows]);
+  const priorityAlerts = useMemo(() => alerts.slice(0, 3), [alerts]);
+  const healthTone = inactiveAgencies > 0 || agenciesToWatch.length > 0 ? "warning" : "success";
+  const financeTone = financeUnavailable ? "warning" : ecartHier?.status === "critical" || financialGap > 0 ? "warning" : "neutral";
+  const networkRevenue = commercialActivity?.totalAmount ?? todayActivity ?? 0;
+  const activityUnavailable = !loading && !rangeError && (!commercialActivity || commercialActivityUnavailable);
+  const activityMoneyValue = activityUnavailable ? "Donnée indisponible" : money(networkRevenue);
+  const activityCountValue = (value: number) => (activityUnavailable ? "Donnée indisponible" : compactCount(value));
+  const guichetAmount = commercialActivity?.billets.guichet.amount ?? 0;
+  const onlineAmount = commercialActivity?.billets.online.amount ?? 0;
+  const courierAmount = commercialActivity?.courier.amount ?? 0;
+  const guichetTickets = commercialActivity?.billets.guichet.tickets ?? 0;
+  const onlineTickets = commercialActivity?.billets.online.tickets ?? 0;
+  const netBalance = financeSnapshot?.activity.caNet ?? encaissements - expenses;
+  const prevActiveAgenciesCount = useMemo(
+    () => agencyPrevRows.filter((r) => r.ventes > 0 || r.colis > 0).length,
+    [agencyPrevRows]
+  );
+  const networkTrend = deltaPct(networkRevenue, previousCommercialActivity?.totalAmount ?? 0);
+  const ticketsTrend = deltaPct(tickets, previousCommercialActivity?.billets.tickets ?? 0);
+  const courierTrend = deltaPct(courierAmount, previousCommercialActivity?.courier.amount ?? 0);
+  const encaissementsTrend = deltaPct(encaissements, previousFinanceSnapshot?.activity.encaissements.total ?? 0);
+  const expensesTrend = deltaPct(expenses, previousFinanceSnapshot?.activity.expenses.total ?? 0);
+  const agencyTrendLabel =
+    prevActiveAgenciesCount > 0
+      ? `${activeAgenciesCount - prevActiveAgenciesCount >= 0 ? "+" : ""}${activeAgenciesCount - prevActiveAgenciesCount} vs période précédente`
+      : null;
+  const attentionItems = [
+    ...priorityAlerts.map((item, index) => ({
+      id: `alert-${index}`,
+      title: item.severity === "bad" ? "Signal critique" : "Signal à surveiller",
+      detail: item.message,
+      tone: item.severity,
+    })),
+    ...agenciesToWatch.map((agency) => ({
+      id: `agency-${agency.agencyId}`,
+      title: agency.nom,
+      detail: "Aucune activité consolidée sur la période.",
+      tone: "warn" as const,
+    })),
+  ].slice(0, 5);
 
   return (
-    <div className="w-full space-y-4">
+    <div className="w-full space-y-4 pb-5">
       {rangeError && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
-          {rangeError} Les details de pilotage sont desactives sur cette periode.
+          {rangeError} Les détails de pilotage sont désactivés sur cette période.
         </div>
       )}
-      {/* Carte principale — trésorerie */}
-      <section aria-labelledby="ceo-hero-kpi" className="w-full">
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => setGapSheetOpen(true)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              setGapSheetOpen(true);
-            }
-          }}
-          className={cn(
-            DASH_CARD,
-            "cursor-pointer border border-gray-100 text-left transition hover:bg-gray-50/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500/40 dark:border-slate-800 dark:hover:bg-slate-800/50",
-            heroEcartBorder
-          )}
-        >
-          <div className="flex w-full min-w-0 items-center gap-2">
-            <Landmark className="h-5 w-5 shrink-0 text-gray-600 dark:text-gray-300" aria-hidden />
-            <h2
-              id="ceo-hero-kpi"
-              className="min-w-0 flex-1 text-base font-semibold text-gray-900 dark:text-white"
-            >
-              Trésorerie disponible
-            </h2>
-            <InfoTooltip
-              label="Montants agrégés caisse, banque et mobile money, selon la période choisie."
-              className="ml-auto shrink-0"
-            />
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setHideTreasury((v) => !v);
-              }}
-              className="shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-              title={hideTreasury ? "Afficher les montants" : "Masquer les montants"}
-              aria-pressed={hideTreasury}
-            >
-              {hideTreasury ? <Eye className="h-5 w-5" /> : <EyeOff className="h-5 w-5" />}
-            </button>
-          </div>
-          <p className="mt-4 text-3xl font-bold tabular-nums text-gray-900 dark:text-white">
-            {mask ?? money(ledger?.total ?? 0)}
-          </p>
-          <p className="mt-1 text-xs font-medium text-gray-500 dark:text-gray-400">{periodCaption}</p>
-        </div>
+
+      <section aria-label="Vue exécutive" className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        <ExecutiveCard
+          to={`${basePath}/reservations-reseau`}
+          icon={<TrendingUp className="h-3.5 w-3.5" />}
+          label="CA réseau"
+          value={loading ? "..." : activityMoneyValue}
+          detail={activityUnavailable ? "Indisponible" : "Voir le détail"}
+          tooltipDetail={
+            activityUnavailable
+              ? "Source activité consolidée indisponible"
+              : `Billets ${money(commercialActivity?.billets.amount ?? 0)} · Courrier ${money(courierAmount)}`
+          }
+          trend={formatTrend(networkTrend)}
+          tone="success"
+        />
+        <ExecutiveCard
+          to={`${basePath}/reservations-reseau`}
+          icon={<CreditCard className="h-3.5 w-3.5" />}
+          label="Billets"
+          value={loading ? "..." : activityCountValue(tickets)}
+          detail={activityUnavailable ? "Indisponible" : "Voir le détail"}
+          tooltipDetail={
+            activityUnavailable
+              ? "Source activité consolidée indisponible"
+              : `Guichet ${compactCount(guichetTickets)} · En ligne ${compactCount(onlineTickets)}`
+          }
+          trend={formatTrend(ticketsTrend)}
+          tone={trendTone(ticketsTrend)}
+        />
+        <ExecutiveCard
+          to={`${basePath}/reservations-reseau`}
+          icon={<Package className="h-3.5 w-3.5" />}
+          label="Courrier"
+          value={loading ? "..." : activityCountValue(parcels)}
+          detail={activityUnavailable ? "Indisponible" : "Voir le détail"}
+          tooltipDetail={activityUnavailable ? "Source activité consolidée indisponible" : `CA courrier ${money(courierAmount)}`}
+          trend={formatTrend(courierTrend)}
+          tone={trendTone(courierTrend)}
+        />
+        <ExecutiveCard
+          to={`${basePath}/finances`}
+          icon={<Landmark className="h-3.5 w-3.5" />}
+          label="Trésorerie"
+          value={loading ? "..." : maskedMoney(ledger?.total ?? 0)}
+          detail="Voir le détail"
+          tooltipDetail={`Caisse ${maskedMoney(ledger?.cash ?? 0)} · Banque ${maskedMoney(ledger?.bank ?? 0)} · Mobile ${maskedMoney(ledger?.mobileMoney ?? 0)}`}
+          tone={financeTone}
+        />
+        <ExecutiveCard
+          to={`${basePath}/performance-agence`}
+          icon={<Building2 className="h-3.5 w-3.5" />}
+          label="Agences"
+          value={loading ? "..." : `${activeAgenciesCount} / ${totalAgencies}`}
+          detail="Voir le détail"
+          tooltipDetail={inactiveAgencies > 0 ? `${inactiveAgencies} agence(s) sans activité` : "Toutes les agences visibles sont actives"}
+          trend={agencyTrendLabel}
+          tone={healthTone}
+        />
+        <ExecutiveCard
+          to={`${basePath}/audit-controle`}
+          icon={<ShieldAlert className="h-3.5 w-3.5" />}
+          label="Alertes"
+          value={loading ? "..." : attentionItems.length}
+          detail={attentionItems.length > 0 ? "Voir le détail" : "Situation normale"}
+          tooltipDetail={attentionItems.length > 0 ? "Signaux à examiner" : "Situation normale"}
+          tone={attentionItems.length > 0 ? "warning" : "success"}
+        />
       </section>
 
-      {(loading || alerts.length > 0) && (
-        <section aria-labelledby="ceo-alerts-heading" className="space-y-3">
-          <div className="flex items-center gap-2">
-            <h2 id="ceo-alerts-heading" className={sectionTitle}>
-              Alertes
-            </h2>
-            <InfoTooltip label="Points à traiter, détectés sur la période sélectionnée." className="shrink-0" />
+      <section className="grid grid-cols-1 gap-3 xl:grid-cols-[1.35fr_0.65fr]">
+        <div className={cn(DASH_CARD, "border border-slate-200 dark:border-slate-800")}>
+          <SectionHeading
+            title="Performance réseau"
+            subtitle="Canaux et tendance courte."
+          />
+          <div className="grid gap-3 xl:grid-cols-[minmax(260px,0.95fr)_minmax(280px,1.05fr)]">
+            <div className="space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                Répartition par canal
+              </p>
+              <DistributionBar
+                items={[
+                  { label: "Guichet", value: guichetAmount, color: "#059669", detail: money(guichetAmount) },
+                  { label: "En ligne", value: onlineAmount, color: "#2563eb", detail: money(onlineAmount) },
+                  { label: "Courrier", value: courierAmount, color: "#ea580c", detail: money(courierAmount) },
+                ]}
+              />
+            </div>
+            <div className="min-w-0">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                Mini-tendance
+              </p>
+              {chartForDisplay.length > 0 ? (
+                <div className="min-w-0 overflow-hidden rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-800/50">
+                  <RevenueMiniChart
+                    data={chartForDisplay.map((point, index) => ({
+                      label: formatMiniTrendAxisLabel(point.date, index, chartForDisplay.length, periodKind),
+                      value: point.revenue,
+                      color: themePrimary,
+                    }))}
+                    height={58}
+                  />
+                </div>
+              ) : (
+                <div className="flex min-h-[64px] items-center justify-center rounded-xl border border-dashed border-slate-200 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                  {loading ? "Chargement..." : "Aucune activité sur la période."}
+                </div>
+              )}
+            </div>
           </div>
-          {loading ? (
-            <p className="text-sm text-gray-500 dark:text-gray-400">Chargement…</p>
+          {trendVs7 ? (
+            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold text-slate-900 dark:text-slate-100">
+              <span>Lecture :</span>
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1",
+                  trendVs7.stable && "text-slate-700 dark:text-slate-200",
+                  !trendVs7.stable && trendVs7.delta >= 0 && "text-emerald-700 dark:text-emerald-300",
+                  !trendVs7.stable && trendVs7.delta < 0 && "text-orange-700 dark:text-orange-300"
+                )}
+              >
+                {!trendVs7.stable && trendVs7.delta >= 0 ? (
+                  <TrendingUp className="h-4 w-4 shrink-0" />
+                ) : !trendVs7.stable && trendVs7.delta < 0 ? (
+                  <TrendingDown className="h-4 w-4 shrink-0" />
+                ) : (
+                  <Minus className="h-4 w-4 shrink-0" />
+                )}
+                {trendPhrase(trendVs7.stable, trendVs7.delta)}
+              </span>
+              <span className="font-normal text-slate-500 dark:text-slate-400">
+                ({trendVs7.delta}% vs moyenne des autres jours)
+              </span>
+            </p>
+          ) : null}
+        </div>
+
+        <div className={cn(DASH_CARD, "border border-slate-200 dark:border-slate-800")}>
+          <SectionHeading
+            title="Points d'attention"
+            subtitle="Signaux prioritaires."
+          />
+          {attentionItems.length === 0 ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/25 dark:text-emerald-100">
+              Aucun point d'attention.
+            </div>
           ) : (
-            <ul className="space-y-3">
-              {alerts.map((item, i) => (
+            <ul className="space-y-2">
+              {attentionItems.map((item) => (
                 <li
-                  key={i}
-                  className={cn(
-                    "rounded-xl border px-4 py-4 text-sm shadow-sm",
-                    alertRowClass(item.severity)
-                  )}
+                  key={item.id}
+                  title={item.detail}
+                  className={cn("flex items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs", alertRowClass(item.tone))}
                 >
-                  <div className="flex gap-2">
-                    <span
-                      className={cn(
-                        "shrink-0 font-bold",
-                        item.severity === "bad"
-                          ? "text-red-800 dark:text-red-200"
-                          : "text-orange-900 dark:text-orange-200"
-                      )}
-                    >
-                      {i + 1}.
-                    </span>
-                    <span className="font-medium">{item.message}</span>
-                  </div>
-                  <p className="mt-3 border-t border-black/5 pt-3 text-xs font-semibold text-gray-900 dark:border-white/10 dark:text-white">
-                    Action : {item.action ?? alertDefaultAction(item.severity)}
-                  </p>
+                  <p className="min-w-0 truncate font-semibold">{item.title}</p>
+                  <span className="shrink-0 rounded-full bg-white/60 px-2 py-0.5 text-[10px] font-semibold dark:bg-slate-950/30">
+                    {item.tone === "bad" ? "Priorité" : "Suivi"}
+                  </span>
                 </li>
               ))}
             </ul>
           )}
-        </section>
-      )}
+          <Link
+            to={`${basePath}/audit-controle`}
+            className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-100 dark:hover:bg-slate-800"
+          >
+            Ouvrir les alertes
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      </section>
 
-      {(loading || todayActivity != null) && (
-        <section aria-labelledby="ceo-live-kpis" className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div id="ceo-live-kpis" className={cn(DASH_CARD, "border border-gray-100 dark:border-slate-800")}>
-            <div className={iconBox}>
-              <Activity className="h-5 w-5" aria-hidden />
-            </div>
-            <span className={kpiLabel}>
-              {singleDayPeriod ? "Activité (jour affiché)" : "Activité (période)"}
-            </span>
-            <p className={cn(kpiAmount, "mt-2 text-gray-900 dark:text-white")}>
-              {loading ? "…" : money(todayActivity ?? 0)}
-            </p>
+      <section className="grid grid-cols-1 gap-3 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className={cn(DASH_CARD, "border border-slate-200 dark:border-slate-800")}>
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <SectionHeading
+              title="Santé financière"
+              subtitle="Résumé consolidé."
+            />
+            <button
+              type="button"
+              onClick={() => setHideTreasury((v) => !v)}
+              className="shrink-0 rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              title={hideTreasury ? "Afficher les montants" : "Masquer les montants"}
+              aria-pressed={hideTreasury}
+            >
+              {hideTreasury ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+            </button>
           </div>
-          {showAgenciesKpi ? (
-            <div className={cn(DASH_CARD, "border border-gray-100 dark:border-slate-800")}>
-              <div className={iconBox}>
-                <Building2 className="h-5 w-5" aria-hidden />
-              </div>
-              <div className="flex items-start justify-between gap-2">
-                <span className={kpiLabel}>Agences actives</span>
-                <InfoTooltip
-                  label="Agences ayant enregistré au moins une vente ou un colis sur la période."
-                  className="shrink-0"
-                />
-              </div>
-              <p className={cn(kpiAmount, "mt-2 text-gray-900 dark:text-white")}>
-                {loading ? (
-                  "…"
-                ) : (
-                  <>
-                    {activeAgenciesCount}
-                    <span className="text-lg font-semibold text-slate-400 dark:text-slate-500">
-                      {" "}
-                      / {totalAgencies}
-                    </span>
-                  </>
-                )}
-              </p>
-            </div>
-          ) : null}
-        </section>
-      )}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <CompactMetric label="Trésorerie disponible" value={loading ? "..." : maskedMoney(ledger?.total ?? 0)} tone={financeTone} />
+            <CompactMetric label="Solde net" value={loading ? "..." : maskedMoney(netBalance)} />
+            <CompactMetric label="Encaissements" value={loading ? "..." : maskedMoney(encaissements)} detail={formatTrend(encaissementsTrend) ?? undefined} />
+            <CompactMetric label="Dépenses" value={loading ? "..." : maskedMoney(expenses)} detail={formatTrend(expensesTrend) ?? undefined} />
+          </div>
+        </div>
 
-      {showActivityChart && (
-        <section aria-labelledby="ceo-trend-heading" className="space-y-3">
-          <div className="flex items-center gap-2">
-            <h2 id="ceo-trend-heading" className={sectionTitle}>
-              Activité
-            </h2>
-            <InfoTooltip label="Courbes basées sur les agrégations réseau pour la période." className="shrink-0" />
-          </div>
-          <div className={cn(DASH_CARD, "border border-gray-100 dark:border-slate-800")}>
-            {chartForDisplay.length > 0 ? (
-              <div className="min-h-[200px] w-full">
-                <RevenueReservationsChart
-                  data={chartForDisplay}
-                  loading={loading}
-                  range={chartForDisplay.length <= 8 ? "week" : "month"}
-                  primaryColor={themePrimary}
-                  secondaryColor={themeSecondary}
-                  secondaryMetricLabel="Places (billets)"
-                />
-              </div>
-            ) : loading ? (
-              <div className="flex min-h-[200px] items-center justify-center text-sm text-gray-500 dark:text-gray-400">
-                Chargement…
-              </div>
-            ) : null}
-            {trendVs7 && chartForDisplay.length >= 2 ? (
-              <p className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-gray-900 dark:text-gray-100">
-                <span>Tendance :</span>
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1",
-                    trendVs7.stable && "text-slate-700 dark:text-slate-200",
-                    !trendVs7.stable && trendVs7.delta >= 0 && "text-emerald-700 dark:text-emerald-300",
-                    !trendVs7.stable && trendVs7.delta < 0 && "text-orange-700 dark:text-orange-300"
-                  )}
-                >
-                  {!trendVs7.stable && trendVs7.delta >= 0 ? (
-                    <TrendingUp className="h-4 w-4 shrink-0" aria-hidden />
-                  ) : !trendVs7.stable && trendVs7.delta < 0 ? (
-                    <TrendingDown className="h-4 w-4 shrink-0" aria-hidden />
-                  ) : (
-                    <Minus className="h-4 w-4 shrink-0" aria-hidden />
-                  )}
-                  {trendPhrase(trendVs7.stable, trendVs7.delta)}
-                </span>
-                <span className="text-xs font-normal text-gray-500 dark:text-gray-400">
-                  ({trendVs7.delta}% vs moyenne des autres jours)
-                </span>
-              </p>
-            ) : null}
-          </div>
-        </section>
-      )}
-
-      {showAgencyRanking && (
-        <div
-          className={cn(
-            "grid grid-cols-1 gap-3",
-            (loading || (topAgencies.length > 0 && weakAgencies.length > 0)) && "sm:grid-cols-2"
-          )}
-        >
-          {(loading || topAgencies.some((a) => a.ventes > 0 || a.colis > 0)) && (
-            <div className={cn(DASH_CARD, "border border-gray-100 dark:border-slate-800")}>
-              <h3 className={kpiLabel}>Top agences ({trendDayCount} j.)</h3>
-              {loading ? (
-                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Chargement…</p>
-              ) : (
-                <ol className="mt-3 space-y-2">
-                  {topAgencies.map((a, i) => (
-                    <li
-                      key={a.agencyId}
-                      className="flex items-center justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60"
-                    >
-                      <span className="min-w-0 truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-                        {i + 1}. {a.nom}
-                      </span>
-                      <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                        {money(a.ventes)}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
-          )}
-          {(loading || weakAgencies.some((a) => a.ventes > 0 || a.colis > 0)) && (
-            <div className={cn(DASH_CARD, "border border-gray-100 dark:border-slate-800")}>
-              <h3 className={kpiLabel}>Agences les plus basses ({trendDayCount} j.)</h3>
-              {loading ? (
-                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Chargement…</p>
-              ) : (
-                <ol className="mt-3 space-y-2">
-                  {weakAgencies.map((a, i) => (
-                    <li
-                      key={a.agencyId}
-                      className="flex items-center justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60"
-                    >
-                      <span className="min-w-0 truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-                        {i + 1}. {a.nom}
-                      </span>
-                      <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                        {money(a.ventes)}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              )}
+        <div className={cn(DASH_CARD, "border border-slate-200 dark:border-slate-800")}>
+          <SectionHeading
+            title="Top agences"
+            subtitle={`Agences qui tirent le réseau sur ${trendDayCount} jour(s).`}
+          />
+          {topAgencies.length === 0 ? (
+            <p className="text-sm text-slate-500 dark:text-slate-400">Aucune agence classée sur la période.</p>
+          ) : (
+            <div className="space-y-2">
+              {topAgencies.map((agency, index) => {
+                const prev = agencyPrevRows.find((row) => row.agencyId === agency.agencyId);
+                const agencyDelta = deltaPct(agency.ventes, prev?.ventes ?? 0);
+                const status =
+                  agenciesToWatch.some((row) => row.agencyId === agency.agencyId)
+                    ? "watch"
+                    : index === 0 && agency.ventes > 0
+                      ? "excellent"
+                      : "normal";
+                return (
+                  <Link
+                    key={agency.agencyId}
+                    to={`${basePath}/performance-agence?agency=${encodeURIComponent(agency.agencyId)}`}
+                    className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 transition hover:bg-white hover:shadow-sm dark:border-slate-800 dark:bg-slate-800/50 dark:hover:bg-slate-800 sm:grid-cols-[auto_1fr_auto]"
+                  >
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-xs font-bold text-slate-700 shadow-sm dark:bg-slate-900 dark:text-slate-100">
+                      {index + 1}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-semibold text-slate-950 dark:text-white">{agency.nom}</p>
+                        <AgencyStatusBadge status={status} />
+                      </div>
+                    </div>
+                    <div className="text-left sm:text-right">
+                      <p className="text-sm font-bold tabular-nums text-slate-950 dark:text-white">{money(agency.ventes)}</p>
+                      {formatTrend(agencyDelta) ? (
+                        <p className={cn("text-xs font-semibold", trendTone(agencyDelta) === "success" ? "text-emerald-600" : "text-amber-600")}>
+                          {formatTrend(agencyDelta)}
+                        </p>
+                      ) : null}
+                    </div>
+                  </Link>
+                );
+              })}
             </div>
           )}
         </div>
-      )}
+      </section>
 
-      {gapSheetOpen && (
-        <>
-          <div
-            className="fixed inset-0 z-50 bg-black/40 dark:bg-black/60"
-            aria-hidden
-            onClick={() => setGapSheetOpen(false)}
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="ceo-gap-sheet-title"
-            className="fixed inset-x-0 bottom-0 z-[51] max-h-[min(85vh,520px)] overflow-y-auto rounded-t-[1.75rem] border border-white/80 bg-white/95 px-5 pb-8 pt-4 shadow-2xl shadow-slate-400/30 backdrop-blur-md dark:border-white/10 dark:bg-gray-900/95 dark:shadow-black/50"
-          >
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h3 id="ceo-gap-sheet-title" className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Classement par agence (dernier jour affiché)
-                </h3>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Volume enregistré ce jour-là — à rapprocher des encaissements dans Finances.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setGapSheetOpen(false)}
-                className="shrink-0 rounded-lg p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
-                aria-label="Fermer"
-              >
-                <X className="h-5 w-5" aria-hidden />
-              </button>
-            </div>
-            {top3YesterdayByActivity.length === 0 ? (
-              <p className="text-sm text-gray-500 dark:text-gray-400">Pas encore de répartition par agence.</p>
-            ) : (
-              <ul className="space-y-3">
-                {top3YesterdayByActivity.map((a, i) => (
-                  <li
-                    key={a.agencyId}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/80"
-                  >
-                    <span className="min-w-0 truncate font-medium text-gray-900 dark:text-gray-100">
-                      {i + 1}. {a.nom}
-                    </span>
-                    <span className="shrink-0 text-base font-semibold tabular-nums text-gray-900 dark:text-gray-100">
-                      {money(a.ventes)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <button
-              type="button"
-              onClick={() => setGapSheetOpen(false)}
-              className="mt-6 w-full rounded-xl border border-gray-200 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-100 dark:hover:bg-gray-800"
+      <section className={cn(DASH_CARD, "border border-slate-200 dark:border-slate-800")}>
+        <SectionHeading
+          title="Accès rapides"
+          subtitle="Modules de détail."
+        />
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ["Activité réseau", `${basePath}/reservations-reseau`],
+            ["Finances", `${basePath}/finances`],
+            ["Agences", `${basePath}/agences`],
+            ["Rapports", `${basePath}/accounting/rapports`],
+          ].map(([label, to]) => (
+            <Link
+              key={to}
+              to={to}
+              className="inline-flex min-h-[36px] items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50/60 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-indigo-300 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-100 dark:hover:bg-slate-800"
             >
-              Fermer
-            </button>
-          </div>
-        </>
-      )}
+              <span className="truncate">{label}</span>
+              <ArrowRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            </Link>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

@@ -1505,6 +1505,13 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
           )
         );
     }
+    function operatorDigitalCanReadOnlineMobileMoneyTransaction(companyId) {
+      return isOperatorDigitalForCompany(companyId)
+        && resource.data.get('companyId', '') == companyId
+        && resource.data.get('type', '') == 'payment_received'
+        && resource.data.get('paymentChannel', '') == 'online'
+        && resource.data.get('paymentMethod', '') == 'mobile_money';
+    }
     function operatorDigitalOnlinePaymentAccountWriteOk(companyId, accountId, isCreate) {
       let transactionId = request.resource.data.get('lastOnlinePaymentTransactionId', '');
       let transactionPath = /databases/$(database)/documents/companies/$(companyId)/financialTransactions/$(transactionId);
@@ -3203,6 +3210,7 @@ match /shiftReports/{reportId} {
         allow get: if isAgencyAccountantForCompany(companyId)
           && transactionId.matches('expense_.+');
         allow get: if canAccessSensitiveCompanyFinance(companyId)
+          || operatorDigitalCanReadOnlineMobileMoneyTransaction(companyId)
           || (
             isAuth()
             && (
@@ -3221,6 +3229,7 @@ match /shiftReports/{reportId} {
             && resource.data.get('agencyId', '') == getUserAgencyId()
           );
         allow list: if canAccessSensitiveCompanyFinance(companyId)
+          || operatorDigitalCanReadOnlineMobileMoneyTransaction(companyId)
           || agencyAccountantCanListCompanyScopedAccounting(companyId);
         allow create: if agencyDirectBankTransferTransactionCreateOk(companyId, transactionId);
         allow create: if operatorDigitalOnlinePaymentTransactionCreateOk(companyId, transactionId);
