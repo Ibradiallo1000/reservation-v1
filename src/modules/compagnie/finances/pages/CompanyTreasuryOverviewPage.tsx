@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   collection,
+  doc,
+  getDoc,
   getDocs,
   limit,
   query,
@@ -14,12 +16,11 @@ import {
   Landmark,
   RefreshCw,
   Smartphone,
-  Wallet,
 } from "lucide-react";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
-import { MetricCard, SectionCard, StatusBadge } from "@/ui";
+import { SectionCard, StatusBadge } from "@/ui";
 import {
   isLiquidityBucketType,
   parseStrictLedgerAccountType,
@@ -61,8 +62,35 @@ type TreasuryAlert = {
   amount?: number;
 };
 
+type ConfiguredPaymentMethod = {
+  id: string;
+  label: string;
+  providerCode?: string | null;
+};
+
+type MobileMoneyTransaction = {
+  id: string;
+  amount: number;
+  paymentProvider?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
 function agencyName(data: Record<string, unknown>): string {
   return String(data.nomAgence ?? data.nom ?? data.name ?? data.ville ?? "Agence");
+}
+
+function asOptionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function providerMatchKey(value?: string | null): string {
+  return String(value ?? "")
+    .trim()
+    .toLocaleLowerCase("fr")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
 }
 
 function toDate(value: unknown): Date | null {
@@ -130,6 +158,8 @@ export default function CompanyTreasuryOverviewPage() {
   const [agencies, setAgencies] = useState<Agency[]>([]);
   const [bankNames, setBankNames] = useState<Map<string, string>>(new Map());
   const [pendingMovements, setPendingMovements] = useState<PendingMovement[]>([]);
+  const [configuredPaymentMethods, setConfiguredPaymentMethods] = useState<ConfiguredPaymentMethod[]>([]);
+  const [mobileMoneyTransactions, setMobileMoneyTransactions] = useState<MobileMoneyTransaction[]>([]);
   const [alerts, setAlerts] = useState<TreasuryAlert[]>([]);
   const [inactiveAccountCount, setInactiveAccountCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -149,6 +179,8 @@ export default function CompanyTreasuryOverviewPage() {
         agenciesSnap,
         banksSnap,
         pendingTransactionsSnap,
+        paymentConfigsSnap,
+        confirmedMobileMoneySnap,
       ] = await Promise.all([
         getDocs(query(collection(db, "companies", companyId, "accounts"), limit(500))),
         getDocs(collection(db, "companies", companyId, "agences")),
@@ -157,6 +189,21 @@ export default function CompanyTreasuryOverviewPage() {
           query(
             collection(db, "companies", companyId, "financialTransactions"),
             where("status", "==", "pending"),
+            limit(500)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, "companies", companyId, "paymentConfigs"),
+            where("active", "==", true),
+            where("isEnabled", "==", true)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, "companies", companyId, "financialTransactions"),
+            where("paymentMethod", "==", "mobile_money"),
+            where("status", "==", "confirmed"),
             limit(500)
           )
         ),
@@ -218,6 +265,34 @@ export default function CompanyTreasuryOverviewPage() {
           audits: await listAgencyCashAudits(companyId, agency.id, 1),
         }))
       );
+      const configuredMethods = (
+        await Promise.all(
+          paymentConfigsSnap.docs.map(async (configDoc): Promise<ConfiguredPaymentMethod | null> => {
+            const config = configDoc.data() as Record<string, unknown>;
+            const methodId = asOptionalString(config.methodId) ?? configDoc.id;
+            if (!methodId) return null;
+            const methodSnap = await getDoc(doc(db, "paymentMethods", methodId));
+            const method = methodSnap.exists() ? (methodSnap.data() as Record<string, unknown>) : {};
+            const label = asOptionalString(method.name) ?? asOptionalString(config.name) ?? methodId;
+            return {
+              id: methodId,
+              label,
+              providerCode: asOptionalString(method.providerCode) ?? asOptionalString(config.providerCode) ?? null,
+            };
+          })
+        )
+      )
+        .filter((method): method is ConfiguredPaymentMethod => Boolean(method?.id && method.label))
+        .sort((left, right) => left.label.localeCompare(right.label, "fr"));
+      const confirmedMobileMoney = confirmedMobileMoneySnap.docs.map((transactionDoc) => {
+        const data = transactionDoc.data() as Record<string, unknown>;
+        return {
+          id: transactionDoc.id,
+          amount: Math.abs(Number(data.amount ?? 0) || 0),
+          paymentProvider: asOptionalString(data.paymentProvider),
+          metadata: (data.metadata as Record<string, unknown> | undefined) ?? null,
+        };
+      });
 
       const nextAlerts: TreasuryAlert[] = [];
       nextAccounts
@@ -261,6 +336,8 @@ export default function CompanyTreasuryOverviewPage() {
       setAgencies(nextAgencies);
       setBankNames(nextBankNames);
       setPendingMovements(transitMovements);
+      setConfiguredPaymentMethods(configuredMethods);
+      setMobileMoneyTransactions(confirmedMobileMoney);
       setAlerts(nextAlerts);
       setInactiveAccountCount(inactiveBanks);
     } catch (loadError) {
@@ -326,14 +403,42 @@ export default function CompanyTreasuryOverviewPage() {
       transit,
     };
   }, [cashAccounts, bankAccounts, mobileMoneyAccounts, pendingMovements]);
+  const mobileMoneyByConfiguredMethod = useMemo(() => {
+    const methodAliases = configuredPaymentMethods.map((method) => ({
+      method,
+      aliases: [method.id, method.label, method.providerCode]
+        .map((value) => providerMatchKey(value))
+        .filter(Boolean),
+    }));
+    const totalsByMethod = new Map(configuredPaymentMethods.map((method) => [method.id, 0]));
+
+    mobileMoneyTransactions.forEach((transaction) => {
+      const providerKey = providerMatchKey(
+        transaction.paymentProvider ?? asOptionalString(transaction.metadata?.provider)
+      );
+      if (!providerKey) return;
+      const configured = methodAliases.find(({ aliases }) => aliases.includes(providerKey));
+      if (!configured) return;
+      totalsByMethod.set(
+        configured.method.id,
+        (totalsByMethod.get(configured.method.id) ?? 0) + transaction.amount
+      );
+    });
+
+    return configuredPaymentMethods.map((method) => ({
+      id: method.id,
+      label: method.label,
+      amount: totalsByMethod.get(method.id) ?? 0,
+    }));
+  }, [configuredPaymentMethods, mobileMoneyTransactions]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-950 dark:text-white">Trésorerie</h1>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-            Localisation consolidée des liquidités de la compagnie
+          <p className="mt-1 max-w-2xl text-sm text-gray-600 dark:text-gray-300">
+            Localisation de l'argent réel : espèces, liquidités numériques et transferts.
           </p>
         </div>
         <button
@@ -353,47 +458,73 @@ export default function CompanyTreasuryOverviewPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Patrimoine financier global" value={loading ? "—" : money(totals.held)} icon={Landmark} />
-        <MetricCard label="Liquidités réellement détenues" value={loading ? "—" : money(totals.held)} icon={Wallet} />
-        <MetricCard label="Fonds en transit" value={loading ? "—" : money(totals.transit)} icon={Clock3} />
-        <MetricCard label="Comptes actifs" value={loading ? "—" : displayAccounts.length} icon={Building2} />
-      </div>
-
-      <SectionCard title="Liquidités détenues" icon={Wallet}>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-            <div className="flex items-center gap-2 text-emerald-800"><Banknote className="h-4 w-4" /><span className="text-sm font-semibold">Espèces agences</span></div>
-            <p className="mt-3 text-2xl font-bold text-emerald-950">{loading ? "—" : money(totals.cash)}</p>
-            <p className="mt-1 text-xs text-emerald-700">{cashAccounts.length} caisse{cashAccounts.length > 1 ? "s" : ""} active{cashAccounts.length > 1 ? "s" : ""}</p>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <SectionCard title="Espèces agences" icon={Banknote}>
+          <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
+            <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-200">
+              <Banknote className="h-4 w-4" />
+              <span className="text-sm font-semibold">Espèces agences</span>
+            </div>
+            <p className="mt-3 text-2xl font-bold text-emerald-950 dark:text-emerald-100">
+              {loading ? "—" : money(totals.cash)}
+            </p>
+            <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-200">
+              {cashAccounts.length} caisse{cashAccounts.length > 1 ? "s" : ""} active{cashAccounts.length > 1 ? "s" : ""}
+            </p>
           </div>
-          <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-            <div className="flex items-center gap-2 text-blue-800"><Landmark className="h-4 w-4" /><span className="text-sm font-semibold">Banques compagnie</span></div>
-            <p className="mt-3 text-2xl font-bold text-blue-950">{loading ? "—" : money(totals.bank)}</p>
-            <p className="mt-1 text-xs text-blue-700">{bankAccounts.length} compte{bankAccounts.length > 1 ? "s" : ""} actif{bankAccounts.length > 1 ? "s" : ""}</p>
-          </div>
-          <div className="rounded-lg border border-violet-200 bg-violet-50 p-4">
-            <div className="flex items-center gap-2 text-violet-800"><Smartphone className="h-4 w-4" /><span className="text-sm font-semibold">Mobile Money compagnie</span></div>
-            <p className="mt-3 text-2xl font-bold text-violet-950">{loading ? "—" : money(totals.mobileMoney)}</p>
-            <p className="mt-1 text-xs text-violet-700">{mobileMoneyAccounts.length} portefeuille{mobileMoneyAccounts.length > 1 ? "s" : ""} actif{mobileMoneyAccounts.length > 1 ? "s" : ""}</p>
-          </div>
-        </div>
-      </SectionCard>
-
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-        <SectionCard title="Espèces par agence" icon={Banknote}>
           <AccountList rows={cashAccounts} emptyLabel="Aucune caisse agence disponible." money={money} />
         </SectionCard>
-        <SectionCard title="Comptes bancaires" icon={Landmark}>
-          <AccountList rows={bankAccounts} emptyLabel="Aucun compte bancaire disponible." money={money} />
+
+        <SectionCard title="Mobile Money" icon={Smartphone}>
+          <div className="mb-4 grid grid-cols-1 gap-3">
+            <div className="rounded-lg border border-violet-200 bg-violet-50 p-4 dark:border-violet-900 dark:bg-violet-950/30">
+              <div className="flex items-center gap-2 text-violet-800 dark:text-violet-200">
+                <Smartphone className="h-4 w-4" />
+                <span className="text-sm font-semibold">Mobile Money</span>
+              </div>
+              <p className="mt-3 text-2xl font-bold text-violet-950 dark:text-violet-100">{loading ? "—" : money(totals.mobileMoney)}</p>
+              <p className="mt-1 text-xs text-violet-700 dark:text-violet-200">Répartition selon les moyens configurés par la compagnie</p>
+            </div>
+          </div>
+          {mobileMoneyByConfiguredMethod.length === 0 ? (
+            <p className="py-8 text-center text-sm text-gray-500">Aucun portefeuille Mobile Money configuré.</p>
+          ) : (
+            <ul className="divide-y divide-gray-100 dark:divide-gray-800">
+              {mobileMoneyByConfiguredMethod.map((method) => (
+                <li key={method.id} className="flex items-center justify-between gap-4 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-gray-900 dark:text-white">{method.label}</p>
+                    <p className="mt-0.5 text-xs text-gray-500">Configuré par la compagnie</p>
+                  </div>
+                  <p className="shrink-0 text-sm font-semibold">{money(method.amount)}</p>
+                </li>
+              ))}
+            </ul>
+          )}
         </SectionCard>
-        <SectionCard title="Portefeuilles Mobile Money" icon={Smartphone}>
-          <AccountList rows={mobileMoneyAccounts} emptyLabel="Aucun portefeuille compagnie disponible." money={money} />
+
+        <SectionCard title="Banques" icon={Landmark}>
+          <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950/30">
+            <div className="flex items-center gap-2 text-blue-800 dark:text-blue-200">
+              <Landmark className="h-4 w-4" />
+              <span className="text-sm font-semibold">Banques</span>
+            </div>
+            <p className="mt-3 text-2xl font-bold text-blue-950 dark:text-blue-100">{loading ? "—" : money(totals.bank)}</p>
+            <p className="mt-1 text-xs text-blue-700 dark:text-blue-200">{bankAccounts.length} compte{bankAccounts.length > 1 ? "s" : ""} actif{bankAccounts.length > 1 ? "s" : ""}</p>
+          </div>
+          <AccountList rows={bankAccounts} emptyLabel="Aucun compte bancaire disponible." money={money} />
         </SectionCard>
       </div>
 
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        <SectionCard title="Mouvements en cours" icon={Clock3}>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <SectionCard title="Fonds en transit" icon={Clock3}>
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
+            <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
+              <Clock3 className="h-4 w-4" />
+              <span className="text-sm font-semibold">Transferts en cours</span>
+            </div>
+            <p className="mt-3 text-2xl font-bold text-amber-950 dark:text-amber-100">{loading ? "—" : money(totals.transit)}</p>
+          </div>
           {pendingMovements.length === 0 ? (
             <p className="py-8 text-center text-sm text-gray-500">Aucun mouvement en cours.</p>
           ) : (
@@ -422,7 +553,6 @@ export default function CompanyTreasuryOverviewPage() {
             </ul>
           )}
         </SectionCard>
-
         <SectionCard title="Alertes trésorerie" icon={AlertTriangle}>
           {alerts.length === 0 ? (
             <p className="py-8 text-center text-sm text-gray-500">Aucune alerte de trésorerie.</p>

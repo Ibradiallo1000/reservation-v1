@@ -7,20 +7,17 @@ import {
   Timestamp,
   where,
 } from "firebase/firestore";
-import { Link } from "react-router-dom";
 import {
   AlertTriangle,
-  ArrowRight,
   Building2,
   Landmark,
   RefreshCw,
-  Smartphone,
   Wallet,
 } from "lucide-react";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import { useFormatCurrency } from "@/shared/currency/CurrencyContext";
-import { MetricCard, SectionCard, StatusBadge } from "@/ui";
+import { SectionCard, StatusBadge } from "@/ui";
 import {
   getAgencyLedgerLiquidityMap,
   getLiquidityFromAccounts,
@@ -277,6 +274,36 @@ const VueGlobale: React.FC = () => {
         .slice(0, 5),
     [money, snapshot.agencies]
   );
+  const recommendedAction = useMemo(() => {
+    const critical = criticalAnomalies[0];
+    if (critical) {
+      return {
+        title: `Contrôler ${critical.agency}`,
+        detail: critical.label,
+        tone: "danger" as const,
+      };
+    }
+    const agency = agenciesToWatch[0];
+    if (agency) {
+      return {
+        title: `Ouvrir le contrôle agence`,
+        detail: `${agency.name} nécessite une vérification.`,
+        tone: "warning" as const,
+      };
+    }
+    if (snapshot.fundsInTransitAmount > 0) {
+      return {
+        title: "Vérifier les fonds en transit",
+        detail: `${money(snapshot.fundsInTransitAmount)} à suivre en trésorerie.`,
+        tone: "warning" as const,
+      };
+    }
+    return {
+      title: "Aucune intervention urgente",
+      detail: "Le réseau ne présente pas d'alerte prioritaire.",
+      tone: "success" as const,
+    };
+  }, [agenciesToWatch, criticalAnomalies, money, snapshot.fundsInTransitAmount]);
 
   if (loading) {
     return (
@@ -290,19 +317,19 @@ const VueGlobale: React.FC = () => {
   }
 
   return (
-    <div className="space-y-5">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="space-y-4">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase text-emerald-700">Supervision réseau</p>
-          <h1 className="mt-1 text-2xl font-bold text-slate-950">Situation financière</h1>
-          <p className="mt-1 text-sm text-slate-600">
-            Patrimoine, liquidités et points de contrôle de la compagnie.
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Poste de contrôle</p>
+          <h1 className="mt-1 text-2xl font-bold text-slate-950 dark:text-white">Dashboard financier</h1>
+          <p className="mt-1 max-w-2xl text-sm text-slate-600 dark:text-slate-300">
+            Vue de décision : santé globale, alertes et prochaines actions.
           </p>
         </div>
         <button
           type="button"
           onClick={() => void loadDashboard()}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
         >
           <RefreshCw className="h-4 w-4" />
           Actualiser
@@ -315,81 +342,86 @@ const VueGlobale: React.FC = () => {
         </div>
       ) : null}
 
-      <section aria-label="Patrimoine financier" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <MetricCard
-          label="Patrimoine financier"
-          value={money(snapshot.liquidity.total)}
-          icon={Wallet}
-          hint="Somme des comptes inclus dans la liquidité"
-        />
-        <MetricCard
-          label="Espèces agences"
-          value={money(snapshot.liquidity.cash)}
-          icon={Wallet}
-          hint="Soldes caisse du réseau"
-        />
-        <MetricCard
-          label="Banques compagnie"
-          value={money(snapshot.liquidity.bank)}
-          icon={Landmark}
-          hint="Comptes bancaires liquides"
-        />
-        <MetricCard
-          label="Mobile Money compagnie"
-          value={money(snapshot.liquidity.mobileMoney)}
-          icon={Smartphone}
-          hint="Portefeuilles liquides enregistrés dans le ledger"
-        />
+      <section aria-label="Décision financière" className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
+          <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-200">
+            <Wallet className="h-4 w-4" />
+            <span className="text-xs font-semibold uppercase tracking-wide">Situation financière globale</span>
+          </div>
+          <p className="mt-3 text-3xl font-bold text-emerald-950 dark:text-emerald-100">
+            {money(snapshot.liquidity.total)}
+          </p>
+          <p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">
+            Résumé consolidé. Le détail banques, Mobile Money et comptes reste dans Trésorerie.
+          </p>
+        </div>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-200">Argent à surveiller</p>
+          <p className="mt-3 text-3xl font-bold text-amber-950 dark:text-amber-100">{money(snapshot.fundsInTransitAmount)}</p>
+          <p className="mt-1 text-sm text-amber-800 dark:text-amber-200">
+            Fonds en transit ou mouvements à régulariser.
+          </p>
+        </div>
+        <div className={`rounded-xl border p-4 ${
+          recommendedAction.tone === "danger"
+            ? "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30"
+            : recommendedAction.tone === "warning"
+              ? "border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30"
+              : "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30"
+        }`}>
+          <p className={`text-xs font-semibold uppercase tracking-wide ${
+            recommendedAction.tone === "danger"
+              ? "text-red-700 dark:text-red-200"
+              : recommendedAction.tone === "warning"
+                ? "text-amber-700 dark:text-amber-200"
+                : "text-emerald-700 dark:text-emerald-200"
+          }`}>
+            Prochaine action recommandée
+          </p>
+          <p className="mt-3 text-lg font-bold text-slate-950 dark:text-white">{recommendedAction.title}</p>
+          <p className="mt-1 text-sm text-slate-700 dark:text-slate-200">{recommendedAction.detail}</p>
+        </div>
       </section>
 
-      <div className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
+      <div className="grid gap-4 xl:grid-cols-[1fr_0.8fr]">
         <SectionCard
           title="Agences à surveiller"
           icon={Building2}
-          description="Agences présentant un écart ou une remise non régularisée."
+          description="Liste courte des agences où intervenir."
           right={
             <StatusBadge status={agenciesToWatch.length > 0 ? "warning" : "success"}>
               {agenciesToWatch.length} agence{agenciesToWatch.length > 1 ? "s" : ""}
             </StatusBadge>
           }
-          noPad
         >
           {agenciesToWatch.length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-slate-500">
+            <p className="py-8 text-center text-sm text-slate-500">
               Aucun point de vigilance détecté.
             </p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[680px] text-sm">
-                <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3">Agence</th>
-                    <th className="px-4 py-3 text-right">Caisse</th>
-                    <th className="px-4 py-3 text-right">Encaissements jour</th>
-                    <th className="px-4 py-3 text-right">Dépenses jour</th>
-                    <th className="px-4 py-3 text-right">Écart contrôle</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {agenciesToWatch.slice(0, 6).map((agency) => (
-                    <tr key={agency.id} className="bg-white">
-                      <td className="px-4 py-3">
-                        <p className="font-semibold text-slate-900">{agency.name}</p>
-                        <p className="text-xs text-slate-500">
-                          {agency.pendingSessions} remise{agency.pendingSessions > 1 ? "s" : ""} à régulariser
-                        </p>
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold">{money(agency.cashBalance)}</td>
-                      <td className="px-4 py-3 text-right">{money(agency.receiptsToday)}</td>
-                      <td className="px-4 py-3 text-right">{money(agency.expensesToday)}</td>
-                      <td className={`px-4 py-3 text-right font-semibold ${hasCashDifference(agency) ? "text-red-700" : "text-emerald-700"}`}>
-                        {agency.latestCashDifference == null ? "Non contrôlé" : money(agency.latestCashDifference)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ul className="space-y-2">
+              {agenciesToWatch.slice(0, 5).map((agency) => (
+                <li key={agency.id} className="rounded-lg border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-900">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-950 dark:text-white">{agency.name}</p>
+                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                        {agency.pendingSessions > 0
+                          ? `${agency.pendingSessions} remise${agency.pendingSessions > 1 ? "s" : ""} à régulariser`
+                          : hasCashDifference(agency)
+                            ? "Écart au dernier contrôle"
+                            : "Solde caisse à vérifier"}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      {agency.cashBalance < 0 ? <StatusBadge status="danger">Caisse négative</StatusBadge> : null}
+                      {hasCashDifference(agency) ? <StatusBadge status="danger">{money(agency.latestCashDifference ?? 0)}</StatusBadge> : null}
+                      {agency.pendingSessions > 0 ? <StatusBadge status="warning">Remise</StatusBadge> : null}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
           )}
         </SectionCard>
 
@@ -424,52 +456,14 @@ const VueGlobale: React.FC = () => {
         </SectionCard>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
         <SectionCard title="Remises et mouvements à régulariser" icon={Landmark}>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3">
             <div className="rounded-lg border border-rose-200 bg-rose-50 p-4">
               <p className="text-xs font-semibold uppercase text-rose-700">Remises à régulariser</p>
               <p className="mt-2 text-xl font-bold text-rose-950">{pendingRemittancesCount}</p>
               <p className="mt-1 text-xs text-rose-800">Sessions billetterie ou courrier clôturées</p>
             </div>
-            <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-              <p className="text-xs font-semibold uppercase text-blue-700">Fonds en transit</p>
-              <p className="mt-2 text-xl font-bold text-blue-950">{money(snapshot.fundsInTransitAmount)}</p>
-              <p className="mt-1 text-xs text-blue-800">Transactions de transfert en statut pending</p>
-            </div>
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Accès rapides" icon={ArrowRight}>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <Link
-              to={`/compagnie/${companyId}/accounting/reservations-reseau`}
-              className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-            >
-              Réseau financier
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-            <Link
-              to={`/compagnie/${companyId}/accounting/treasury`}
-              className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-            >
-              Trésorerie
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-            <Link
-              to={`/compagnie/${companyId}/accounting/finances`}
-              className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-            >
-              Flux financiers
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-            <Link
-              to={`/compagnie/${companyId}/accounting/rapports`}
-              className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-            >
-              Rapports
-              <ArrowRight className="h-4 w-4" />
-            </Link>
           </div>
         </SectionCard>
       </div>

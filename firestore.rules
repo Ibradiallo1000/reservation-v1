@@ -3159,7 +3159,9 @@ match /shiftReports/{reportId} {
             )
           )
         );
-        allow create: if agencyDirectBankTransferRequestCreateOk(companyId, requestId);
+        allow create: if request.resource.data.get('status', '') == 'executed'
+          && request.resource.data.get('idempotencyKey', '') == 'agency_transfer_' + requestId
+          && agencyDirectBankTransferRequestCreateOk(companyId, requestId);
         allow update: if isAuth() && userCompanyId() == companyId
           && resource.data.get('status', '') == 'pending_manager'
           && request.auth.uid != resource.data.get('initiatedBy', '')
@@ -3231,7 +3233,8 @@ match /shiftReports/{reportId} {
         allow list: if canAccessSensitiveCompanyFinance(companyId)
           || operatorDigitalCanReadOnlineMobileMoneyTransaction(companyId)
           || agencyAccountantCanListCompanyScopedAccounting(companyId);
-        allow create: if agencyDirectBankTransferTransactionCreateOk(companyId, transactionId);
+        allow create: if transactionId.matches('agency_transfer_.+')
+          && agencyDirectBankTransferTransactionCreateOk(companyId, transactionId);
         allow create: if operatorDigitalOnlinePaymentTransactionCreateOk(companyId, transactionId);
         allow create: if agencyDirectExpenseTransactionCreateOk(companyId, transactionId)
           || courierCashFinancialTxCreateOk(companyId)
@@ -3269,7 +3272,8 @@ match /shiftReports/{reportId} {
           || agencyAccountantCanListCompanyScopedAccounting(companyId)
           || isOperatorDigitalForCompany(companyId);
         allow create: if operatorDigitalOnlinePaymentIdempotencyCreateOk(companyId, key);
-        allow create: if agencyDirectBankTransferIdempotencyCreateOk(companyId, key);
+        allow create: if key.matches('agency_transfer_.+')
+          && agencyDirectBankTransferIdempotencyCreateOk(companyId, key);
         allow create: if agencyDirectExpenseIdempotencyCreateOk(companyId, key)
           || courierCashFinancialIdempotencyOk(companyId)
           || canAccessSensitiveCompanyFinance(companyId)
@@ -3402,7 +3406,19 @@ match /accounts/{accountId} {
       && request.resource.data.get('includeInLiquidity', false) == true
     );
 
-  allow update: if accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
+  allow update: if (
+    request.resource.data.get('lastDirectTransferId', '') != ''
+    && (
+      accountId == 'agency_' + getUserAgencyId() + '_cash'
+      || accountId.matches('company_bank_.+')
+    )
+    && agencyDirectBankTransferAccountUpdateOk(
+      companyId,
+      accountId,
+      accountId == 'agency_' + getUserAgencyId() + '_cash'
+    )
+  )
+  || accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
     && isAuth()
     && (
       hasUserRole('agency_accountant')
@@ -3426,18 +3442,6 @@ match /accounts/{accountId} {
     && agencyAccountantCanPostCashBalance(companyId, accountId, false)
     && request.resource.data.diff(resource.data).affectedKeys()
       .hasOnly(['balance', 'lastAccountantValidationShiftId', 'updatedAt'])
-  )
-  || (
-    request.resource.data.get('lastDirectTransferId', '') != ''
-    && (
-      accountId == 'agency_' + getUserAgencyId() + '_cash'
-      || accountId.matches('company_bank_.+')
-    )
-    && agencyDirectBankTransferAccountUpdateOk(
-      companyId,
-      accountId,
-      accountId == 'agency_' + getUserAgencyId() + '_cash'
-    )
   )
   || (
     accountId in ['company_clearing', 'company_mobile_money']

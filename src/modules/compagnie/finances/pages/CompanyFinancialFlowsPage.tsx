@@ -155,6 +155,37 @@ function TransactionStatus({ status }: { status: FinancialTransactionStatus }) {
   return <StatusBadge status={variant}>{STATUS_LABELS[status] ?? status}</StatusBadge>;
 }
 
+function FlowGroupList({
+  title,
+  rows,
+  money,
+}: {
+  title: string;
+  rows: Array<{ label: string; amount: number; count: number }>;
+  money: (value: number) => string;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+      <h3 className="text-sm font-semibold text-gray-950 dark:text-white">{title}</h3>
+      {rows.length === 0 ? (
+        <p className="py-6 text-sm text-gray-500">Aucun mouvement.</p>
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {rows.slice(0, 5).map((row) => (
+            <li key={row.label} className="flex items-center justify-between gap-3 rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-800/70">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-gray-900 dark:text-white">{row.label}</p>
+                <p className="text-xs text-gray-500">{row.count} mouvement{row.count > 1 ? "s" : ""}</p>
+              </div>
+              <p className="shrink-0 text-sm font-semibold">{money(row.amount)}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function CompanyFinancialFlowsPage() {
   const { user } = useAuth() as any;
   const companyId = user?.companyId ?? "";
@@ -171,6 +202,7 @@ export default function CompanyFinancialFlowsPage() {
   const [methodFilter, setMethodFilter] = useState("all");
   const [originFilter, setOriginFilter] = useState<BusinessOrigin | "all">("all");
   const [visibleCount, setVisibleCount] = useState(20);
+  const [showJournal, setShowJournal] = useState(false);
 
   const loadFlows = useCallback(async () => {
     if (!companyId) {
@@ -266,15 +298,41 @@ export default function CompanyFinancialFlowsPage() {
     () => Array.from(new Set(rows.map(paymentMethodFor))).sort((a, b) => a.localeCompare(b, "fr")),
     [rows]
   );
+  const groupRows = useCallback(
+    (labelFor: (row: FinancialRow) => string) => {
+      const grouped = new Map<string, { label: string; amount: number; count: number }>();
+      filteredRows.forEach((row) => {
+        const label = labelFor(row);
+        const current = grouped.get(label) ?? { label, amount: 0, count: 0 };
+        current.amount += Math.abs(Number(row.amount) || 0);
+        current.count += 1;
+        grouped.set(label, current);
+      });
+      return Array.from(grouped.values()).sort((left, right) => right.amount - left.amount);
+    },
+    [filteredRows]
+  );
+  const groupedByMethod = useMemo(
+    () => groupRows(paymentMethodFor),
+    [groupRows]
+  );
+  const groupedByAgency = useMemo(
+    () => groupRows((row) => (row.agencyId ? agencies.get(row.agencyId) ?? row.agencyId : "Compagnie")),
+    [agencies, groupRows]
+  );
+  const groupedByOrigin = useMemo(
+    () => groupRows((row) => ORIGIN_LABELS[originFor(row)]),
+    [groupRows]
+  );
   const visibleRows = filteredRows.slice(0, visibleCount);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-950 dark:text-white">Flux financiers</h1>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-            Journal consolidé des mouvements financiers de la compagnie
+          <p className="mt-1 max-w-2xl text-sm text-gray-600 dark:text-gray-300">
+            Journal des mouvements : entrées, sorties, transferts, origine, moyen, référence et acteur.
           </p>
         </div>
         <button
@@ -309,7 +367,26 @@ export default function CompanyFinancialFlowsPage() {
         <MetricCard label="Agences concernées" value={loading ? "—" : totals.agencies} icon={Building2} />
       </div>
 
-      <SectionCard title="Journal des mouvements" icon={ArrowRightLeft}>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <FlowGroupList title="Par moyen" rows={groupedByMethod} money={money} />
+        <FlowGroupList title="Par agence" rows={groupedByAgency} money={money} />
+        <FlowGroupList title="Par origine" rows={groupedByOrigin} money={money} />
+      </div>
+
+      <SectionCard
+        title="Journal des mouvements"
+        icon={ArrowRightLeft}
+        description="Détail disponible à la demande pour vérifier une référence, un acteur ou un statut."
+        right={
+          <button
+            type="button"
+            onClick={() => setShowJournal((value) => !value)}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+          >
+            {showJournal ? "Masquer le détail" : "Voir le détail"}
+          </button>
+        }
+      >
         <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <label className="relative block sm:col-span-2 xl:col-span-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -338,7 +415,11 @@ export default function CompanyFinancialFlowsPage() {
           </select>
         </div>
 
-        {loading ? (
+        {!showJournal ? (
+          <p className="py-10 text-center text-sm text-gray-500">
+            Le journal détaillé est masqué pour privilégier la lecture par moyen, agence et origine.
+          </p>
+        ) : loading ? (
           <p className="py-12 text-center text-sm text-gray-500">Chargement des mouvements…</p>
         ) : visibleRows.length === 0 ? (
           <p className="py-12 text-center text-sm text-gray-500">Aucun mouvement sur cette période.</p>

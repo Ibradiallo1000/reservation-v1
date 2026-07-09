@@ -249,19 +249,31 @@ export default function AgencyTreasuryTransferPage() {
       setDescription("");
 
       console.log("[Transfer] Rafraîchissement des données...");
-      const [list, refreshedCash] = await Promise.all([
-        listTransferRequests(companyId, {
+      try {
+        const refreshedCash = await getDoc(ledgerAccountDocRef(companyId, agencyCashAccount.id));
+        if (refreshedCash.exists()) {
+          const refreshedData = refreshedCash.data() as { balance?: number };
+          setAvailableAgencyCash(Number(refreshedData.balance ?? 0) || 0);
+          console.log("[Transfer] Cash rafraîchi:", refreshedData.balance);
+        } else {
+          setAvailableAgencyCash((current) => Math.max(0, current - numericAmount));
+        }
+      } catch {
+        setAvailableAgencyCash((current) => Math.max(0, current - numericAmount));
+      }
+
+      try {
+        const list = await listTransferRequests(companyId, {
           agencyId,
           limitCount: 50,
-        }),
-        getDoc(ledgerAccountDocRef(companyId, agencyCashAccount.id)),
-      ]);
-      setRequests(list);
-
-      if (refreshedCash.exists()) {
-        const refreshedData = refreshedCash.data() as { balance?: number };
-        setAvailableAgencyCash(Number(refreshedData.balance ?? 0) || 0);
-        console.log("[Transfer] Cash rafraîchi:", refreshedData.balance);
+        });
+        setRequests(list);
+      } catch (historyError) {
+        const code =
+          historyError && typeof historyError === "object" && "code" in historyError
+            ? String((historyError as { code?: string }).code ?? "")
+            : "";
+        console.warn("[Transfer] Historique indisponible après versement réussi", { code });
       }
       console.log("[Transfer] Fin du processus - succès");
 

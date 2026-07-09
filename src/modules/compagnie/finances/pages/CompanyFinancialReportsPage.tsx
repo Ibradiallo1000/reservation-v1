@@ -7,8 +7,6 @@ import {
   ArrowUpRight,
   Building2,
   Download,
-  FileText,
-  Landmark,
   RefreshCw,
   Wallet,
 } from "lucide-react";
@@ -245,22 +243,6 @@ export default function CompanyFinancialReportsPage() {
     [transactions, agencyFilter, paymentFilter, typeFilter]
   );
 
-  const filteredAccounts = useMemo(
-    () =>
-      accounts.filter((account) => {
-        const agencyMatches =
-          agencyFilter === "all"
-          || account.agencyId === agencyFilter;
-        const paymentMatches =
-          paymentFilter === "all"
-          || (paymentFilter === "cash" && account.type === "cash")
-          || (paymentFilter === "bank" && account.type === "bank")
-          || (paymentFilter === "mobile_money" && account.type === "mobile_money");
-        return agencyMatches && paymentMatches;
-      }),
-    [accounts, agencyFilter, paymentFilter]
-  );
-
   const summary = useMemo(() => {
     let incoming = 0;
     let outgoing = 0;
@@ -270,9 +252,8 @@ export default function CompanyFinancialReportsPage() {
       if (direction === "in") incoming += amount;
       if (direction === "out") outgoing += amount;
     });
-    const patrimony = filteredAccounts.reduce((sum, account) => sum + account.balance, 0);
-    return { incoming, outgoing, net: incoming - outgoing, patrimony };
-  }, [filteredTransactions, filteredAccounts]);
+    return { incoming, outgoing, net: incoming - outgoing, movements: filteredTransactions.length };
+  }, [filteredTransactions]);
 
   const byAgency = useMemo(() => {
     const map = new Map<string, { incoming: number; outgoing: number }>();
@@ -305,25 +286,6 @@ export default function CompanyFinancialReportsPage() {
       .sort((left, right) => right[1] - left[1]);
   }, [filteredTransactions]);
 
-  const evolution = useMemo(() => {
-    const netByDay = new Map<string, number>();
-    [...filteredTransactions].reverse().forEach((row) => {
-      const date = transactionDate(row);
-      if (!date) return;
-      const key = date.toLocaleDateString("fr-CA");
-      const direction = flowDirection(row);
-      const amount = Math.abs(Number(row.amount) || 0);
-      const delta = direction === "in" ? amount : direction === "out" ? -amount : 0;
-      netByDay.set(key, (netByDay.get(key) ?? 0) + delta);
-    });
-    const totalNet = Array.from(netByDay.values()).reduce((sum, value) => sum + value, 0);
-    let estimated = summary.patrimony - totalNet;
-    return Array.from(netByDay.entries()).map(([date, delta]) => {
-      estimated += delta;
-      return { date, value: estimated };
-    });
-  }, [filteredTransactions, summary.patrimony]);
-
   const significantMovements = useMemo(
     () =>
       [...filteredTransactions]
@@ -335,7 +297,6 @@ export default function CompanyFinancialReportsPage() {
     () => auditAlerts.filter((alert) => agencyFilter === "all" || alert.agencyId === agencyFilter),
     [auditAlerts, agencyFilter]
   );
-  const maxEvolution = Math.max(1, ...evolution.map((row) => Math.abs(row.value)));
 
   const exportCsv = useCallback(() => {
     const header = ["Date", "Agence", "Type", "Moyen", "Montant", "Sens", "Référence", "Statut"];
@@ -361,11 +322,13 @@ export default function CompanyFinancialReportsPage() {
   }, [filteredTransactions, agencyNames, period.startDate, period.endDate]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-950 dark:text-white">Rapports</h1>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Synthèse financière consolidée du réseau</p>
+          <p className="mt-1 max-w-2xl text-sm text-gray-600 dark:text-gray-300">
+            Synthèse exportable de la période : mouvements, répartitions, anomalies et analyses.
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => period.setPreset("week")} className="inline-flex h-10 items-center rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
@@ -400,21 +363,37 @@ export default function CompanyFinancialReportsPage() {
       {error ? <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Patrimoine financier" value={loading ? "—" : money(summary.patrimony)} icon={Landmark} />
         <MetricCard label="Entrées période" value={loading ? "—" : money(summary.incoming)} icon={ArrowDownLeft} />
         <MetricCard label="Sorties période" value={loading ? "—" : money(summary.outgoing)} icon={ArrowUpRight} />
         <MetricCard label="Solde net période" value={loading ? "—" : money(summary.net)} icon={Wallet} />
+        <MetricCard label="Mouvements analysés" value={loading ? "—" : summary.movements} icon={ArrowRightLeft} />
       </div>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <SectionCard title="Répartition par agence" icon={Building2}>
           {byAgency.length === 0 ? <p className="py-8 text-center text-sm text-gray-500">Aucun flux sur cette période.</p> : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[560px] text-sm">
-                <thead><tr className="border-b border-gray-200 text-left text-xs uppercase text-gray-500 dark:border-gray-700"><th className="py-3 pr-3">Agence</th><th className="px-3 py-3 text-right">Entrées</th><th className="px-3 py-3 text-right">Sorties</th><th className="py-3 pl-3 text-right">Net</th></tr></thead>
-                <tbody>{byAgency.map((row) => <tr key={row.id} className="border-b border-gray-100 last:border-0 dark:border-gray-800"><td className="py-3 pr-3 font-medium">{row.name}</td><td className="px-3 py-3 text-right">{money(row.incoming)}</td><td className="px-3 py-3 text-right">{money(row.outgoing)}</td><td className={`py-3 pl-3 text-right font-semibold ${row.net < 0 ? "text-red-700" : "text-emerald-700"}`}>{money(row.net)}</td></tr>)}</tbody>
-              </table>
-            </div>
+            <>
+              <div className="hidden overflow-x-auto sm:block">
+                <table className="w-full min-w-[560px] text-sm">
+                  <thead><tr className="border-b border-gray-200 text-left text-xs uppercase text-gray-500 dark:border-gray-700"><th className="py-3 pr-3">Agence</th><th className="px-3 py-3 text-right">Entrées</th><th className="px-3 py-3 text-right">Sorties</th><th className="py-3 pl-3 text-right">Net</th></tr></thead>
+                  <tbody>{byAgency.map((row) => <tr key={row.id} className="border-b border-gray-100 last:border-0 dark:border-gray-800"><td className="py-3 pr-3 font-medium">{row.name}</td><td className="px-3 py-3 text-right">{money(row.incoming)}</td><td className="px-3 py-3 text-right">{money(row.outgoing)}</td><td className={`py-3 pl-3 text-right font-semibold ${row.net < 0 ? "text-red-700" : "text-emerald-700"}`}>{money(row.net)}</td></tr>)}</tbody>
+                </table>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:hidden">
+                {byAgency.map((row) => (
+                  <article key={row.id} className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 truncate text-sm font-semibold text-gray-950 dark:text-white">{row.name}</p>
+                      <p className={`shrink-0 text-sm font-bold ${row.net < 0 ? "text-red-700" : "text-emerald-700"}`}>{money(row.net)}</p>
+                    </div>
+                    <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                      <div><dt className="text-gray-500">Entrées</dt><dd className="mt-0.5 font-semibold">{money(row.incoming)}</dd></div>
+                      <div><dt className="text-gray-500">Sorties</dt><dd className="mt-0.5 font-semibold">{money(row.outgoing)}</dd></div>
+                    </dl>
+                  </article>
+                ))}
+              </div>
+            </>
           )}
         </SectionCard>
 
@@ -430,17 +409,6 @@ export default function CompanyFinancialReportsPage() {
           )}
         </SectionCard>
       </div>
-
-      <SectionCard title="Évolution du patrimoine financier" icon={FileText}>
-        {evolution.length === 0 ? <p className="py-8 text-center text-sm text-gray-500">Aucune évolution disponible sur cette période.</p> : (
-          <>
-            <div className="flex min-h-48 items-end gap-2 overflow-x-auto border-b border-gray-200 pb-2 dark:border-gray-700">
-              {evolution.map((row) => <div key={row.date} className="flex min-w-14 flex-1 flex-col items-center justify-end gap-2"><span className="text-[10px] font-medium text-gray-500">{money(row.value)}</span><div className={`w-full max-w-12 rounded-t ${row.value < 0 ? "bg-red-500" : "bg-emerald-500"}`} style={{ height: `${Math.max(8, (Math.abs(row.value) / maxEvolution) * 130)}px` }} /><span className="text-[10px] text-gray-500">{new Date(`${row.date}T12:00:00`).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })}</span></div>)}
-            </div>
-            <p className="mt-3 text-xs text-gray-500">Trajectoire indicative ancrée sur les soldes actuels, reconstituée uniquement avec les entrées et sorties confirmées de la période. Elle ne remplace pas un arrêté comptable historique.</p>
-          </>
-        )}
-      </SectionCard>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <SectionCard title="Anomalies et écarts importants" icon={AlertTriangle}>

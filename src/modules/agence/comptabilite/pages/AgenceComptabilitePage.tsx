@@ -1626,7 +1626,7 @@ const AgenceComptabilitePage: React.FC = () => {
           from: currentRange.from,
           to: currentRange.to,
         },
-        { force }
+        { force, tolerateSecondarySourceErrors: true }
       );
       const summary = buildAgencyCashStatementSummary(statement, 'all');
       setCashDashboardSummary(summary);
@@ -1889,33 +1889,19 @@ const AgenceComptabilitePage: React.FC = () => {
         dailyCashIn = ticketRevenue + courierRevenue;
       }
 
-      // 4. Sorties du jour (via financialTransactions)
+      // 4. Sorties du jour via relevé de caisse tolérant les sources secondaires indisponibles.
       let dailyCashOut = 0;
       try {
-        const txRef = collection(db, `companies/${user.companyId}/financialTransactions`);
-        const qTx = query(
-          txRef,
-          where("companyId", "==", user.companyId),
-          where("agencyId", "==", user.agencyId),
-          where("createdAt", ">=", Timestamp.fromDate(from)),
-          where("createdAt", "<", Timestamp.fromDate(to))
+        const statement = await loadAgencyCashStatementCached(
+          {
+            companyId: user.companyId,
+            agencyId: user.agencyId,
+            from,
+            to,
+          },
+          { tolerateSecondarySourceErrors: true }
         );
-        const snap = await getDocs(qTx);
-        for (const doc of snap.docs) {
-          const tx = doc.data() as Record<string, unknown>;
-          const type = String(tx.type ?? "").toLowerCase();
-          const source = String(tx.source ?? "").toLowerCase();
-          const isOut =
-            type === "expense" ||
-            type === "payment_sent" ||
-            type === "transfer" ||
-            type === "transfer_to_bank" ||
-            type === "adjustment" ||
-            source === "cashout";
-          if (isOut) {
-            dailyCashOut += Math.max(0, Number(tx.amount ?? 0));
-          }
-        }
+        dailyCashOut = buildAgencyCashStatementSummary(statement, 'all').totalExits;
       } catch (txErr) {
         console.warn('[AgenceCompta] Erreur chargement sorties journalières:', txErr);
         dailyCashOut = 0;
@@ -1983,7 +1969,7 @@ const AgenceComptabilitePage: React.FC = () => {
             from: dailyRange.from,
             to: dailyRange.to,
           },
-          { force }
+          { force, tolerateSecondarySourceErrors: true }
         ),
         loadAgencyCashStatementCached(
           {
@@ -1992,7 +1978,7 @@ const AgenceComptabilitePage: React.FC = () => {
             from: reportPeriodRange.from,
             to: reportPeriodRange.to,
           },
-          { force }
+          { force, tolerateSecondarySourceErrors: true }
         ),
       ]);
       setReportDailySummary(buildAgencyCashStatementSummary(dailyStatement, 'all'));
@@ -3223,7 +3209,10 @@ const AgenceComptabilitePage: React.FC = () => {
         )}
 
         {phaseView === 'historique' && (
-          <AgencyCashStatement initialRange={cashStatementInitialRange} />
+          <AgencyCashStatement
+            initialRange={cashStatementInitialRange}
+            tolerateSecondarySourceErrors
+          />
         )}
 
         {/* ============================================================================

@@ -79,6 +79,7 @@ async function traceStatementRead<T>(params: {
   companyId: string;
   agencyId: string;
   read: Promise<T>;
+  toleratePermissionDenied?: boolean;
 }): Promise<T> {
   const context = {
     operation: params.operation,
@@ -92,6 +93,9 @@ async function traceStatementRead<T>(params: {
     console.info("[agencyCashStatement][read]", { ...context, status: "success" });
     return result;
   } catch (error) {
+    if (params.toleratePermissionDenied && isPermissionDenied(error)) {
+      throw error;
+    }
     console.error("[agencyCashStatement][read]", {
       ...context,
       status: "error",
@@ -250,6 +254,7 @@ export async function loadAgencyCashStatement(params: {
         toTimestamp,
         agencyId
       ),
+      toleratePermissionDenied: tolerateSecondarySourceErrors,
     }).catch((error) => {
       if (!tolerateSecondarySourceErrors || !isPermissionDenied(error)) throw error;
       unavailableSources.push("financialTransactions");

@@ -1,7 +1,7 @@
 // src/modules/compagnie/accounting/layout/CompanyAccountantLayout.tsx
 // Dedicated layout for company_accountant / financial_director.
 // Strictly scoped: NO access to CEO menus (fleet, agencies, config, etc.)
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import {
   ArrowRightLeft,
@@ -9,7 +9,9 @@ import {
   FileText,
   Landmark,
   LayoutDashboard,
+  Moon,
   Receipt,
+  Sun,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
@@ -17,20 +19,13 @@ import { db } from "@/firebaseConfig";
 import {
   doc,
   getDoc,
-  collection,
-  getDocs,
-  query,
-  where,
-  onSnapshot,
 } from "firebase/firestore";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection } from "@/shared/layout/InternalLayout";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 import {
-  useOnlineStatus,
   useAgencyDarkMode,
   useAgencyKeyboardShortcuts,
-  AgencyHeaderExtras,
 } from "@/modules/agence/shared";
 import { usePendingExpensesCount } from "@/shared/hooks/usePendingExpensesCount";
 import NotificationsBell from "@/modules/compagnie/notifications/NotificationsBell";
@@ -51,7 +46,6 @@ interface Company {
 const CompanyAccountantLayout: React.FC = () => {
   const params = useParams();
   const { user, logout, company, loading } = useAuth() as any;
-  const isOnline = useOnlineStatus();
   const [darkMode, toggleDarkMode] = useAgencyDarkMode();
 
   const urlCompanyId = params.companyId;
@@ -179,26 +173,38 @@ const CompanyAccountantLayout: React.FC = () => {
           secondaryColor={(theme as any)?.colors?.secondary}
           onLogout={logout}
           banner={bannerContent}
-          headerRight={
-            <div className="flex items-center gap-2">
-              <NotificationsBell
-                companyId={currentCompanyId}
-                userId={user?.uid}
-                role={user?.role}
-              />
-              <AgencyHeaderExtras
-                isOnline={isOnline}
-                darkMode={darkMode}
-                onDarkModeToggle={toggleDarkMode}
-                showThemeToggle={false}
-              />
-            </div>
-          }
           headerLeft={
-            <div className="hidden sm:flex items-center gap-2 text-sm min-w-0">
+            <div className="flex items-center gap-2 text-sm min-w-0 lg:hidden">
               <span className="font-semibold text-gray-900 truncate">{currentCompany?.nom || "Compagnie"}</span>
               <span className="text-gray-300">/</span>
               <span className="text-gray-600 truncate">Contrôle financier</span>
+            </div>
+          }
+          headerActionsOnly
+          hideDesktopHeader
+          hideThemeToggle
+          sidebarFooterActions={
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-semibold uppercase tracking-wide text-white/70">
+                  Notifications
+                </span>
+                <NotificationsBell
+                  companyId={currentCompanyId}
+                  userId={user?.uid}
+                  role={user?.role}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={toggleDarkMode}
+                className="flex w-full items-center justify-between rounded-xl bg-white/12 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/20"
+                title={darkMode ? "Mode jour" : "Mode nuit"}
+                aria-label={darkMode ? "Mode jour" : "Mode nuit"}
+              >
+                <span>{darkMode ? "Mode jour" : "Mode nuit"}</span>
+                {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
             </div>
           }
           mainClassName="agency-content-transition"
