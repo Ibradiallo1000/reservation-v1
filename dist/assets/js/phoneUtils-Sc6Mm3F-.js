@@ -1,1 +1,0 @@
-function r(t,n){if(!t||typeof t!="string")return"";let e=t.replace(/\D/g,"");return e.startsWith("223")&&(e=e.slice(3)),e.length>8&&(e=e.slice(-8)),e.length!==8?"":e}function i(t){const n=t.telephoneOriginal??t.telephone??"";return typeof n=="string"?n:""}export{i as g,r as n};
