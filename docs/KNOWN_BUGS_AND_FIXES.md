@@ -140,6 +140,59 @@ Ne plus refaire
 
 --------------------------------------------------
 
+BUG-009
+
+Date
+
+2026-07-10
+
+Module concerné
+
+Validation comptable d'une session agence
+
+Symptôme
+
+La validation d'une session billetterie clôturée par le comptable agence échouait au commit avec :
+
+`FirebaseError: Missing or insufficient permissions`
+
+Le dernier `lastStep` journalisé était `set_cash_ledger` sur :
+
+`companies/{companyId}/accounts/agency_{agencyId}_cash/ledger/session_{shiftId}_accountant_validation`
+
+Cause exacte
+
+La transaction complète exécutait atomiquement `pending_cash`, `shift`, `shiftReport`, `agency_cash` et le ledger caisse. Les règles `agency_cash` et ledger relisaient plusieurs fois le même `shift` après transaction avec `existsAfter(shiftPath)` puis plusieurs `getAfter(shiftPath)`, ce qui augmentait le risque d'atteindre la limite d'évaluation Firestore Rules déjà documentée dans `BUG-001` et `BUG-002`.
+
+Mauvais diagnostic à éviter
+
+Ne jamais conclure que `set_cash_ledger` est la cause uniquement parce qu'il apparaît comme `lastStep`. Dans un commit atomique, une seule écriture ou condition Rules refusée rejette toute la transaction.
+
+Correctif appliqué
+
+Ajout du helper `accountantValidationShiftAfterOk(companyId, agencyId, shiftId, amount)` dans `firestore.rules`. Il charge une seule fois le `shift` après transaction avec `getAfter(...).data`, puis vérifie le statut final, le montant reçu et `validationAudit.validatedBy.id`.
+
+Le helper est utilisé par :
+
+- `agencyAccountantCanPostCashBalance()`;
+- `accounts/{accountId}/ledger/{ledgerId}`.
+
+Test associé
+
+`tests/firestore/agencySessionAccountantValidation.rules.test.cjs`
+
+Le test reproduit la transaction réelle avec `runTransaction()`, les lectures préalables, `pendingCashLedgerVersion: 1`, le payload runtime, un cas autorisé et les refus autre agence, banque, Mobile Money, autre compte compagnie, suppression ledger et update arbitraire.
+
+État du déploiement
+
+Tests émulateur, TypeScript et build : OK. Déploiement production et validation réelle dans l'application : à confirmer uniquement après `Deploy complete!`.
+
+Rapport détaillé
+
+Voir `docs/AGENCY_ACCOUNTANT_RUNTIME_DEBUG.md`, section `Incident du 2026-07-10 - Validation comptable d'une session - 403 Missing or insufficient permissions`.
+
+--------------------------------------------------
+
 # Versements et banques
 
 --------------------------------------------------

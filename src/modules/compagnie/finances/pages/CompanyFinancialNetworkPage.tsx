@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { collection, getDocs, Timestamp } from "firebase/firestore";
+import { useSearchParams } from "react-router-dom";
+import { collection, getDocs, limit, query, Timestamp, where } from "firebase/firestore";
 import {
   AlertTriangle,
   Building2,
@@ -25,6 +26,8 @@ import { sumComptaEncaissementsInRange } from "@/modules/agence/comptabilite/com
 import { listAgencyCashAudits } from "@/modules/agence/comptabilite/agencyCashAuditService";
 
 type NetworkStatus = "compliant" | "watch" | "critical" | "uncontrolled";
+type RemittanceSessionType = "ticketing" | "courier";
+type RemittancePriority = "normal" | "late" | "critical";
 
 type AgencyFinancialRow = {
   id: string;
@@ -36,6 +39,19 @@ type AgencyFinancialRow = {
   lastControlAt: Date | null;
   difference: number | null;
   status: NetworkStatus;
+};
+
+type PendingRemittanceRow = {
+  id: string;
+  agencyId: string;
+  agencyName: string;
+  sessionId: string;
+  sessionType: RemittanceSessionType;
+  typeLabel: "Billetterie" | "Courrier";
+  reference: string;
+  amount: number;
+  closedAt: Date | null;
+  priority?: RemittancePriority;
 };
 
 const STATUS_LABELS: Record<NetworkStatus, string> = {
@@ -67,7 +83,56 @@ function toDate(value: unknown): Date | null {
     const converter = (value as { toDate?: () => Date }).toDate;
     return typeof converter === "function" ? converter.call(value) : null;
   }
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
   return value instanceof Date ? value : null;
+}
+
+function ageMinutesSince(date: Date | null): number | null {
+  if (!date) return null;
+  return Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
+}
+
+function formatAge(minutes: number | null): string {
+  if (minutes == null) return "ancienneté inconnue";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours < 24) return mins > 0 ? `${hours} h ${mins} min` : `${hours} h`;
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours > 0 ? `${days} j ${restHours} h` : `${days} j`;
+}
+
+function formatTime(date: Date | null): string {
+  if (!date) return "Heure inconnue";
+  return date.toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
+}
+
+function numberFromFields(data: Record<string, unknown>, keys: string[]): number {
+  for (const key of keys) {
+    const value = Number(data[key]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
+function sessionTypeLabel(type: RemittanceSessionType): "Billetterie" | "Courrier" {
+  return type === "ticketing" ? "Billetterie" : "Courrier";
+}
+
+function priorityLabel(priority?: RemittancePriority | null): string {
+  if (priority === "critical") return "Critique";
+  if (priority === "late") return "En retard";
+  return "À traiter";
+}
+
+function priorityStatus(priority?: RemittancePriority | null): "danger" | "warning" | "success" {
+  if (priority === "critical") return "danger";
+  if (priority === "late") return "warning";
+  return "success";
 }
 
 function statusFor(cashBalance: number, difference: number | null): NetworkStatus {
@@ -89,18 +154,84 @@ function StatusPill({ status }: { status: NetworkStatus }) {
   return <StatusBadge status={variant}>{STATUS_LABELS[status]}</StatusBadge>;
 }
 
+function buildTicketRemittanceRow(params: {
+  agencyId: string;
+  agencyName: string;
+  docId: string;
+  data: Record<string, unknown>;
+}): PendingRemittanceRow {
+  const closedAt = toDate(params.data.closedAt ?? params.data.endAt ?? params.data.updatedAt ?? params.data.createdAt);
+  return {
+    id: `ticketing-${params.agencyId}-${params.docId}`,
+    agencyId: params.agencyId,
+    agencyName: params.agencyName,
+    sessionId: params.docId,
+    sessionType: "ticketing",
+    typeLabel: "Billetterie",
+    reference: String(params.data.shiftId ?? params.docId),
+    amount: numberFromFields(params.data, [
+      "expectedAmount",
+      "totalCash",
+      "cashExpected",
+      "totalRevenue",
+      "amount",
+      "montant",
+      "totalAmount",
+    ]),
+    closedAt,
+  };
+}
+
+function buildCourierRemittanceRow(params: {
+  agencyId: string;
+  agencyName: string;
+  docId: string;
+  data: Record<string, unknown>;
+}): PendingRemittanceRow {
+  const closedAt = toDate(params.data.closedAt ?? params.data.updatedAt ?? params.data.createdAt);
+  return {
+    id: `courier-${params.agencyId}-${params.docId}`,
+    agencyId: params.agencyId,
+    agencyName: params.agencyName,
+    sessionId: params.docId,
+    sessionType: "courier",
+    typeLabel: "Courrier",
+    reference: String(params.data.sessionId ?? params.docId),
+    amount: numberFromFields(params.data, [
+      "expectedAmount",
+      "ledgerSessionTotal",
+      "validatedAmount",
+      "amount",
+      "totalAmount",
+    ]),
+    closedAt,
+  };
+}
+
 export default function CompanyFinancialNetworkPage() {
   const { user } = useAuth() as any;
+  const [searchParams] = useSearchParams();
   const companyId = user?.companyId ?? "";
   const money = useFormatCurrency();
   const period = useGlobalPeriodContext();
+  const targetAgencyId = searchParams.get("agencyId") ?? "";
+  const targetSessionId = searchParams.get("sessionId") ?? "";
+  const targetSessionType = searchParams.get("sessionType") as RemittanceSessionType | null;
+  const targetPriority = searchParams.get("priority") as RemittancePriority | null;
 
   const [rows, setRows] = useState<AgencyFinancialRow[]>([]);
+  const [pendingRemittances, setPendingRemittances] = useState<PendingRemittanceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [agencyFilter, setAgencyFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<NetworkStatus | "all">("all");
+
+  useEffect(() => {
+    if (targetAgencyId) {
+      setAgencyFilter(targetAgencyId);
+    }
+  }, [targetAgencyId]);
 
   const loadNetwork = useCallback(async () => {
     if (!companyId) {
@@ -134,6 +265,7 @@ export default function CompanyFinancialNetworkPage() {
 
       const expensesByAgency = new Map<string, number>();
       const transfersByAgency = new Map<string, number>();
+      const nextPendingRemittances: PendingRemittanceRow[] = [];
       transactions.forEach((transaction) => {
         if (!transaction.agencyId || !isConfirmedTransactionStatus(transaction.status)) return;
         const amount = Math.abs(Number(transaction.amount) || 0);
@@ -157,13 +289,48 @@ export default function CompanyFinancialNetworkPage() {
 
       const nextRows = await Promise.all(
         agencies.map(async (agency): Promise<AgencyFinancialRow> => {
-          const [receipts, audits] = await Promise.all([
+          const [receipts, audits, shiftsSnap, courierSnap] = await Promise.all([
             sumComptaEncaissementsInRange(companyId, agency.id, start, endExclusive),
             listAgencyCashAudits(companyId, agency.id, 1),
+            getDocs(
+              query(
+                collection(db, "companies", companyId, "agences", agency.id, "shifts"),
+                where("status", "==", "closed"),
+                limit(100)
+              )
+            ),
+            getDocs(
+              query(
+                collection(db, "companies", companyId, "agences", agency.id, "courierSessions"),
+                where("status", "==", "CLOSED"),
+                limit(100)
+              )
+            ),
           ]);
           const latestAudit = audits[0];
           const difference = latestAudit ? Number(latestAudit.difference) : null;
           const cashBalance = liquidityByAgency[agency.id]?.cash ?? 0;
+
+          shiftsSnap.docs.forEach((sessionDoc) => {
+            nextPendingRemittances.push(
+              buildTicketRemittanceRow({
+                agencyId: agency.id,
+                agencyName: agency.name,
+                docId: sessionDoc.id,
+                data: sessionDoc.data() as Record<string, unknown>,
+              })
+            );
+          });
+          courierSnap.docs.forEach((sessionDoc) => {
+            nextPendingRemittances.push(
+              buildCourierRemittanceRow({
+                agencyId: agency.id,
+                agencyName: agency.name,
+                docId: sessionDoc.id,
+                data: sessionDoc.data() as Record<string, unknown>,
+              })
+            );
+          });
 
           return {
             id: agency.id,
@@ -180,10 +347,21 @@ export default function CompanyFinancialNetworkPage() {
       );
 
       nextRows.sort((left, right) => left.name.localeCompare(right.name, "fr"));
+      nextPendingRemittances.sort((left, right) => {
+        const targeted =
+          Number(right.agencyId === targetAgencyId && right.sessionId === targetSessionId)
+          - Number(left.agencyId === targetAgencyId && left.sessionId === targetSessionId);
+        const age =
+          (ageMinutesSince(right.closedAt) ?? -1)
+          - (ageMinutesSince(left.closedAt) ?? -1);
+        return targeted || age || right.amount - left.amount;
+      });
       setRows(nextRows);
+      setPendingRemittances(nextPendingRemittances);
     } catch (loadError) {
       console.error("[CompanyFinancialNetwork] load failed", loadError);
       setRows([]);
+      setPendingRemittances([]);
       setError(
         loadError instanceof Error
           ? loadError.message
@@ -192,7 +370,7 @@ export default function CompanyFinancialNetworkPage() {
     } finally {
       setLoading(false);
     }
-  }, [companyId, period.startDate, period.endDate]);
+  }, [companyId, period.startDate, period.endDate, targetAgencyId, targetSessionId]);
 
   useEffect(() => {
     void loadNetwork();
@@ -221,6 +399,30 @@ export default function CompanyFinancialNetworkPage() {
         && (statusFilter === "all" || row.status === statusFilter)
     );
   }, [rows, search, agencyFilter, statusFilter]);
+
+  const filteredPendingRemittances = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase("fr");
+    return pendingRemittances.filter((remittance) => {
+      const matchesSearch =
+        !needle
+        || remittance.agencyName.toLocaleLowerCase("fr").includes(needle)
+        || remittance.reference.toLocaleLowerCase("fr").includes(needle)
+        || remittance.sessionId.toLocaleLowerCase("fr").includes(needle);
+      return matchesSearch && (agencyFilter === "all" || remittance.agencyId === agencyFilter);
+    });
+  }, [agencyFilter, pendingRemittances, search]);
+
+  const targetedRemittance = useMemo(
+    () =>
+      pendingRemittances.find(
+        (remittance) =>
+          remittance.agencyId === targetAgencyId
+          && remittance.sessionId === targetSessionId
+          && (!targetSessionType || remittance.sessionType === targetSessionType)
+      ) ?? null,
+    [pendingRemittances, targetAgencyId, targetSessionId, targetSessionType]
+  );
+  const hasTargetContext = Boolean(targetAgencyId && targetSessionId && targetSessionType);
 
   return (
     <div className="space-y-4">
@@ -289,6 +491,86 @@ export default function CompanyFinancialNetworkPage() {
         <MetricCard label="Dépenses agences" value={loading ? "—" : money(totals.expenses)} icon={Receipt} />
         <MetricCard label="Remises / versements" value={loading ? "—" : money(totals.transfers)} icon={Building2} />
       </div>
+
+      <SectionCard
+        title="Remises en attente"
+        icon={Clock3}
+        description="Sessions clôturées à retrouver depuis le Dashboard."
+        right={
+          <StatusBadge status={filteredPendingRemittances.length > 0 ? "warning" : "success"}>
+            {filteredPendingRemittances.length}
+          </StatusBadge>
+        }
+      >
+        {hasTargetContext && !loading && !targetedRemittance ? (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+            Remise ciblée non trouvée dans les sessions en attente : {sessionTypeLabel(targetSessionType!)} {targetSessionId}.
+          </div>
+        ) : null}
+        {loading ? (
+          <div className="py-8 text-center text-sm text-gray-500">Chargement des remises en attente…</div>
+        ) : filteredPendingRemittances.length === 0 ? (
+          <div className="py-8 text-center text-sm text-gray-500">Aucune remise en attente pour les filtres actuels.</div>
+        ) : (
+          <ul className="space-y-2">
+            {filteredPendingRemittances.slice(0, 8).map((remittance) => {
+              const isTarget =
+                remittance.agencyId === targetAgencyId
+                && remittance.sessionId === targetSessionId
+                && (!targetSessionType || remittance.sessionType === targetSessionType);
+              const visiblePriority = isTarget ? targetPriority : remittance.priority;
+              return (
+                <li
+                  key={remittance.id}
+                  className={`rounded-lg border px-3 py-3 ${
+                    isTarget
+                      ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30"
+                      : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900"
+                  }`}
+                >
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-semibold text-gray-950 dark:text-white">
+                          {remittance.agencyName}
+                        </p>
+                        <StatusBadge status={priorityStatus(visiblePriority)}>
+                          {priorityLabel(visiblePriority)}
+                        </StatusBadge>
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                          {remittance.typeLabel}
+                        </span>
+                        {isTarget ? (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+                            Sélection Dashboard
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Session {remittance.reference} · ID {remittance.sessionId}
+                      </p>
+                    </div>
+                    <dl className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:min-w-[420px]">
+                      <div className="rounded-lg bg-gray-50 px-2 py-1.5 dark:bg-gray-800">
+                        <dt className="font-semibold uppercase text-gray-500">Montant</dt>
+                        <dd className="mt-0.5 font-bold text-gray-950 dark:text-white">{money(remittance.amount)}</dd>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 px-2 py-1.5 dark:bg-gray-800">
+                        <dt className="font-semibold uppercase text-gray-500">Clôture</dt>
+                        <dd className="mt-0.5 font-semibold text-gray-700 dark:text-gray-200">{formatTime(remittance.closedAt)}</dd>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 px-2 py-1.5 dark:bg-gray-800">
+                        <dt className="font-semibold uppercase text-gray-500">Ancienneté</dt>
+                        <dd className="mt-0.5 font-semibold text-gray-700 dark:text-gray-200">{formatAge(ageMinutesSince(remittance.closedAt))}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </SectionCard>
 
       <SectionCard
         title="Contrôle par agence"

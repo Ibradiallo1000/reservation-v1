@@ -797,6 +797,8 @@ export async function validateSessionByAccountant(params: {
 
     const nextLegacyStatus = SHIFT_STATUS.VALIDATED_AGENCY;
     const shiftPayload = stripUndefined({
+      companyId: params.companyId,
+      agencyId: params.agencyId,
       status: nextLegacyStatus,
       validatedAt: now,
       validationAudit,

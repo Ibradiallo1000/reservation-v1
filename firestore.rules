@@ -598,7 +598,14 @@ function operatorDigitalCanRejectOnlineReservation(companyId, agencyId) {
       let ledgerId = 'session_' + shiftId + '_accountant_validation';
       return /databases/$(database)/documents/companies/$(companyId)/accounts/$(accountId)/ledger/$(ledgerId);
     }
+function accountantValidationShiftAfterOk(companyId, agencyId, shiftId, amount) {
+  let shiftAfterData = getAfter(/databases/$(database)/documents/companies/$(companyId)/agences/$(agencyId)/shifts/$(shiftId)).data;
+  return shiftAfterData.get('status', '') == 'validated_agency'
+    && shiftAfterData.get('validationAudit', {}).get('receivedCashAmount', 0) == amount
+    && shiftAfterData.get('validationAudit', {}).get('validatedBy', {}).get('id', '') == request.auth.uid;
+}
 function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
+  let userAgencyId = getUserAgencyId();
   let shiftId = request.resource.data.get('lastAccountantValidationShiftId', '');
   let previousBalance = isCreate ? 0 : resource.data.get('balance', 0);
   let nextBalance = request.resource.data.get('balance', 0);
@@ -606,25 +613,21 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
   let changed = isCreate
     ? request.resource.data.keys()
     : request.resource.data.diff(resource.data).affectedKeys();
-  let shiftPath = /databases/$(database)/documents/companies/$(companyId)/agences/$(getUserAgencyId())/shifts/$(shiftId);
 
   return isAuth()
     && isComptable()
     && userAgencyBelongsToCompany(companyId)
-    && getUserAgencyId() != ''
-    && accountId == 'agency_' + getUserAgencyId() + '_cash'
+    && userAgencyId != ''
+    && accountId == 'agency_' + userAgencyId + '_cash'
     && request.resource.data.get('companyId', companyId) == companyId
-    && request.resource.data.get('agencyId', getUserAgencyId()) == getUserAgencyId()
+    && request.resource.data.get('agencyId', userAgencyId) == userAgencyId
     && shiftId is string
     && shiftId.size() > 0
     && request.resource.data.get('balance', 0) is number
     && amount > 0
     && amount < 100000000
     && request.resource.data.get('updatedAt', null) == request.time
-    && existsAfter(shiftPath)
-    && getAfter(shiftPath).data.get('status', '') == 'validated_agency'
-    && getAfter(shiftPath).data.get('validationAudit', {}).get('receivedCashAmount', 0) == amount
-    && getAfter(shiftPath).data.get('validationAudit', {}).get('validatedBy', {}).get('id', '') == request.auth.uid
+    && accountantValidationShiftAfterOk(companyId, userAgencyId, shiftId, amount)
     && (
       (
         isCreate
@@ -657,6 +660,38 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
       )
     );
 }
+    function agencyAccountantShiftValidationUpdateOk(companyId, agencyId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return isAuth()
+        && isComptable()
+        && userAgencyBelongsToCompany(companyId)
+        && getUserAgencyId() == agencyId
+        && resource.data.get('status', '') == 'closed'
+        && request.resource.data.get('status', '') == 'validated_agency'
+        && request.resource.data.get('companyId', companyId) == companyId
+        && request.resource.data.get('agencyId', agencyId) == agencyId
+        && request.resource.data.get('accountantValidated', false) == true
+        && request.resource.data.get('validationAudit', {}).get('validatedBy', {}).get('id', '') == request.auth.uid
+        && request.resource.data.get('validationAudit', {}).get('receivedCashAmount', 0) is number
+        && request.resource.data.get('validationAudit', {}).get('receivedCashAmount', 0) > 0
+        && changed.hasOnly([
+          'companyId',
+          'agencyId',
+          'status',
+          'validatedAt',
+          'validationAudit',
+          'accountantValidated',
+          'accountantValidatedAt',
+          'remittanceStatus',
+          'remittanceDiscrepancyAmount',
+          'pendingCashLedgerVersion',
+          'cashStatus',
+          'discrepancyOverrideConfirmed',
+          'discrepancyOverrideBy',
+          'discrepancyOverrideAt',
+          'updatedAt'
+        ]);
+    }
     function canReadOwnAgencyCashAccount(companyId, accountId) {
       return resource != null
         && isAuth()
@@ -1016,6 +1051,23 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
         && request.resource.data.get('includeInLiquidity', true) == false
         && request.resource.data.get('createdAt', null) == request.time
         && request.resource.data.get('updatedAt', null) == request.time;
+    }
+    function agencyAccountantPendingCashLegacyDecreaseOk(companyId, accountId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return isAuth()
+        && (
+          hasUserRole('agency_accountant')
+          || hasUserRole('comptable')
+          || hasUserRole('Comptable')
+        )
+        && userAgencyBelongsToCompany(companyId)
+        && accountId == 'agency_' + getUserAgencyId() + '_pending_cash'
+        && resource.data.get('balance', -1) is number
+        && request.resource.data.get('balance', -1) is number
+        && request.resource.data.get('balance', -1) >= 0
+        && request.resource.data.get('balance', -1) <= resource.data.get('balance', 0)
+        && request.resource.data.get('updatedAt', null) == request.time
+        && changed.hasOnly(['balance', 'updatedAt']);
     }
     function isAgencyAccountantForCompany(companyId) {
       let role = getUserRole();
@@ -2681,7 +2733,8 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
             && request.resource.data.get('userId', '').size() > 0
             && request.resource.data.get('status', '') in ['active', 'pending'];
           /* Pause billetterie (active → paused) : uniquement le guichetier titulaire du poste (pas le comptable). */
-          allow update: if isAuth() && (
+          allow update: if agencyAccountantShiftValidationUpdateOk(companyId, agencyId)
+          || isAuth() && (
             (userCompanyId() == companyId || userAgencyBelongsToCompany(companyId) || getUserRole() == 'admin_platforme') && (
               resource.data.status != 'validated' &&
               (resource.data.status != 'active' || request.resource.data.status != 'paused'
@@ -3406,6 +3459,13 @@ match /accounts/{accountId} {
       && request.resource.data.get('includeInLiquidity', false) == true
     );
 
+  allow update: if agencyAccountantPendingCashLegacyDecreaseOk(companyId, accountId);
+  allow update: if accountId.matches('agency_.+_cash')
+    && request.resource.data.get('lastAccountantValidationShiftId', '') != ''
+    && agencyAccountantCanPostCashBalance(companyId, accountId, false)
+    && request.resource.data.diff(resource.data).affectedKeys()
+      .hasOnly(['balance', 'lastAccountantValidationShiftId', 'updatedAt']);
+
   allow update: if (
     request.resource.data.get('lastDirectTransferId', '') != ''
     && (
@@ -3436,13 +3496,6 @@ match /accounts/{accountId} {
     && request.resource.data.get('updatedAt', null) == request.time
     && request.resource.data.get('balance', 0) is number
     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'updatedAt'])
-  || (
-    accountId.matches('agency_.+_cash')
-    && request.resource.data.get('lastAccountantValidationShiftId', '') != ''
-    && agencyAccountantCanPostCashBalance(companyId, accountId, false)
-    && request.resource.data.diff(resource.data).affectedKeys()
-      .hasOnly(['balance', 'lastAccountantValidationShiftId', 'updatedAt'])
-  )
   || (
     accountId in ['company_clearing', 'company_mobile_money']
     && request.resource.data.get('lastOnlinePaymentTransactionId', '') != ''
@@ -3522,9 +3575,12 @@ match /accounts/{accountId} {
       && request.resource.data.get('amount', 0) < 100000000
       && request.resource.data.get('createdBy', '') == request.auth.uid
       && request.resource.data.get('status', '') == 'posted'
-      && getAfter(/databases/$(database)/documents/companies/$(companyId)/agences/$(request.resource.data.agencyId)/shifts/$(request.resource.data.shiftId)).data.get('status', '') == 'validated_agency'
-      && getAfter(/databases/$(database)/documents/companies/$(companyId)/agences/$(request.resource.data.agencyId)/shifts/$(request.resource.data.shiftId)).data.get('validationAudit', {}).get('receivedCashAmount', 0) == request.resource.data.get('amount', 0)
-      && getAfter(/databases/$(database)/documents/companies/$(companyId)/agences/$(request.resource.data.agencyId)/shifts/$(request.resource.data.shiftId)).data.get('validationAudit', {}).get('validatedBy', {}).get('id', '') == request.auth.uid;
+      && accountantValidationShiftAfterOk(
+        companyId,
+        request.resource.data.get('agencyId', ''),
+        request.resource.data.get('shiftId', ''),
+        request.resource.data.get('amount', 0)
+      );
     allow update, delete: if false;
   }
 }
