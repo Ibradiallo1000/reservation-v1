@@ -1,5 +1,5 @@
 // src/firebaseConfig.ts
-import { initializeApp, getApps, getApp } from "firebase/app";
+import { initializeApp, getApps, getApp, FirebaseOptions } from "firebase/app";
 import {
   initializeFirestore,
   memoryLocalCache,
@@ -15,21 +15,42 @@ import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
 
 /* =====================================================================
    1) CONFIG FIREBASE
-   Remplace par tes valeurs si besoin (actuellement inchangées).
    Pour auth/network-request-failed: vérifier Firebase Console >
    Authentication > Paramètres > Autoriser les domaines (inclure localhost).
    Les requêtes Auth passent par identitytoolkit.googleapis.com et
    securetoken.googleapis.com — ne pas bloquer (proxy/pare-feu).
 ===================================================================== */
-const firebaseConfig = {
-  apiKey: "AIzaSyB9sGzgvdzhxxhIshtPprPix7oBfCB2OuM",
-  authDomain: "monbillet-95b77.firebaseapp.com",
-  projectId: "monbillet-95b77",
-  storageBucket: "monbillet-95b77.appspot.com",
-  messagingSenderId: "337289733382",
-  appId: "1:337289733382:web:bb99ee8f48861b47226a87",
-  measurementId: "G-G96GYRYS76",
+const requiredEnv = {
+  VITE_FIREBASE_API_KEY: import.meta.env.VITE_FIREBASE_API_KEY,
+  VITE_FIREBASE_AUTH_DOMAIN: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  VITE_FIREBASE_PROJECT_ID: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  VITE_FIREBASE_STORAGE_BUCKET: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  VITE_FIREBASE_MESSAGING_SENDER_ID:
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  VITE_FIREBASE_APP_ID: import.meta.env.VITE_FIREBASE_APP_ID,
 };
+
+const missingRequiredEnv = Object.entries(requiredEnv)
+  .filter(([, value]) => !value)
+  .map(([key]) => key);
+
+if (missingRequiredEnv.length > 0) {
+  throw new Error(
+    `[Firebase Config] Variables manquantes : ${missingRequiredEnv.join(", ")}`
+  );
+}
+
+const firebaseConfig: FirebaseOptions = {
+  apiKey: requiredEnv.VITE_FIREBASE_API_KEY,
+  authDomain: requiredEnv.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: requiredEnv.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: requiredEnv.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: requiredEnv.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: requiredEnv.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+};
+
+export const APP_VERSION = import.meta.env.VITE_APP_VERSION || "dev";
 
 /* =====================================================================
    2) INIT APP (idempotent)
@@ -39,11 +60,11 @@ const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 /* =====================================================================
    3) APP CHECK (optionnel)
 ===================================================================== */
-const RECAPTCHA_SITE_KEY = import.meta?.env?.VITE_RECAPTCHA_V3_KEY;
+const RECAPTCHA_SITE_KEY = import.meta.env.VITE_RECAPTCHA_V3_KEY;
 
 if (typeof window !== "undefined") {
   const debug =
-    import.meta?.env?.VITE_APPCHECK_DEBUG === "true" &&
+    import.meta.env.VITE_APPCHECK_DEBUG === "true" &&
     ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
   if (debug) {
@@ -67,7 +88,7 @@ if (typeof window !== "undefined") {
 ===================================================================== */
 
 const FORCE_LONG_POLLING =
-  import.meta?.env?.VITE_FIRESTORE_FORCE_LONG_POLLING === "true";
+  import.meta.env.VITE_FIRESTORE_FORCE_LONG_POLLING === "true";
 
 // IndexedDB persistence disabled to avoid production crash (AS before initialization / heartbeat in separate chunk).
 // Firestore works normally with in-memory cache only.
@@ -89,12 +110,42 @@ const functions = getFunctions(app, "europe-west1");
    5) ÉMULATEURS EN LOCAL (contrôlable via .env)
 ===================================================================== */
 
-const wantEmulators = import.meta?.env?.VITE_USE_EMULATORS === "true";
+const wantEmulators = import.meta.env.VITE_USE_EMULATORS === "true";
 const isLocalhost =
   typeof window !== "undefined" &&
   ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
 const shouldUseEmulators = wantEmulators && isLocalhost;
+const isLocalProject =
+  firebaseConfig.projectId?.startsWith("demo-") ||
+  firebaseConfig.projectId?.includes("local");
+
+if (typeof window !== "undefined" && wantEmulators && !isLocalhost) {
+  throw new Error(
+    "[Firebase Config] VITE_USE_EMULATORS=true est autorisé uniquement sur localhost ou 127.0.0.1."
+  );
+}
+
+if (wantEmulators && !isLocalProject) {
+  throw new Error(
+    "[Firebase Config] VITE_USE_EMULATORS=true exige un VITE_FIREBASE_PROJECT_ID local, par exemple demo-teliya-local."
+  );
+}
+
+if (
+  firebaseConfig.projectId === "teliya-staging" &&
+  import.meta.env.VITE_USE_EMULATORS === "true"
+) {
+  throw new Error(
+    "[Firebase Config] Le projet staging ne doit pas être utilisé avec les émulateurs."
+  );
+}
+
+declare global {
+  interface Window {
+    __TELIYA_FIREBASE_EMULATORS_CONNECTED__?: boolean;
+  }
+}
 
 /**
  * initFirebase()
@@ -104,6 +155,10 @@ const shouldUseEmulators = wantEmulators && isLocalhost;
 export async function initFirebase() {
   try {
     if (shouldUseEmulators) {
+      if (window.__TELIYA_FIREBASE_EMULATORS_CONNECTED__) {
+        return;
+      }
+
       console.info("⚡ Connexion aux émulateurs Firebase…");
 
       // Firestore
@@ -120,6 +175,7 @@ export async function initFirebase() {
       // Functions (attache à l'instance functions déclarée ci-dessus)
       connectFunctionsEmulator(functions, "127.0.0.1", 5001);
 
+      window.__TELIYA_FIREBASE_EMULATORS_CONNECTED__ = true;
       console.info("🔥 Émulateurs connectés.");
     } else {
       console.info("ℹ️ Emulateurs désactivés (mode cloud).");
