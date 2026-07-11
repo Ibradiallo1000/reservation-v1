@@ -5,8 +5,11 @@
   "type": "module",
   "scripts": {
     "clean": "rimraf dist",
-    "dev": "vite",
-    "build": "npm run clean && tsc && vite build",
+    "generate:messaging-sw": "node scripts/generate-firebase-messaging-sw.mjs",
+    "dev": "node scripts/generate-firebase-messaging-sw.mjs development && vite",
+    "dev:staging": "node scripts/generate-firebase-messaging-sw.mjs staging && vite --mode staging",
+    "build": "npm run clean && node scripts/generate-firebase-messaging-sw.mjs production && tsc && vite build",
+    "build:staging": "node scripts/generate-firebase-messaging-sw.mjs staging && vite build --mode staging",
     "preview": "vite preview",
     "generate-icons": "node scripts/generate-icons.js",
     "generate-pwa-icons": "node scripts/generate-pwa-icons.js",

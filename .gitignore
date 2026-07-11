@@ -7,6 +7,9 @@ node_modules
 serviceAccountKey.json
 scripts/serviceAccount.json
 
+# Generated Firebase Messaging service worker
+public/firebase-messaging-sw.js
+
 # Local environment files
 .env
 .env.local
