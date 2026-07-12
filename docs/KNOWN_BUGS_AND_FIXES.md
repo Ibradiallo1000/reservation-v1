@@ -140,6 +140,70 @@ Ne plus refaire
 
 --------------------------------------------------
 
+BUG-010
+
+Date
+
+2026-07-12
+
+Module concerné
+
+Firestore Rules — versement bancaire direct agence et paiement online Mobile Money
+
+Symptôme
+
+Le test Rules Emulator du versement bancaire direct agence échouait avec une limite d'évaluation Firestore Rules :
+
+`Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached`
+
+Après optimisation du versement bancaire, le scénario Mobile Money online a également révélé que des branches non liées pouvaient être évaluées trop tôt si elles n'étaient pas protégées par un marqueur déterministe du workflow.
+
+Cause exacte
+
+Les blocs `accounts/{accountId}`, `financialTransactions/{transactionId}` et `financialTransactionIdempotency/{key}` contenaient plusieurs branches transactionnelles coûteuses capables d'être évaluées pour des écritures sans rapport direct. Certaines conditions répétaient aussi des `getAfter(...)` sur les mêmes documents.
+
+Deux confusions techniques augmentaient le risque :
+
+- le paiement online Mobile Money identifie la transaction par un id `tx_*`, alors que la clé d'idempotence porte le préfixe `payment_received_*` ;
+- certains contrôles satellites pouvaient relire l'écriture principale avec `existsAfter(...)`, créant une dépendance circulaire inutile dans le commit atomique.
+
+Correction appliquée
+
+Ajout de gardes déterministes avant les helpers coûteux :
+
+- `agency_transfer_*` pour les versements agence ;
+- `payment_received_*` pour les clés d'idempotence Mobile Money ;
+- `type == 'payment_received'` pour les transactions financières Mobile Money ;
+- comptes compagnie Mobile Money et clearing isolés des branches génériques ;
+- compte `agency_*_pending_cash` protégé avant d'appeler le legacy helper.
+
+Les validations ont été simplifiées en chargeant une seule fois les documents `getAfter(...).data` lorsque possible. Les helpers Mobile Money online ont été séparés entre création et mise à jour de comptes pour éviter l'accès à `resource.data` sur une création. Le contrôle de seuil des dépenses directes agence a été conservé explicitement afin de ne pas ouvrir un flux au-dessus du seuil autorisé.
+
+Fichiers modifiés
+
+- `firestore.rules`
+- `docs/KNOWN_BUGS_AND_FIXES.md`
+
+Impact métier
+
+Le versement bancaire direct agence et le paiement online Mobile Money restent autorisés uniquement pour leurs rôles et écritures attendus, sans élargir les permissions globales ni modifier les données Firestore.
+
+Vérifications effectuées
+
+- test Rules Emulator ciblé `agencyBankDepositDirect.rules.test.cjs` : OK ;
+- test Rules Emulator ciblé `operatorDigitalOnlineMobileMoney.rules.test.cjs` : OK ;
+- `npm run test:rules` : OK ;
+- `npm run test:run` : OK ;
+- `npm run build` : OK.
+
+Ne plus refaire
+
+- protéger une transaction Mobile Money par le préfixe du `transactionId` lorsque le préfixe métier est porté par la clé d'idempotence ;
+- ajouter une branche Rules coûteuse sans garde déterministe simple ;
+- ajouter un `existsAfter(...)` satellite qui relit inutilement la même écriture atomique.
+
+--------------------------------------------------
+
 BUG-009
 
 Date

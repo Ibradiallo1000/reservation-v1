@@ -22,6 +22,10 @@
     "migrate:trip-assignment-live-status": "npx ts-node scripts/migrateTripAssignmentLiveStatus.ts",
     "test:unit": "vitest run",
     "test:run": "vitest run",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-teliya-local \"node scripts/run-firestore-rules-tests.mjs\"",
+    "validate:firestore:staging": "npm run test:rules",
+    "deploy:rules:staging": "firebase deploy --only firestore:rules --project staging",
+    "deploy:indexes:staging": "firebase deploy --only firestore:indexes --project staging",
     "test:rules:agency-expense": "firebase emulators:exec --only firestore \"node tests/firestore/agencyExpenseDirect.rules.test.cjs\""
   },
   "dependencies": {
