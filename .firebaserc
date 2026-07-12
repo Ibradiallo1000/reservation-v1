@@ -1,5 +1,6 @@
 {
   "projects": {
-    "default": "monbillet-95b77"
+    "prod": "monbillet-95b77",
+    "staging": "teliya-staging"
   }
 }
