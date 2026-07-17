@@ -123,7 +123,7 @@ const TreasuryNewPayablePage = lazy(() => import("./modules/compagnie/treasury/p
 const ManagerShellPage = lazy(() => import("./modules/agence/manager/ManagerShellPage"));
 const ManagerTeamPage = lazy(() => import("./modules/agence/manager/ManagerTeamPage"));
 const ManagerReportsPage = lazy(() => import("./modules/agence/manager/ManagerReportsPage"));
-const AgencyActivityDomainPage = lazy(() => import("./modules/agence/manager/domains/AgencyActivityDomainPage"));
+const AgencyActivityDomainPage = lazy(() => import("./modules/agence/dashboard/AgencyTodayPage"));
 const AgencyActivityLogPage = lazy(() => import("./modules/agence/manager/AgencyActivityLogPage"));
 const AgencyAgentHistoryPage = lazy(() => import("./modules/agence/manager/AgencyAgentHistoryPage"));
 const AgencyCashDomainPage = lazy(() => import("./modules/agence/manager/domains/AgencyCashDomainPage"));
