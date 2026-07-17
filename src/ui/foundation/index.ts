@@ -14,3 +14,5 @@ export type { ShadowKey } from "./shadows";
 export { statusVariants, statusBadgeClasses } from "./status";
 export type { StatusVariant } from "./status";
 export { table, tableRowClassName } from "./table";
+export { tokens } from "./tokens";
+export type { TeliyaTokens } from "./tokens";

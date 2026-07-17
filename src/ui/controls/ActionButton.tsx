@@ -18,6 +18,8 @@ const variants = {
   "min-h-[44px] bg-red-600 text-white hover:bg-red-700 active:bg-red-800 focus-visible:ring-red-500",
   ghost:
   "text-gray-700 hover:bg-gray-100 active:bg-gray-200 dark:text-gray-200 dark:hover:bg-gray-800 dark:active:bg-gray-700 focus-visible:ring-gray-400 dark:focus-visible:ring-gray-500",
+  outline:
+  "min-h-[44px] border border-[var(--color-primary)] bg-transparent text-[var(--color-primary-hover)] hover:bg-[var(--color-primary-soft)] active:brightness-95 focus-visible:ring-[var(--color-primary)]",
 } as const;
 
 const sizes = {
@@ -34,6 +36,8 @@ export interface ActionButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ActionButtonVariant;
   size?: ActionButtonSize;
+  loading?: boolean;
+  loadingLabel?: string;
 }
 
 export const ActionButton = React.forwardRef<HTMLButtonElement, ActionButtonProps>(
@@ -43,13 +47,17 @@ export const ActionButton = React.forwardRef<HTMLButtonElement, ActionButtonProp
       variant = "primary",
       size = "default",
       disabled,
+      loading = false,
+      loadingLabel = "Chargement…",
+      children,
       ...props
     },
     ref
   ) => (
     <button
       ref={ref}
-      disabled={disabled}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
       className={cn(
         base,
         radius.md,
@@ -60,7 +68,10 @@ export const ActionButton = React.forwardRef<HTMLButtonElement, ActionButtonProp
         className
       )}
       {...props}
-    />
+    >
+      {loading && <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-r-transparent" aria-hidden />}
+      {loading ? loadingLabel : children}
+    </button>
   )
 );
 

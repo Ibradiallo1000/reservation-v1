@@ -8,11 +8,72 @@ html {
   scroll-behavior: smooth;
 }
 
+.environment-indicator {
+  position: fixed;
+  right: max(0.5rem, env(safe-area-inset-right));
+  bottom: max(0.5rem, env(safe-area-inset-bottom));
+  z-index: var(--z-environment, 45);
+  display: flex;
+  max-width: calc(100vw - 1rem);
+  align-items: center;
+  gap: 0.35rem;
+  overflow: hidden;
+  border: 1px solid var(--color-border, #cbd5e1);
+  border-radius: var(--radius-pill, 9999px);
+  background: rgb(15 23 42 / 0.92);
+  padding: 0.35rem 0.65rem;
+  color: #fff;
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  box-shadow: var(--shadow-md, 0 4px 12px rgb(15 23 42 / 0.14));
+  backdrop-filter: blur(8px);
+}
+
+.environment-indicator span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* =========================
    0) Variables de marque
    ========================= */
 @layer base {
   :root {
+    /* Fondation UI centrale. Les variables historiques restent des alias compatibles. */
+    --color-primary: #ff6600;
+    --color-primary-hover: #e55c00;
+    --color-primary-soft: #fff1e8;
+    --color-success: #15803d;
+    --color-warning: #b45309;
+    --color-danger: #b91c1c;
+    --color-info: #1d4ed8;
+    --color-surface: #ffffff;
+    --color-surface-secondary: #f8fafc;
+    --color-text: #0f172a;
+    --color-text-secondary: #475569;
+    --color-text-muted: #64748b;
+    --color-border: #cbd5e1;
+    --color-focus: #ff6600;
+    --color-overlay: rgb(15 23 42 / 0.58);
+    --space-page-x: clamp(1rem, 2vw, 2rem);
+    --space-page-y: clamp(1rem, 2vw, 1.5rem);
+    --space-card: clamp(1rem, 1.5vw, 1.5rem);
+    --radius-control: 0.5rem;
+    --radius-card: 0.75rem;
+    --radius-dialog: 1rem;
+    --radius-pill: 9999px;
+    --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.06);
+    --shadow-md: 0 4px 12px rgb(15 23 42 / 0.12);
+    --shadow-lg: 0 18px 45px rgb(15 23 42 / 0.18);
+    --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --control-sm: 2.25rem;
+    --control-md: 2.75rem;
+    --control-lg: 3rem;
+    --z-dropdown: 20;
+    --z-sticky: 30;
+    --z-environment: 45;
+    --z-overlay: 50;
+    --z-toast: 60;
+    --duration-fast: 120ms;
+    --duration-normal: 160ms;
+    --duration-slow: 200ms;
     /* Couleurs Teliya */
     --teliya-orange: #FF6600;
     --teliya-orange-100: #FFE3D1;
@@ -101,13 +162,14 @@ html.dark #root {
   }
   :focus { outline: none; }
   :focus-visible {
-    outline: 2px solid var(--teliya-orange);
+    outline: 2px solid var(--color-focus);
     outline-offset: 2px;
   }
 
   /* 2) Fond unique appli + texte net (zones métier : cartes blanches, pas de fond imbriqué) */
   body {
     @apply bg-gray-50;
+    font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -117,6 +179,13 @@ html.dark #root {
     background: var(--teliya-orange-100);
   }
 }
+
+@media (max-width: 374px) {
+  :root { --space-page-x: 0.75rem; --space-card: 0.875rem; }
+}
+
+html, body { max-width: 100%; overflow-x: clip; }
+code, pre, .table-scroll-region { max-width: 100%; overflow-x: auto; }
 
 /* =========================
    1) Images sans “flash”

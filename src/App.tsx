@@ -6,6 +6,8 @@ import UpdateBanner from "./UpdateBanner";
 import GlobalConnectionBanner from "@/shared/ui/GlobalConnectionBanner";
 import PushNotificationsBootstrap from "@/shared/push/PushNotificationsBootstrap";
 import { redirectToCanonicalIfNeeded } from "@/lib/canonicalRedirect";
+import { EnvironmentIndicator } from "@/shared/ui/EnvironmentIndicator";
+import { environmentInfo } from "@/firebaseConfig";
 
 /** Délai (ms) avant rechargement automatique quand une nouvelle version est détectée. */
 const AUTO_RELOAD_DELAY_MS = 2000;
@@ -75,6 +77,7 @@ const App: React.FC = () => {
         autoReloadDelayMs={AUTO_RELOAD_DELAY_MS}
       />
       <GlobalConnectionBanner />
+      <EnvironmentIndicator info={environmentInfo} />
     </AuthProvider>
   );
 };

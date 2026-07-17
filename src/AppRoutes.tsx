@@ -13,6 +13,9 @@ import { GlobalDataSnapshotProvider } from "@/contexts/GlobalDataSnapshotContext
 import { GlobalMoneyPositionsProvider } from "@/contexts/GlobalMoneyPositionsContext";
 
 const RouteResolver = lazy(() => import("./modules/compagnie/public/router/RouteResolver"));
+const UiFoundationsPage = import.meta.env.DEV
+  ? lazy(() => import("./dev/UiFoundationsPage"))
+  : null;
 const AdminCompanyPlan = lazy(() => import("@/modules/plateforme/pages/AdminCompanyPlan"));
 const PlansManager = lazy(() => import("@/modules/plateforme/pages/PlansManager"));
 const MentionsPage = lazy(() => import("./modules/compagnie/public/pages/MentionsPage"));
@@ -317,6 +320,7 @@ const AppRoutes = () => {
       <Routes key={pathname}>
         {/* Route de debug - accessible à tous */}
         <Route path="/debug-auth" element={<DebugAuthPage />} />
+        {UiFoundationsPage && <Route path="/dev/ui" element={<UiFoundationsPage />} />}
 
         {/* "/" : sous-domaine → RouteResolver (slug depuis l'hôte), sinon HomePage */}
         <Route path="/" element={<Suspense fallback={null}><SubdomainAwareHome /></Suspense>} />

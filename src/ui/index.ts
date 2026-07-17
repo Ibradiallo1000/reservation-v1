@@ -21,6 +21,7 @@ export {
   statusVariants,
   table,
   tableRowClassName,
+  tokens,
 } from "./foundation";
 export type {
   TypographyKey,
@@ -28,6 +29,7 @@ export type {
   ShadowKey,
   TransitionKey,
   StatusVariant,
+  TeliyaTokens,
 } from "./foundation";
 
 // Layout
@@ -43,10 +45,14 @@ export { StatusBadge, EmptyState, AlertMessage } from "./feedback";
 export type { StatusBadgeProps, EmptyStateProps, AlertMessageProps, AlertSeverity } from "./feedback";
 
 // Controls
-export { ActionButton, Input } from "./controls";
+export { ActionButton, IconButton, Input } from "./controls";
 export type {
   ActionButtonProps,
   ActionButtonVariant,
   ActionButtonSize,
   InputProps,
+  IconButtonProps,
 } from "./controls";
+
+export { Dialog, Sheet, TableShell, Spinner } from "./overlays";
+export type { DialogProps, SheetProps, TableShellProps, SpinnerProps } from "./overlays";

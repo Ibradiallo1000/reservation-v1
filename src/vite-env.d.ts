@@ -14,6 +14,7 @@ interface ImportMetaEnv {
   readonly VITE_APPCHECK_DEBUG: string;
   readonly VITE_FIRESTORE_FORCE_LONG_POLLING: string;
   readonly VITE_USE_EMULATORS: string;
+  readonly VITE_ALLOW_PRODUCTION_FROM_LOCAL: string;
 }
 
 interface ImportMeta {

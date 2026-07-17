@@ -12,6 +12,7 @@ import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 
 // App Check
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
+import { assertSafeFirebaseEnvironment } from "@/config/environmentSafety";
 
 /* =====================================================================
    1) CONFIG FIREBASE
@@ -49,6 +50,15 @@ const firebaseConfig: FirebaseOptions = {
   appId: requiredEnv.VITE_FIREBASE_APP_ID,
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
+
+export const environmentInfo = assertSafeFirebaseEnvironment({
+  hostname: typeof window !== "undefined" ? window.location.hostname : "",
+  mode: import.meta.env.MODE,
+  projectId: firebaseConfig.projectId,
+  useEmulators: import.meta.env.VITE_USE_EMULATORS === "true",
+  allowProductionFromLocal:
+    import.meta.env.VITE_ALLOW_PRODUCTION_FROM_LOCAL === "true",
+});
 
 export const APP_VERSION = import.meta.env.VITE_APP_VERSION || "dev";
 
@@ -110,36 +120,14 @@ const functions = getFunctions(app, "europe-west1");
    5) ÉMULATEURS EN LOCAL (contrôlable via .env)
 ===================================================================== */
 
-const wantEmulators = import.meta.env.VITE_USE_EMULATORS === "true";
+const wantEmulators = environmentInfo.transport === "emulators";
 const isLocalhost =
   typeof window !== "undefined" &&
   ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
 const shouldUseEmulators = wantEmulators && isLocalhost;
-const isLocalProject =
-  firebaseConfig.projectId?.startsWith("demo-") ||
-  firebaseConfig.projectId?.includes("local");
-
-if (typeof window !== "undefined" && wantEmulators && !isLocalhost) {
-  throw new Error(
-    "[Firebase Config] VITE_USE_EMULATORS=true est autorisé uniquement sur localhost ou 127.0.0.1."
-  );
-}
-
-if (wantEmulators && !isLocalProject) {
-  throw new Error(
-    "[Firebase Config] VITE_USE_EMULATORS=true exige un VITE_FIREBASE_PROJECT_ID local, par exemple demo-teliya-local."
-  );
-}
-
-if (
-  firebaseConfig.projectId === "teliya-staging" &&
-  import.meta.env.VITE_USE_EMULATORS === "true"
-) {
-  throw new Error(
-    "[Firebase Config] Le projet staging ne doit pas être utilisé avec les émulateurs."
-  );
-}
+// `assertSafeFirebaseEnvironment` bloque avant `initializeApp` toute combinaison
+// locale/production ou émulateur/projet cloud non explicitement autorisée.
 
 declare global {
   interface Window {
