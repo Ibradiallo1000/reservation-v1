@@ -1,68 +1,42 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { collection, doc, onSnapshot, query, orderBy } from "firebase/firestore";
 import {
   Activity,
-  ArrowUpRight,
   Building2,
   CreditCard,
   Gauge,
-  Layers3,
+  AlertTriangle,
 } from "lucide-react";
 import { db } from "@/firebaseConfig";
-import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
-import { Button } from "@/shared/ui/button";
-import { PageErrorState, PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
+import { PageErrorState, PageOfflineState } from "@/shared/ui/PageStates";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { formatCurrency } from "@/shared/utils/formatCurrency";
 import {
   formatDate,
-  getCompanyPlanConfig,
   getCompanyUsageRatio,
-  isCompanyBillable,
   mergeAdminPlansConfig,
   normalizeCompanyRecord,
   planLabel,
   type AdminCompanyRecord,
 } from "./adminBusinessUtils";
 import type { SystemPlansConfig } from "./systemPlansConfig";
-
-type SubscriptionRequest = {
-  id: string;
-  companyId: string;
-  status: string;
-};
-
-type KpiCardProps = {
-  title: string;
-  value: string;
-  hint: string;
-  icon: React.ComponentType<{ className?: string }>;
-};
-
-function KpiCard({ title, value, hint, icon: Icon }: KpiCardProps) {
-  return (
-    <Card>
-      <CardContent className="p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium text-slate-500">{title}</p>
-            <p className="mt-2 text-3xl font-black tracking-tight text-slate-950">{value}</p>
-            <p className="mt-2 text-sm text-slate-500">{hint}</p>
-          </div>
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-50 text-orange-600">
-            <Icon className="h-5 w-5" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+import {
+  DashboardEmptyState,
+  DashboardKpi,
+  DashboardSection,
+  DashboardSkeleton,
+} from "@/components/dashboard/DashboardPrimitives";
+import {
+  selectPlatformDashboard,
+  type PlatformSubscriptionRequest,
+} from "@/modules/plateforme/dashboard/platformDashboardSelectors";
 
 export default function AdminDashboard() {
   const isOnline = useOnlineStatus();
   const [companies, setCompanies] = useState<AdminCompanyRecord[]>([]);
   const [plans, setPlans] = useState<SystemPlansConfig>(mergeAdminPlansConfig(null));
-  const [requests, setRequests] = useState<SubscriptionRequest[]>([]);
+  const [requests, setRequests] = useState<PlatformSubscriptionRequest[]>([]);
   const [companiesReady, setCompaniesReady] = useState(false);
   const [plansReady, setPlansReady] = useState(false);
   const [requestsReady, setRequestsReady] = useState(false);
@@ -127,232 +101,110 @@ export default function AdminDashboard() {
 
   const loading = !companiesReady || !plansReady || !requestsReady;
 
-  const metrics = useMemo(() => {
-    const activeCompanies = companies.filter((company) => company.status !== "inactif");
-    const billableCompanies = companies.filter((company) => isCompanyBillable(company));
-    const premiumCompanies = companies.filter((company) => company.plan === "premium");
-    const totalOperations = companies.reduce(
-      (sum, company) => sum + company.currentMonthOperations,
-      0
-    );
-    const mrr = billableCompanies.reduce((sum, company) => {
-      return sum + getCompanyPlanConfig(plans, company.plan).price;
-    }, 0);
-    const pendingRequests = requests.filter((request) => request.status === "pending").length;
-    const nearLimitCount = companies.filter((company) => getCompanyUsageRatio(company, plans) >= 0.8).length;
-
-    const topUsageCompanies = [...companies]
-      .sort((a, b) => b.currentMonthOperations - a.currentMonthOperations)
-      .slice(0, 6)
-      .map((company) => {
-        const planConfig = getCompanyPlanConfig(plans, company.plan);
-        const usageRatio = getCompanyUsageRatio(company, plans);
-        return {
-          ...company,
-          usageRatio,
-          includedOperations: planConfig.includedOperations,
-          monthlyPrice: planConfig.price,
-        };
-      });
-
-    const recentCompanies = [...companies]
-      .filter((company) => company.createdAt)
-      .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0))
-      .slice(0, 5);
-
-    return {
-      totalCompanies: companies.length,
-      activeCompanies: activeCompanies.length,
-      premiumCompanies: premiumCompanies.length,
-      totalOperations,
-      mrr,
-      pendingRequests,
-      nearLimitCount,
-      averageOperations:
-        activeCompanies.length > 0 ? Math.round(totalOperations / activeCompanies.length) : 0,
-      topUsageCompanies,
-      recentCompanies,
-    };
-  }, [companies, plans, requests]);
+  const metrics = useMemo(() => selectPlatformDashboard(companies, plans, requests), [companies, plans, requests]);
 
   if (loading) {
-    return <PageLoadingState blocks={3} />;
+    return <DashboardSkeleton label="Chargement de la vue d’ensemble de la plateforme" />;
   }
 
   return (
-    <div className="space-y-6">
+    <main className="space-y-4 pb-5">
       {!isOnline && (
         <PageOfflineState message="Connexion instable: les indicateurs temps reel peuvent etre incomplets." />
       )}
       {error && <PageErrorState message={error} onRetry={() => window.location.reload()} />}
 
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+      <header className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-slate-950">
-            Dashboard plateforme
+            Vue d’ensemble de la plateforme
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Pilotage global des compagnies, abonnements et operations facturees.
+            État des compagnies, abonnements et volumes réellement enregistrés.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => window.location.assign("/admin/compagnies")}>
-            Gerer les compagnies
-          </Button>
-          <Button size="sm" onClick={() => window.location.assign("/admin/subscriptions")}>
-            Voir les demandes
-          </Button>
-        </div>
-      </div>
+        <Link to="/admin/compagnies" className="inline-flex min-h-11 items-center justify-center rounded-xl bg-orange-600 px-4 py-2 text-sm font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2">
+          Voir les compagnies
+        </Link>
+      </header>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <KpiCard
-          title="Compagnies clientes"
+      <section aria-label="Indicateurs essentiels" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <DashboardKpi
+          label="Compagnies"
           value={metrics.totalCompanies.toLocaleString("fr-FR")}
-          hint={`${metrics.activeCompanies.toLocaleString("fr-FR")} actives sur la plateforme`}
+          context={`${metrics.activeCompanies.toLocaleString("fr-FR")} actives`}
           icon={Building2}
         />
-        <KpiCard
-          title="MRR"
+        <DashboardKpi
+          label="Revenu mensuel"
           value={formatCurrency(metrics.mrr)}
-          hint={`${metrics.premiumCompanies.toLocaleString("fr-FR")} compagnies en Premium`}
+          context="Plans facturables configurés"
           icon={CreditCard}
         />
-        <KpiCard
-          title="Operations du mois"
+        <DashboardKpi
+          label="Opérations du mois"
           value={metrics.totalOperations.toLocaleString("fr-FR")}
-          hint={`${metrics.averageOperations.toLocaleString("fr-FR")} operations en moyenne par compagnie active`}
+          context="Compteurs déclarés par les compagnies"
           icon={Activity}
         />
-        <KpiCard
-          title="Quota sous tension"
-          value={metrics.nearLimitCount.toLocaleString("fr-FR")}
-          hint={`${metrics.pendingRequests.toLocaleString("fr-FR")} demandes d'upgrade en attente`}
+        <DashboardKpi
+          label="À surveiller"
+          value={metrics.companiesNearLimit.length.toLocaleString("fr-FR")}
+          context={`${metrics.pendingRequests.toLocaleString("fr-FR")} demande(s) d’abonnement en attente`}
           icon={Gauge}
         />
-      </div>
+      </section>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Compagnies a plus forte utilisation</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {metrics.topUsageCompanies.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
-                Aucune compagnie trouvee.
-              </div>
-            ) : (
-              metrics.topUsageCompanies.map((company) => {
-                const progress = Math.max(6, Math.round(company.usageRatio * 100));
-                const progressTone =
-                  company.usageRatio >= 0.8
-                    ? "bg-orange-500"
-                    : company.usageRatio >= 0.5
-                      ? "bg-sky-500"
-                      : "bg-emerald-500";
-
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.35fr_0.65fr]">
+        <DashboardSection title="Compagnies" description="Utilisation mensuelle des six compagnies les plus actives.">
+          {metrics.companiesByUsage.length === 0 ? (
+            <DashboardEmptyState title="Aucune compagnie" description="Aucune compagnie n’est enregistrée sur la plateforme." />
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {metrics.companiesByUsage.map((company) => {
+                const ratio = getCompanyUsageRatio(company, plans);
                 return (
-                  <div
-                    key={company.id}
-                    className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
-                  >
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-base font-semibold text-slate-950">
-                            {company.name}
-                          </span>
-                          <span
-                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                              company.plan === "premium"
-                                ? "bg-orange-100 text-orange-700"
-                                : "bg-slate-100 text-slate-700"
-                            }`}
-                          >
-                            {planLabel(company.plan)}
-                          </span>
-                        </div>
-                        <div className="mt-1 text-sm text-slate-500">
-                          {company.currentMonthOperations.toLocaleString("fr-FR")} /{" "}
-                          {company.includedOperations.toLocaleString("fr-FR")} operations
-                        </div>
+                  <Link key={company.id} to={`/admin/compagnies/${company.id}/modifier`} className="grid min-h-16 gap-2 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="truncate text-sm font-semibold text-slate-950">{company.name}</span>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{planLabel(company.plan)}</span>
+                        {company.status.toLowerCase() === "inactif" ? <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">Inactive</span> : null}
                       </div>
-                      <div className="text-sm font-semibold text-slate-900">
-                        {formatCurrency(company.monthlyPrice)} / mois
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100" aria-label={`${Math.round(ratio * 100)} % du quota utilisé`}>
+                        <div className="h-full rounded-full bg-orange-500" style={{ width: `${Math.round(ratio * 100)}%` }} />
                       </div>
                     </div>
-                    <div className="mt-3 h-2 rounded-full bg-slate-100">
-                      <div
-                        className={`h-2 rounded-full ${progressTone}`}
-                        style={{ width: `${Math.min(progress, 100)}%` }}
-                      />
-                    </div>
-                  </div>
+                    <span className="text-xs font-semibold tabular-nums text-slate-600">{company.currentMonthOperations.toLocaleString("fr-FR")} opérations</span>
+                  </Link>
                 );
-              })
+              })}
+            </div>
+          )}
+        </DashboardSection>
+
+        <div className="space-y-4">
+          <DashboardSection title="Points d’attention" description="Signaux administratifs issus des données existantes.">
+            {metrics.inactiveCompanies.length === 0 && metrics.companiesNearLimit.length === 0 && metrics.pendingRequests === 0 ? (
+              <DashboardEmptyState title="Aucun signal actif" description="Aucune compagnie inactive, quota sous tension ou demande en attente." />
+            ) : (
+              <ul className="space-y-2 text-sm">
+                {metrics.inactiveCompanies.map((company) => <li key={company.id} className="flex gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-rose-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" /><span><strong>{company.name}</strong> est inactive.</span></li>)}
+                {metrics.companiesNearLimit.slice(0, 3).map((company) => <li key={company.id} className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900"><Gauge className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" /><span><strong>{company.name}</strong> approche son quota.</span></li>)}
+                {metrics.pendingRequests > 0 ? <li className="rounded-xl border border-orange-200 bg-orange-50 p-3 text-orange-900"><Link to="/admin/subscriptions" className="font-semibold underline underline-offset-2">{metrics.pendingRequests} demande(s) d’abonnement à consulter</Link></li> : null}
+              </ul>
             )}
-          </CardContent>
-        </Card>
+          </DashboardSection>
 
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Mix produit</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm text-slate-500">STANDARD</div>
-                <div className="mt-1 text-2xl font-black text-slate-950">
-                  {(metrics.totalCompanies - metrics.premiumCompanies).toLocaleString("fr-FR")}
-                </div>
-              </div>
-              <div className="rounded-xl border border-orange-200 bg-orange-50 p-4">
-                <div className="text-sm text-orange-700">PREMIUM</div>
-                <div className="mt-1 text-2xl font-black text-orange-700">
-                  {metrics.premiumCompanies.toLocaleString("fr-FR")}
-                </div>
-              </div>
-              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                <div className="text-sm text-amber-700">Demandes a traiter</div>
-                <div className="mt-1 flex items-center gap-2 text-2xl font-black text-amber-700">
-                  {metrics.pendingRequests.toLocaleString("fr-FR")}
-                  <ArrowUpRight className="h-5 w-5" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Nouvelles compagnies</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {metrics.recentCompanies.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
-                  Aucun onboarding recent.
-                </div>
-              ) : (
-                metrics.recentCompanies.map((company) => (
-                  <div
-                    key={company.id}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4"
-                  >
-                    <div>
-                      <div className="font-semibold text-slate-950">{company.name}</div>
-                      <div className="text-sm text-slate-500">{formatDate(company.createdAt)}</div>
-                    </div>
-                    <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                      <Layers3 className="h-3.5 w-3.5" />
-                      {planLabel(company.plan)}
-                    </div>
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
+          <DashboardSection title="Nouvelles compagnies" description="Créations les plus récentes.">
+            {metrics.recentCompanies.length === 0 ? <DashboardEmptyState title="Aucun onboarding récent" description="La date de création n’est disponible pour aucune compagnie." /> : (
+              <ul className="divide-y divide-slate-100">
+                {metrics.recentCompanies.map((company) => <li key={company.id} className="flex items-center justify-between gap-3 py-2 text-sm"><span className="truncate font-semibold text-slate-900">{company.name}</span><time className="shrink-0 text-xs text-slate-500">{formatDate(company.createdAt)}</time></li>)}
+              </ul>
+            )}
+          </DashboardSection>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

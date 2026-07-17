@@ -10,12 +10,16 @@ import { type PeriodKind } from "@/shared/date/periodUtils";
 import { getTodayBamako } from "@/shared/date/dateUtilsTz";
 import { formatActivityPeriodLabelFr } from "@/shared/date/formatActivityPeriodFr";
 import CeoPilotageDashboard from "@/modules/compagnie/commandCenter/CeoPilotageDashboard";
+import { normalizeRole } from "@/authorization/roles";
+import { hasCapability } from "@/authorization/capabilities";
+import AuthorizationStatePage from "@/modules/auth/components/AuthorizationStatePage";
 
 export default function CEOCommandCenterPage() {
   const { user } = useAuth();
   const { companyId: routeCompanyId } = useParams<{ companyId: string }>();
   const companyId = routeCompanyId ?? user?.companyId ?? "";
   const globalPeriod = useGlobalPeriodContext();
+  const role = normalizeRole(Array.isArray(user?.role) ? user.role[0] : user?.role);
 
   const period = globalPeriod.preset as PeriodKind;
   const customStart = globalPeriod.preset === "custom" ? globalPeriod.startDate : "";
@@ -39,12 +43,16 @@ export default function CEOCommandCenterPage() {
     [globalPeriod.startDate, globalPeriod.endDate]
   );
 
+  if (!role || !hasCapability(role, "company.command.view")) {
+    return <AuthorizationStatePage state={role ? "access_denied" : "unknown_role"} />;
+  }
+
   return (
     <StandardLayoutWrapper noVerticalPadding className="!py-4">
       <header className="flex w-full flex-row flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-base font-semibold tracking-tight text-gray-900 dark:text-white">
-            Dashboard CEO
+            Command Center
           </h1>
           <p className="mt-0.5 text-xs font-medium text-slate-500 dark:text-slate-400">
             {activePeriodLabel}
@@ -68,6 +76,7 @@ export default function CEOCommandCenterPage() {
           {period === "custom" && (
             <>
               <input
+                aria-label="Début de la période personnalisée"
                 type="date"
                 value={customStart}
                 onChange={(e) => setCustomStart(e.target.value)}
@@ -75,6 +84,7 @@ export default function CEOCommandCenterPage() {
               />
               <span className="text-sm text-gray-500 dark:text-slate-400">au</span>
               <input
+                aria-label="Fin de la période personnalisée"
                 type="date"
                 value={customEnd}
                 onChange={(e) => setCustomEnd(e.target.value)}

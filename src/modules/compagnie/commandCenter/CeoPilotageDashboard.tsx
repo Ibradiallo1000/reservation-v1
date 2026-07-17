@@ -92,8 +92,6 @@ function gapLevel(activity: number, encaissement: number): { gap: number; level:
 }
 
 /** Rapprochement activité / encaissements sur la période affichée — jamais CRITIQUE si écart négatif. */
-type EcartHierStatus = "critical" | "ok" | "info";
-
 function interpretPeriodActivityEncaissementEcart(activityTotal: number, encaissementsTotal: number) {
   const ecart = Math.round((activityTotal - encaissementsTotal) * 100) / 100;
   if (ecart > 0) {
@@ -128,10 +126,6 @@ function alertRowClass(sev: AlertSeverity): string {
     return "border-red-300/90 bg-red-50/90 text-red-950 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-100";
   }
   return "border-orange-300/90 bg-orange-50/90 text-orange-950 dark:border-orange-900/50 dark:bg-orange-950/35 dark:text-orange-100";
-}
-
-function alertDefaultAction(sev: AlertSeverity): string {
-  return sev === "bad" ? "Traiter en priorité avec le réseau" : "Suivre le point avec les agences";
 }
 
 function trendPhrase(stable: boolean, delta: number): string {
@@ -918,7 +912,7 @@ export default function CeoPilotageDashboard({
   ].slice(0, 5);
 
   return (
-    <div className="w-full space-y-4 pb-5">
+    <div className="w-full space-y-4 pb-5" aria-live={loading ? "polite" : "off"} aria-busy={loading}>
       {rangeError && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
           {rangeError} Les détails de pilotage sont désactivés sur cette période.
@@ -930,7 +924,7 @@ export default function CeoPilotageDashboard({
           to={`${basePath}/reservations-reseau`}
           icon={<TrendingUp className="h-3.5 w-3.5" />}
           label="CA réseau"
-          value={loading ? "..." : activityMoneyValue}
+          value={loading ? "Chargement" : activityMoneyValue}
           detail={activityUnavailable ? "Indisponible" : "Voir le détail"}
           tooltipDetail={
             activityUnavailable
@@ -944,7 +938,7 @@ export default function CeoPilotageDashboard({
           to={`${basePath}/reservations-reseau`}
           icon={<CreditCard className="h-3.5 w-3.5" />}
           label="Billets"
-          value={loading ? "..." : activityCountValue(tickets)}
+          value={loading ? "Chargement" : activityCountValue(tickets)}
           detail={activityUnavailable ? "Indisponible" : "Voir le détail"}
           tooltipDetail={
             activityUnavailable
@@ -958,7 +952,7 @@ export default function CeoPilotageDashboard({
           to={`${basePath}/reservations-reseau`}
           icon={<Package className="h-3.5 w-3.5" />}
           label="Courrier"
-          value={loading ? "..." : activityCountValue(parcels)}
+          value={loading ? "Chargement" : activityCountValue(parcels)}
           detail={activityUnavailable ? "Indisponible" : "Voir le détail"}
           tooltipDetail={activityUnavailable ? "Source activité consolidée indisponible" : `CA courrier ${money(courierAmount)}`}
           trend={formatTrend(courierTrend)}
@@ -968,7 +962,7 @@ export default function CeoPilotageDashboard({
           to={`${basePath}/finances`}
           icon={<Landmark className="h-3.5 w-3.5" />}
           label="Trésorerie"
-          value={loading ? "..." : maskedMoney(ledger?.total ?? 0)}
+          value={loading ? "Chargement" : maskedMoney(ledger?.total ?? 0)}
           detail="Voir le détail"
           tooltipDetail={`Caisse ${maskedMoney(ledger?.cash ?? 0)} · Banque ${maskedMoney(ledger?.bank ?? 0)} · Mobile ${maskedMoney(ledger?.mobileMoney ?? 0)}`}
           tone={financeTone}
@@ -977,7 +971,7 @@ export default function CeoPilotageDashboard({
           to={`${basePath}/performance-agence`}
           icon={<Building2 className="h-3.5 w-3.5" />}
           label="Agences"
-          value={loading ? "..." : `${activeAgenciesCount} / ${totalAgencies}`}
+          value={loading ? "Chargement" : `${activeAgenciesCount} / ${totalAgencies}`}
           detail="Voir le détail"
           tooltipDetail={inactiveAgencies > 0 ? `${inactiveAgencies} agence(s) sans activité` : "Toutes les agences visibles sont actives"}
           trend={agencyTrendLabel}
@@ -987,7 +981,7 @@ export default function CeoPilotageDashboard({
           to={`${basePath}/audit-controle`}
           icon={<ShieldAlert className="h-3.5 w-3.5" />}
           label="Alertes"
-          value={loading ? "..." : attentionItems.length}
+          value={loading ? "Chargement" : attentionItems.length}
           detail={attentionItems.length > 0 ? "Voir le détail" : "Situation normale"}
           tooltipDetail={attentionItems.length > 0 ? "Signaux à examiner" : "Situation normale"}
           tone={attentionItems.length > 0 ? "warning" : "success"}
@@ -1110,15 +1104,16 @@ export default function CeoPilotageDashboard({
               className="shrink-0 rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
               title={hideTreasury ? "Afficher les montants" : "Masquer les montants"}
               aria-pressed={hideTreasury}
+              aria-label={hideTreasury ? "Afficher les montants financiers" : "Masquer les montants financiers"}
             >
               {hideTreasury ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
             </button>
           </div>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <CompactMetric label="Trésorerie disponible" value={loading ? "..." : maskedMoney(ledger?.total ?? 0)} tone={financeTone} />
-            <CompactMetric label="Solde net" value={loading ? "..." : maskedMoney(netBalance)} />
-            <CompactMetric label="Encaissements" value={loading ? "..." : maskedMoney(encaissements)} detail={formatTrend(encaissementsTrend) ?? undefined} />
-            <CompactMetric label="Dépenses" value={loading ? "..." : maskedMoney(expenses)} detail={formatTrend(expensesTrend) ?? undefined} />
+            <CompactMetric label="Trésorerie disponible" value={loading ? "Chargement" : maskedMoney(ledger?.total ?? 0)} tone={financeTone} />
+            <CompactMetric label="Solde net" value={loading ? "Chargement" : maskedMoney(netBalance)} />
+            <CompactMetric label="Encaissements" value={loading ? "Chargement" : maskedMoney(encaissements)} detail={formatTrend(encaissementsTrend) ?? undefined} />
+            <CompactMetric label="Dépenses" value={loading ? "Chargement" : maskedMoney(expenses)} detail={formatTrend(expensesTrend) ?? undefined} />
           </div>
         </div>
 
@@ -1181,7 +1176,7 @@ export default function CeoPilotageDashboard({
             ["Activité réseau", `${basePath}/reservations-reseau`],
             ["Finances", `${basePath}/finances`],
             ["Agences", `${basePath}/agences`],
-            ["Rapports", `${basePath}/accounting/rapports`],
+            ["Paramètres", `${basePath}/parametres`],
           ].map(([label, to]) => (
             <Link
               key={to}
