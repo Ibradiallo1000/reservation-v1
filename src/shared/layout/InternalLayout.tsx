@@ -7,11 +7,13 @@ import {
   Outlet,
   useLocation,
 } from "react-router-dom";
-import { LogOut, Menu, X, User, PanelLeftClose, PanelLeftOpen, ChevronDown, ChevronRight, Sun, Moon } from "lucide-react";
+import { LogOut, Menu, User, PanelLeftClose, PanelLeftOpen, ChevronDown, ChevronRight, Sun, Moon } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DESIGN } from "@/app/design-system";
 import { buildAgencyChromeStyleVars } from "@/shared/theme/agencySurfaceGradients";
+import { Sheet } from "@/ui";
+import { getMobileNavigation, isNavigationItemActive } from "@/navigation/navigation.utils";
 
 /* ================================================================
    PUBLIC TYPES
@@ -24,6 +26,7 @@ export interface NavSectionChild {
 }
 
 export interface NavSection {
+  id?: string;
   label: string;
   icon: LucideIcon;
   path: string;
@@ -31,6 +34,8 @@ export interface NavSection {
   badge?: number;
   /** If true, match exact path only */
   end?: boolean;
+  match?: string[];
+  mobilePriority?: number;
   /** Optional children for collapsible ERP-style submenu */
   children?: NavSectionChild[];
 }
@@ -80,6 +85,8 @@ export interface InternalLayoutProps {
   themeStorageKey?: string;
   /** Use only light/dark instead of the global light/dark/system cycle */
   binaryThemeToggle?: boolean;
+  /** Use the unified sidebar/mobile-bottom shell even with four destinations or fewer. */
+  forceSidebar?: boolean;
 }
 
 /* ================================================================
@@ -125,10 +132,11 @@ const InternalLayout: React.FC<InternalLayoutProps> = ({
   hideTabsOnMobile = false,
   themeStorageKey,
   binaryThemeToggle = false,
+  forceSidebar = false,
 }) => {
   const primary = primaryColor || DESIGN.defaultTheme.primary;
   const secondary = secondaryColor || primary;
-  const useSidebar = sections.length > 4;
+  const useSidebar = forceSidebar || sections.length > 4;
 
   const displayName = userName || userEmail || "Utilisateur";
   const roleLabel = ROLE_LABELS[role] ?? role;
@@ -229,9 +237,12 @@ function isSectionOrChildActive(pathname: string, section: { path: string; child
   });
 }
 
-function isNavPathActive(currentPath: string, targetPath: string, end?: boolean): boolean {
-  if (end) return currentPath === targetPath;
-  return currentPath === targetPath || (!targetPath.includes("?") && currentPath.startsWith(targetPath + "/"));
+function isNavPathActive(currentPath: string, section: Pick<NavSection, "path" | "match" | "end">): boolean {
+  return isNavigationItemActive(currentPath, {
+    to: section.path,
+    match: section.match,
+    end: section.end,
+  });
 }
 
 type ThemeMode = "light" | "dark" | "system";
@@ -328,14 +339,18 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
   const { isDark, cycleTheme } = useTheme(themeStorageKey, binaryThemeToggle);
   const location = useLocation();
   const pathname = location.pathname;
-  const mobileBottomSections = useMemo(
-    () => {
-      if (role !== "CEO") return [];
-      return sections.filter((section) =>
-        ["Dashboard", "Activité réseau", "Réservations", "Finances"].includes(section.label)
-      );
-    },
-    [role, sections]
+  const mobileNavigation = useMemo(
+    () => getMobileNavigation(sections.map((section, index) => ({
+      id: section.id ?? `${section.path}-${index}`,
+      label: section.label,
+      icon: section.icon,
+      to: section.path,
+      match: section.match,
+      end: section.end,
+      badge: section.badge,
+      mobilePriority: section.mobilePriority,
+    }))),
+    [sections],
   );
 
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => {
@@ -563,14 +578,6 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
       className="h-screen overflow-hidden bg-transparent"
       style={chromeStyle}
     >
-      {/* Mobile overlay */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 bg-black/40 z-40 md:hidden"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
-
       <div className="flex h-full">
         {/* Sidebar — desktop */}
         <aside
@@ -581,24 +588,6 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
           )}
           style={{ backgroundImage: "var(--agency-gradient-sidebar)" }}
         >
-          {sidebarContent}
-        </aside>
-
-        {/* Sidebar — mobile drawer */}
-        <aside
-          className={cn(
-            "lg:hidden fixed inset-y-0 left-0 w-[85vw] max-w-xs flex flex-col text-white transition-transform duration-300",
-            DESIGN.zIndex.sidebar,
-            mobileOpen ? "translate-x-0" : "-translate-x-full",
-          )}
-          style={{ backgroundImage: "var(--agency-gradient-sidebar)" }}
-        >
-          <button
-            onClick={() => setMobileOpen(false)}
-            className="absolute top-4 right-4 p-1 rounded-lg bg-white/10 hover:bg-white/20"
-          >
-            <X className="w-5 h-5" />
-          </button>
           {sidebarContent}
         </aside>
 
@@ -620,8 +609,11 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
             style={{ backgroundImage: "var(--agency-gradient-header)" }}
           >
             <button
+              type="button"
               onClick={() => setMobileOpen(true)}
-              className="lg:hidden p-2 -ml-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 flex-shrink-0"
+              className="lg:hidden min-h-11 min-w-11 p-2 -ml-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 flex-shrink-0"
+              aria-label="Ouvrir la navigation"
+              aria-expanded={mobileOpen}
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -674,18 +666,52 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
         </div>
       </div>
 
-      {mobileBottomSections.length > 0 && (
-        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:hidden">
-          <div className="mx-auto grid max-w-md grid-cols-4 gap-1">
-            {mobileBottomSections.map(({ label, icon: Icon, path, badge, end }) => {
-              const active = isNavPathActive(pathname, path, end);
+      <Sheet
+        open={mobileOpen}
+        onClose={() => setMobileOpen(false)}
+        title={`Navigation — ${brandName}`}
+        description={role}
+      >
+        <nav aria-label="Navigation mobile" className="grid gap-2">
+          {sections.map((section) => {
+            const Icon = section.icon;
+            const active = isNavPathActive(pathname, section);
+            return (
+              <NavLink
+                key={section.id ?? section.path}
+                to={section.path}
+                end={section.end}
+                aria-current={active ? "page" : undefined}
+                onClick={() => setMobileOpen(false)}
+                className={cn(
+                  "flex min-h-11 items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold",
+                  active ? "bg-orange-50 text-orange-700" : "text-slate-700 hover:bg-slate-100",
+                )}
+              >
+                <Icon className="h-5 w-5" />
+                <span className="flex-1">{section.label}</span>
+                {typeof section.badge === "number" && section.badge > 0 && (
+                  <span className="rounded-full bg-red-500 px-2 py-0.5 text-xs text-white">{section.badge}</span>
+                )}
+              </NavLink>
+            );
+          })}
+        </nav>
+      </Sheet>
+
+      {mobileNavigation.primary.length > 0 && (
+        <nav aria-label="Navigation principale mobile" className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:hidden">
+          <div className={cn("mx-auto grid max-w-md gap-1", mobileNavigation.secondary.length > 0 ? "grid-cols-5" : "grid-cols-4")}>
+            {mobileNavigation.primary.map(({ id, label, icon: Icon, to, match, badge, end }) => {
+              const active = isNavigationItemActive(pathname, { to, match, end });
               return (
                 <NavLink
-                  key={path}
-                  to={path}
+                  key={id}
+                  to={to}
                   end={end}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
-                    "relative flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-[10px] font-semibold leading-tight transition",
+                    "relative flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-[10px] font-semibold leading-tight transition",
                     active
                       ? "bg-orange-50 text-orange-700 dark:bg-orange-950/35 dark:text-orange-200"
                       : "text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-slate-100"
@@ -693,7 +719,7 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
                   onClick={() => setMobileOpen(false)}
                 >
                   <Icon className="h-4 w-4 shrink-0" />
-                  <span className="max-w-full truncate">{label === "Activité réseau" ? "Activité" : label}</span>
+                  <span className="max-w-full truncate">{label}</span>
                   {typeof badge === "number" && badge > 0 && (
                     <span className="absolute right-2 top-1 rounded-full bg-red-500 px-1 text-[9px] leading-3 text-white">
                       {badge > 9 ? "9+" : badge}
@@ -702,6 +728,17 @@ const SidebarLayout: React.FC<LayoutVariantProps> = ({
                 </NavLink>
               );
             })}
+            {mobileNavigation.secondary.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setMobileOpen(true)}
+                className="flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-900"
+                aria-label="Afficher plus de destinations"
+              >
+                <Menu className="h-4 w-4" />
+                <span>Plus</span>
+              </button>
+            )}
           </div>
         </nav>
       )}
@@ -833,8 +870,8 @@ const TabsLayout: React.FC<LayoutVariantProps> = ({
         >
           <div className={cn("w-full min-w-0", DESIGN.pageWidth, "px-4 md:px-6 py-2")}>
             <div className="flex flex-nowrap gap-2 overflow-x-auto overflow-y-hidden whitespace-nowrap pb-1 -mb-1 scrollbar-thin">
-              {sections.map(({ label, icon: Icon, path, badge, end }) => {
-                const active = isNavPathActive(currentPath, path, end);
+              {sections.map(({ label, icon: Icon, path, badge, end, match }) => {
+                const active = isNavPathActive(currentPath, { path, end, match });
                 return (
                 <NavLink
                   key={path}

@@ -17,6 +17,8 @@ import {
 } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
 import type { NavSection, NavSectionChild } from "@/shared/layout/InternalLayout";
+import { agencyManagerNavigation } from "@/navigation/agency.navigation";
+import { resolveNavigation, toNavSections } from "@/navigation/navigation.utils";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { DateFilterProvider } from "./DateFilterContext";
 import { useManagerAlerts } from "./useManagerAlerts";
@@ -79,38 +81,6 @@ function buildFleetOpsChildren(includeCourier: boolean): NavSectionChild[] {
     ...courierChildren(includeCourier && ENABLE_COURIER),
   ];
 }
-
-/** Menu Chef d'Agence : Dashboard, Finances, Départs, Rapports, Équipe, Trajets */
-const MANAGER_SECTIONS: Array<
-  NavSection & { moduleKey: string; activityBadge?: boolean; caisseBadge?: boolean }
-> = [
-  {
-    label: "Dashboard",
-    icon: Activity,
-    path: "/agence/activite",
-    end: true,
-    moduleKey: "dashboard",
-    activityBadge: true,
-  },
-  {
-    label: "Finances",
-    icon: Banknote,
-    path: "/agence/caisse",
-    end: true,
-    moduleKey: "finances",
-    caisseBadge: true,
-  },
-  {
-    label: "Départs",
-    icon: ClipboardCheck,
-    path: "/agence/validation-departs",
-    end: true,
-    moduleKey: "validations",
-  },
-  { label: "Rapports", icon: FileBarChart2, path: "/agence/reports", end: true, moduleKey: "reports" },
-  { label: "Équipe", icon: Users, path: "/agence/team", end: true, moduleKey: "team" },
-  { label: "Trajets", icon: MapPinned, path: "/agence/trajets", end: true, moduleKey: "trajets" },
-];
 
 /** Menu complet (pour admin/superviseur non chef) */
 const FULL_SECTIONS: Array<
@@ -225,27 +195,15 @@ const ManagerShellInner: React.FC = () => {
 
     // 🔥 Chef d'Agence : utiliser MANAGER_SECTIONS
     if (isChefAgence) {
-      return MANAGER_SECTIONS.map((s) => {
-        let badge: number | undefined;
-        if (s.activityBadge) {
-          const opBadge = (badgeByModule as Record<string, number>).operations ?? 0;
-          const n = (badgeByModule.dashboard ?? 0) + opBadge;
-          badge = n > 0 ? n : undefined;
-        } else if (s.caisseBadge) {
-          const finBadge = (badgeByModule as Record<string, number>).finances ?? 0;
-          const n = finBadge + (canValidateAgencyExpenses ? pendingManagerExpensesCount : 0);
-          badge = n > 0 ? n : undefined;
-        } else {
-          badge = badgeByModule[s.moduleKey as keyof typeof badgeByModule] || undefined;
-        }
-        return {
-          label: s.label,
-          icon: s.icon,
-          path: s.path,
-          end: s.end,
-          badge,
-        };
-      });
+      const activityBadge = (badgeByModule.dashboard ?? 0) +
+        ((badgeByModule as Record<string, number>).operations ?? 0);
+      const cashBadge = ((badgeByModule as Record<string, number>).finances ?? 0) +
+        (canValidateAgencyExpenses ? pendingManagerExpensesCount : 0);
+      return toNavSections(resolveNavigation(agencyManagerNavigation, rolesArr, {
+        "agency-today": activityBadge || undefined,
+        "agency-cash": cashBadge || undefined,
+        "agency-departures": (badgeByModule as Record<string, number>).validations || undefined,
+      }));
     }
 
     // 🔥 Admin / Superviseur : menu complet avec modules optionnels

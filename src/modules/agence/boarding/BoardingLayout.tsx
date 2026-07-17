@@ -4,18 +4,11 @@ import React from "react";
 import { Navigate, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
-import { BarChart3, BusFront, Camera, List } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
-import type { NavSection } from "@/shared/layout/InternalLayout";
 import type { Company } from "@/types/companyTypes";
 import { useOnlineStatus, useAgencyDarkMode, useAgencyKeyboardShortcuts } from "@/modules/agence/shared";
-
-const BOARDING_SECTIONS: NavSection[] = [
-  { label: "Départs", icon: BusFront, path: "/agence/boarding", end: true },
-  { label: "Scan", icon: Camera, path: "/agence/boarding/scan?view=scan" },
-  { label: "Liste", icon: List, path: "/agence/boarding/scan?view=liste" },
-  { label: "Rapports", icon: BarChart3, path: "/agence/boarding/scan?view=rapports" },
-];
+import { boardingNavigation } from "@/navigation/operations.navigation";
+import { resolveNavigation, toNavSections } from "@/navigation/navigation.utils";
 
 const ALLOWED_BOARDING_ROLES = [
   "chefEmbarquement",
@@ -35,9 +28,9 @@ const BoardingLayout: React.FC = () => {
   const isOnline = useOnlineStatus();
   const [darkMode] = useAgencyDarkMode(BOARDING_THEME_STORAGE_KEY);
 
-  useAgencyKeyboardShortcuts(BOARDING_SECTIONS);
-
   const rolesArr: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
+  const sections = toNavSections(resolveNavigation(boardingNavigation, rolesArr));
+  useAgencyKeyboardShortcuts(sections);
   const roles = new Set(rolesArr);
   const has = (r: string) => roles.has(r);
   const canUseBoarding = ALLOWED_BOARDING_ROLES.some((r) => has(r));
@@ -61,7 +54,7 @@ const BoardingLayout: React.FC = () => {
   return (
     <div className={`${darkMode ? "agency-dark " : ""}min-h-screen bg-gray-50 dark:bg-slate-950`}>
       <InternalLayout
-        sections={BOARDING_SECTIONS}
+        sections={sections}
         role={rolesArr[0] || "chefEmbarquement"}
         userName={user?.displayName ?? user?.nom}
         userEmail={user?.email}
@@ -84,6 +77,7 @@ const BoardingLayout: React.FC = () => {
         }
         mainClassName="agency-content-transition"
         hideTabsOnMobile
+        forceSidebar
         themeStorageKey={BOARDING_THEME_STORAGE_KEY}
         binaryThemeToggle
       >

@@ -165,7 +165,9 @@ const CourierBatchesPage = lazy(() => import("@/modules/agence/courrier/pages/Co
 const CourierReportsPage = lazy(() => import("@/modules/agence/courrier/pages/CourierReportsPage"));
 const CourierHistoriquePage = lazy(() => import("@/modules/agence/courrier/pages/CourierHistoriquePage"));
 const MediaPage = lazy(() => import("./modules/plateforme/pages/MediaPage"));
-const DebugAuthPage = lazy(() => import("@/shared/pages/DebugAuthPage"));
+const DebugAuthPage = import.meta.env.DEV
+  ? lazy(() => import("@/shared/pages/DebugAuthPage"))
+  : null;
 
 const asArray = (x: unknown) => (Array.isArray(x) ? x : [x].filter(Boolean));
 const hasAny = (roles: unknown, allowed: readonly string[]) =>
@@ -318,8 +320,8 @@ const AppRoutes = () => {
   return (
     <Suspense fallback={null}>
       <Routes key={pathname}>
-        {/* Route de debug - accessible à tous */}
-        <Route path="/debug-auth" element={<DebugAuthPage />} />
+        {/* Diagnostics strictement réservés au développement. */}
+        {DebugAuthPage && <Route path="/debug-auth" element={<DebugAuthPage />} />}
         {UiFoundationsPage && <Route path="/dev/ui" element={<UiFoundationsPage />} />}
 
         {/* "/" : sous-domaine → RouteResolver (slug depuis l'hôte), sinon HomePage */}
@@ -722,6 +724,7 @@ const AppRoutes = () => {
           <Route path="embarquement" element={<BoardingEscalePage />} />
           <Route path="manifeste" element={<BusPassengerManifestPage />} />
           <Route path="caisse" element={<EscaleCaissePage />} />
+          <Route path="equipe" element={<ManagerTeamPage />} />
         </Route>
         <Route
           path="/agence/guichet"

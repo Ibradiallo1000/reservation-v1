@@ -1,22 +1,8 @@
 // src/modules/compagnie/admin/layout/CompagnieLayout.tsx
 // Refactored to use InternalLayout — aligned with agence (réseau, dark, F2).
 import React from "react";
-import { useLocation, useParams } from "react-router-dom";
-import {
-  Settings,
-  MessageSquare,
-  Gauge,
-  DollarSign,
-  Truck,
-  TrendingUp,
-  ClipboardList,
-  FileCheck,
-  Users,
-  ShieldCheck,
-  Building2,
-  Moon,
-  Sun,
-} from "lucide-react";
+import { useParams } from "react-router-dom";
+import { Moon, Sun } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   collection,
@@ -32,19 +18,14 @@ import { db } from "@/firebaseConfig";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { lightenForDarkMode } from "@/utils/color";
 import InternalLayout from "@/shared/layout/InternalLayout";
-import type { NavSection } from "@/shared/layout/InternalLayout";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { SubscriptionBanner } from "@/shared/subscription";
 import type { SubscriptionStatus } from "@/shared/subscription";
 import { Timestamp } from "firebase/firestore";
 import { useAgencyDarkMode, useAgencyKeyboardShortcuts } from "@/modules/agence/shared";
-import { listExpenses } from "@/modules/compagnie/treasury/expenses";
 import NotificationsBell from "@/modules/compagnie/notifications/NotificationsBell";
-import {
-  ENABLE_ADVANCED_FINANCE,
-  ENABLE_FLEET,
-  ENABLE_PHASE1_ONLY,
-} from "@/config/featureFlags";
+import { companyNavigation } from "@/navigation/company.navigation";
+import { resolveNavigation, toNavSections } from "@/navigation/navigation.utils";
 
 interface Company {
   id: string;
@@ -123,8 +104,6 @@ const CompagnieLayout: React.FC = () => {
 
   /* ===== BADGES ===== */
   const [onlineProofsCount, setOnlineProofsCount] = React.useState(0);
-  const [pendingReviewsCount, setPendingReviewsCount] = React.useState(0);
-  const [pendingCeoExpensesCount, setPendingCeoExpensesCount] = React.useState(0);
 
   React.useEffect(() => {
     if (!currentCompanyId) return;
@@ -161,104 +140,16 @@ const CompagnieLayout: React.FC = () => {
     return () => unsubs.forEach((u) => u());
   }, [currentCompanyId]);
 
-  React.useEffect(() => {
-    if (!currentCompanyId) return;
-    const qAvis = query(
-      collection(db, "companies", currentCompanyId, "avis"),
-      where("visible", "==", false),
-    );
-    const unsub = onSnapshot(qAvis, (snap) =>
-      setPendingReviewsCount(snap.size),
-    );
-    return () => unsub();
-  }, [currentCompanyId]);
-
-  React.useEffect(() => {
-    if (!currentCompanyId) return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const list = await listExpenses(currentCompanyId, {
-          status: "pending_ceo",
-          limitCount: 300,
-        });
-        if (!cancelled) setPendingCeoExpensesCount(list.length);
-      } catch (_) {
-        if (!cancelled) setPendingCeoExpensesCount(0);
-      }
-    };
-    void load();
-    const interval = setInterval(() => void load(), 30000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [currentCompanyId]);
-
   const basePath = urlCompanyId
     ? `/compagnie/${urlCompanyId}`
     : "/compagnie";
 
-  const isPlateforme = user?.role === "admin_platforme";
-
-  const sections: NavSection[] = React.useMemo(() => {
-    const all: NavSection[] = [
-      // Route existante côté AppRoutes: /compagnie/:companyId/command-center
-      { label: "Dashboard", icon: Gauge, path: `${basePath}/command-center` },
-      {
-        label: "Activité réseau",
-        icon: TrendingUp,
-        path: `${basePath}/reservations-reseau`,
-        end: false,
-      },
-      {
-        label: "Réservations",
-        icon: ClipboardList,
-        path: `${basePath}/reservations`,
-        badge: onlineProofsCount || undefined,
-      },
-      { label: "Finances", icon: DollarSign, path: `${basePath}/finances` },
-      { label: "Agences", icon: Building2, path: `${basePath}/agences` },
-      {
-        label: "Audit & contrôle",
-        icon: FileCheck,
-        path: `${basePath}/audit-controle`,
-        badge: pendingCeoExpensesCount || undefined,
-      },
-      { label: "Flotte", icon: Truck, path: `${basePath}/flotte` },
-      { label: "Validation chef d'agence", icon: ShieldCheck, path: `${basePath}/comptabilite/validation` },
-      { label: "Clients", icon: Users, path: `${basePath}/customers` },
-      {
-        label: "Avis clients",
-        icon: MessageSquare,
-        path: `${basePath}/avis-clients`,
-        badge: pendingReviewsCount,
-      },
-      { label: "Configuration", icon: Settings, path: `${basePath}/parametres` },
-    ];
-    const phase1Filtered = ENABLE_PHASE1_ONLY
-      ? all.filter((s) => {
-          if (!ENABLE_ADVANCED_FINANCE && s.label === "Audit & contrôle") return false;
-          if (!ENABLE_FLEET && s.label === "Flotte") return false;
-          return true;
-        })
-      : all;
-    if (isPlateforme) return phase1Filtered;
-    return phase1Filtered
-      .filter(
-        (s) =>
-          !["Validation chef d'agence", "Clients", "Avis clients"].includes(s.label),
-      )
-      .map((s) =>
-        s.label === "Audit & contrôle" ? { ...s, label: "Alertes" } : s,
-      );
-  }, [
-    basePath,
-    isPlateforme,
-    onlineProofsCount,
-    pendingCeoExpensesCount,
-    pendingReviewsCount,
-  ]);
+  const sections = React.useMemo(
+    () => toNavSections(resolveNavigation(companyNavigation(basePath), user?.role, {
+      "company-reservations": onlineProofsCount || undefined,
+    })),
+    [basePath, onlineProofsCount, user?.role],
+  );
 
   useAgencyKeyboardShortcuts(sections);
 

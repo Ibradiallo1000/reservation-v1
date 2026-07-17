@@ -10,19 +10,10 @@ import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
-import { LayoutDashboard, Bus, Wallet, Users, UserCheck, ClipboardList } from "lucide-react";
 import InternalLayout from "@/shared/layout/InternalLayout";
-import type { NavSection } from "@/shared/layout/InternalLayout";
 import type { Company } from "@/types/companyTypes";
-
-const ESCALE_SECTIONS: NavSection[] = [
-  { label: "Tableau de bord", icon: LayoutDashboard, path: "/agence/escale", end: true },
-  { label: "Bus du jour", icon: Bus, path: "/agence/escale/bus" },
-  { label: "Embarquement", icon: UserCheck, path: "/agence/escale/embarquement" },
-  { label: "Manifeste bus", icon: ClipboardList, path: "/agence/escale/manifeste" },
-  { label: "Caisse", icon: Wallet, path: "/agence/escale/caisse" },
-  { label: "Équipe", icon: Users, path: "/agence/team" },
-];
+import { escaleNavigation } from "@/navigation/operations.navigation";
+import { resolveNavigation, toNavSections } from "@/navigation/navigation.utils";
 
 const ROLE_LABELS: Record<string, string> = {
   escale_agent: "Agent escale",
@@ -67,6 +58,7 @@ const EscaleLayout: React.FC = () => {
   }, [loadAgency]);
 
   const rolesArr: string[] = Array.isArray(user?.role) ? user.role : user?.role ? [user.role] : [];
+  const sections = toNavSections(resolveNavigation(escaleNavigation, rolesArr));
   const canUseEscale = rolesArr.some((r) => ["escale_agent", "escale_manager", "chefAgence", "admin_compagnie"].includes(r));
 
   if (!canUseEscale) {
@@ -86,7 +78,7 @@ const EscaleLayout: React.FC = () => {
 
   return (
     <InternalLayout
-      sections={ESCALE_SECTIONS}
+      sections={sections}
       role={roleLabel}
       userName={user?.displayName ?? user?.nom}
       userEmail={user?.email}

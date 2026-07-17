@@ -3,16 +3,7 @@
 // Strictly scoped: NO access to CEO menus (fleet, agencies, config, etc.)
 import React, { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
-import {
-  ArrowRightLeft,
-  CreditCard,
-  FileText,
-  Landmark,
-  LayoutDashboard,
-  Moon,
-  Receipt,
-  Sun,
-} from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import useCompanyTheme from "@/shared/hooks/useCompanyTheme";
 import { db } from "@/firebaseConfig";
@@ -21,18 +12,14 @@ import {
   getDoc,
 } from "firebase/firestore";
 import InternalLayout from "@/shared/layout/InternalLayout";
-import type { NavSection } from "@/shared/layout/InternalLayout";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
 import {
   useAgencyDarkMode,
   useAgencyKeyboardShortcuts,
 } from "@/modules/agence/shared";
-import { usePendingExpensesCount } from "@/shared/hooks/usePendingExpensesCount";
 import NotificationsBell from "@/modules/compagnie/notifications/NotificationsBell";
-import {
-  ENABLE_ADVANCED_FINANCE,
-  ENABLE_PHASE1_ONLY,
-} from "@/config/featureFlags";
+import { companyAccountingNavigation } from "@/navigation/company-accounting.navigation";
+import { resolveNavigation, toNavSections } from "@/navigation/navigation.utils";
 
 interface Company {
   id: string;
@@ -86,44 +73,12 @@ const CompanyAccountantLayout: React.FC = () => {
 
   const theme = useCompanyTheme(currentCompany);
 
-  const pendingExpensesCount = usePendingExpensesCount(currentCompanyId, user?.role);
-
   /* ===== Navigation — accountant-scoped only ===== */
   const basePath = `/compagnie/${currentCompanyId}/accounting`;
 
-  const sections: NavSection[] = [
-    { label: "Dashboard", icon: LayoutDashboard, path: basePath, end: true },
-    {
-      label: "Réseau financier",
-      icon: CreditCard,
-      path: `${basePath}/reservations-reseau`,
-    },
-    {
-      label: "Trésorerie",
-      icon: Landmark,
-      path: `${basePath}/treasury`,
-    },
-    {
-      label: "Flux financiers",
-      icon: ArrowRightLeft,
-      path: `${basePath}/finances`,
-    },
-    {
-      label: "Rapports",
-      icon: FileText,
-      path: `${basePath}/rapports`,
-    },
-    ...(!ENABLE_PHASE1_ONLY || ENABLE_ADVANCED_FINANCE
-      ? [
-          {
-            label: "Dépenses",
-            icon: Receipt,
-            path: `${basePath}/expenses`,
-            badge: pendingExpensesCount || undefined,
-          },
-        ]
-      : []),
-  ];
+  const sections = toNavSections(
+    resolveNavigation(companyAccountingNavigation(basePath), user?.role),
+  );
 
   useAgencyKeyboardShortcuts(sections);
 
