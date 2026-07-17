@@ -3,15 +3,15 @@
  */
 export const routePermissions = {
   compagnieLayout: ["admin_compagnie", "admin_platforme"] as const,
-  garageLayout: ["responsable_logistique", "chef_garage", "admin_compagnie", "admin_platforme"] as const,
-  logisticsDashboard: ["responsable_logistique", "chef_garage", "admin_compagnie", "admin_platforme"] as const,
+  garageLayout: ["responsable_logistique", "admin_compagnie", "admin_platforme"] as const,
+  logisticsDashboard: ["responsable_logistique", "admin_compagnie", "admin_platforme"] as const,
   companyAccountantLayout: ["company_accountant", "financial_director", "admin_compagnie", "admin_platforme"] as const,
   agenceShell: ["chefAgence", "superviseur", "agentCourrier", "escale_manager", "escale_agent", "agency_fleet_controller", "admin_compagnie"] as const,
-  boarding: ["chefEmbarquement", "escale_agent", "escale_manager", "admin_compagnie"] as const,
+  boarding: ["chefEmbarquement", "chefAgence", "escale_agent", "escale_manager", "admin_compagnie"] as const,
   fleet: ["agency_fleet_controller", "admin_compagnie"] as const,
   /** Planification trajet ↔ véhicule (chef / superviseur) + validation logistique (contrôleur flotte / admin). */
   tripPlanning: ["chefAgence", "superviseur", "agency_fleet_controller", "admin_compagnie"] as const,
-  companyFleet: ["responsable_logistique", "chef_garage", "admin_compagnie", "admin_platforme"] as const,
+  companyFleet: ["responsable_logistique", "admin_compagnie", "admin_platforme"] as const,
   guichet: ["guichetier", "chefAgence", "escale_agent", "escale_manager", "admin_compagnie"] as const,
   escaleDashboard: ["escale_agent", "escale_manager", "chefAgence", "admin_compagnie"] as const,
   /** Page compta agence : guichetier (ses sessions / ventes), comptable, chef, superviseur, admin compagnie. */

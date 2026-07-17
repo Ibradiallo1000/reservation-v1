@@ -8,6 +8,10 @@ import TenantGuard from "./modules/auth/components/TenantGuard";
 import { PageHeaderProvider } from "@/contexts/PageHeaderContext";
 import { AuthCurrencyProvider } from "@/shared/currency/CurrencyContext";
 import { routePermissions } from "@/constants/routePermissions";
+import { normalizeRole } from "@/authorization/roles";
+import { getDefaultRouteForRole } from "@/authorization/defaultRoute";
+import AuthorizationStatePage from "@/modules/auth/components/AuthorizationStatePage";
+import { ENABLE_FLEET, ENABLE_LOGISTICS } from "@/config/featureFlags";
 import { GlobalPeriodProvider } from "@/contexts/GlobalPeriodContext";
 import { GlobalDataSnapshotProvider } from "@/contexts/GlobalDataSnapshotContext";
 import { GlobalMoneyPositionsProvider } from "@/contexts/GlobalMoneyPositionsContext";
@@ -69,9 +73,6 @@ const GarageLayout = lazy(() => import("@/modules/compagnie/layout/GarageLayout"
 const CompanyAccountantLayout = lazy(() => import("@/modules/compagnie/accounting/layout/CompanyAccountantLayout"));
 const CompagnieDashboard = lazy(() => import("./modules/compagnie/pages/CompagnieDashboard"));
 const CEOCommandCenterPage = lazy(() => import("@/modules/compagnie/pages/CEOCommandCenterPage"));
-const CEOPaymentApprovalsPage = lazy(() =>
-  import("./modules/compagnie/pages/CEOPaymentApprovalsPage")
-);
 const GarageDashboardPage = lazy(() => import("@/modules/compagnie/pages/GarageDashboardPage"));
 const GarageDashboardHomePage = lazy(() => import("@/modules/compagnie/pages/GarageDashboardHomePage"));
 const CEOTreasuryPage = lazy(() =>
@@ -169,93 +170,20 @@ const DebugAuthPage = import.meta.env.DEV
   ? lazy(() => import("@/shared/pages/DebugAuthPage"))
   : null;
 
-const asArray = (x: unknown) => (Array.isArray(x) ? x : [x].filter(Boolean));
-const hasAny = (roles: unknown, allowed: readonly string[]) =>
-  asArray(roles).some((r) => allowed.includes(String(r)));
-
-const landingTargetForRoles = (roles: unknown): string => {
-  const rolesArray = asArray(roles).map(String);
-
-  // ✅ ESPACE COMPTABILITÉ AGENCE
-  if (hasAny(rolesArray, routePermissions.comptabilite)) {
-    return "/agence/comptabilite";
-  }
-
-  // AGENCE — escale_agent / escale_manager → tableau de bord escale
-  if (hasAny(rolesArray, routePermissions.escaleDashboard) && (rolesArray.includes("escale_agent") || rolesArray.includes("escale_manager"))) {
-    return "/agence/escale";
-  }
-  if (hasAny(rolesArray, routePermissions.guichet)) {
-    return "/agence/guichet";
-  }
-
-  if (hasAny(rolesArray, routePermissions.courrier)) {
-    return "/agence/courrier";
-  }
-
-  if (hasAny(rolesArray, routePermissions.agenceShell)) {
-    return "/agence/activite";
-  }
-
-  // COMPAGNIE (CEO) — only with companyId; without it avoid /compagnie/command-center (parsed as companyId="command-center")
-  if (hasAny(rolesArray, ["admin_compagnie", "company_ceo"])) {
-    return "/login";
-  }
-
-  // ADMIN PLATFORME
-  if (hasAny(rolesArray, routePermissions.adminLayout)) {
-    return "/admin/dashboard";
-  }
-
-  return "/login";
-};
-
-/** Redirection après login selon le rôle (et companyId si besoin). */
-const ROLE_LANDING: Record<string, string> = {
-  admin_platforme: "/admin/dashboard",
-  agency_accountant: "/agence/comptabilite",
-  chefAgence: "/agence/activite",
-  chefEmbarquement: "/agence/boarding",
-  agency_fleet_controller: "/agence/fleet",
-  guichetier: "/agence/guichet",
-  agentCourrier: "/agence/courrier",
-  escale_agent: "/agence/escale",
-  escale_manager: "/agence/escale",
-};
-
 function RoleLanding() {
   const { user } = useAuth() as any;
   if (!user) return <Navigate to="/login" replace />;
-
-  const role = String(user?.role ?? "").trim();
-  const companyId = (user.companyId ?? "") && String(user.companyId).trim() ? String(user.companyId) : "";
-
-  // CEO → Command Center
-  if ((role === "admin_compagnie" || role === "company_ceo") && companyId) {
-    return <Navigate to={`/compagnie/${companyId}/command-center`} replace />;
-  }
-  if ((role === "admin_compagnie" || role === "company_ceo") && !companyId) {
-    return <Navigate to="/login" replace />;
-  }
-
-  // Company accountant → dedicated accounting space
-  if ((role === "company_accountant" || role === "financial_director") && companyId) {
-    return <Navigate to={`/compagnie/${companyId}/accounting`} replace />;
-  }
-  if ((role === "company_accountant" || role === "financial_director") && !companyId) {
-    return <Navigate to="/login" replace />;
-  }
-
-  // Operator digital → caisse digitale (validation paiements en ligne uniquement)
-  if (role === "operator_digital" && companyId) {
-    return <Navigate to={`/compagnie/${companyId}/digital-cash`} replace />;
-  }
-  if (role === "operator_digital" && !companyId) {
-    return <Navigate to="/login" replace />;
-  }
-
-  const target = ROLE_LANDING[role] ?? landingTargetForRoles(role);
-  return <Navigate to={target} replace />;
+  const rawRole = Array.isArray(user.role) ? user.role[0] : user.role;
+  const role = normalizeRole(rawRole);
+  if (!role) return <AuthorizationStatePage state="unknown_role" />;
+  const destination = getDefaultRouteForRole(role, {
+    companyId: user.companyId,
+    agencyId: user.agencyId,
+  });
+  if (destination.status === "missing_company") return <AuthorizationStatePage state="missing_company" />;
+  if (destination.status === "missing_agency") return <AuthorizationStatePage state="missing_agency" />;
+  if (destination.status === "feature_unavailable") return <AuthorizationStatePage state="feature_unavailable" />;
+  return <Navigate to={destination.route} replace />;
 }
 
 function LegacyNetworkReservationsRedirect() {
@@ -427,7 +355,7 @@ const AppRoutes = () => {
         <Route
           path="/compagnie/:companyId/digital-cash"
           element={
-            <PrivateRoute allowedRoles={routePermissions.digitalCash}>
+            <PrivateRoute allowedRoles={routePermissions.digitalCash} requiredContext="company">
               <TenantGuard>
                 <DigitalCashReservationsPage />
               </TenantGuard>
@@ -439,7 +367,7 @@ const AppRoutes = () => {
         <Route
           path="/compagnie/:companyId"
           element={
-            <PrivateRoute allowedRoles={routePermissions.compagnieLayout}>
+            <PrivateRoute allowedRoles={routePermissions.compagnieLayout} requiredContext="company">
               <TenantGuard>
                 <GlobalPeriodProvider>
                   <GlobalDataSnapshotProvider>
@@ -452,9 +380,9 @@ const AppRoutes = () => {
         >
           <Route index element={<RoleLanding />} />
           <Route path="command-center" element={<CEOCommandCenterPage />} />
-          <Route path="payment-approvals" element={<CEOPaymentApprovalsPage />} />
-          <Route path="ceo-expenses" element={<Navigate to="audit-controle?tab=depenses" replace />} />
-          <Route path="expenses-approvals" element={<Navigate to="audit-controle?tab=depenses" replace />} />
+          <Route path="payment-approvals" element={<AuthorizationStatePage state="access_denied" />} />
+          <Route path="ceo-expenses" element={<AuthorizationStatePage state="access_denied" />} />
+          <Route path="expenses-approvals" element={<AuthorizationStatePage state="access_denied" />} />
           <Route path="revenus-liquidites" element={<Navigate to="finances?tab=liquidites" replace />} />
           <Route path="caisse" element={<Navigate to="finances?tab=caisse" replace />} />
           <Route
@@ -494,7 +422,7 @@ const AppRoutes = () => {
         <Route
           path="/compagnie/:companyId/garage"
           element={
-            <PrivateRoute allowedRoles={routePermissions.garageLayout}>
+            <PrivateRoute allowedRoles={routePermissions.garageLayout} requiredContext="company" featureActive={ENABLE_LOGISTICS}>
               <TenantGuard>
                 <GarageLayout />
               </TenantGuard>
@@ -534,7 +462,7 @@ const AppRoutes = () => {
         <Route
           path="/compagnie/:companyId/accounting"
           element={
-            <PrivateRoute allowedRoles={routePermissions.companyAccountantLayout}>
+            <PrivateRoute allowedRoles={routePermissions.companyAccountantLayout} requiredContext="company">
               <TenantGuard>
                 <CompanyAccountantLayout />
               </TenantGuard>
@@ -597,7 +525,7 @@ const AppRoutes = () => {
         <Route
           path="/agence"
           element={
-            <PrivateRoute allowedRoles={routePermissions.agenceShell}>
+            <PrivateRoute allowedRoles={routePermissions.agenceShell} requiredContext="agency">
               <TenantGuard>
                 <ManagerShellPage />
               </TenantGuard>
@@ -622,9 +550,9 @@ const AppRoutes = () => {
           />
           <Route path="expenses" element={<Navigate to="/agence/caisse#caisse-depenses" replace />} />
           <Route path="treasury" element={<Navigate to="/agence/caisse#caisse-tresorerie" replace />} />
-          <Route path="treasury/new-operation" element={<AgencyTreasuryNewOperationPage />} />
-          <Route path="treasury/transfer" element={<AgencyTreasuryTransferPage />} />
-          <Route path="treasury/new-payable" element={<AgencyTreasuryNewPayablePage />} />
+          <Route path="treasury/new-operation" element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} requiredContext="agency" withCurrency><AgencyTreasuryNewOperationPage /></ProtectedRoute>} />
+          <Route path="treasury/transfer" element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} requiredContext="agency" withCurrency><AgencyTreasuryTransferPage /></ProtectedRoute>} />
+          <Route path="treasury/new-payable" element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} requiredContext="agency" withCurrency><AgencyTreasuryNewPayablePage /></ProtectedRoute>} />
           <Route path="team" element={<ManagerTeamPage />} />
           <Route
             path="validation-departs"
@@ -662,7 +590,7 @@ const AppRoutes = () => {
           <Route
             path="fleet"
             element={
-              <ProtectedRoute allowedRoles={routePermissions.fleet} withCurrency>
+              <ProtectedRoute allowedRoles={routePermissions.fleet} requiredContext="agency" featureActive={ENABLE_FLEET} withCurrency>
                 <Outlet />
               </ProtectedRoute>
             }
@@ -677,7 +605,7 @@ const AppRoutes = () => {
           <Route
             path="courrier"
             element={
-              <ProtectedRoute allowedRoles={routePermissions.courrier} withCurrency>
+              <ProtectedRoute allowedRoles={routePermissions.courrier} requiredContext="agency" withCurrency>
                 <CourierLayout />
               </ProtectedRoute>
             }
@@ -698,7 +626,7 @@ const AppRoutes = () => {
         <Route
           path="/agence/boarding"
           element={
-            <PrivateRoute allowedRoles={routePermissions.boarding}>
+            <PrivateRoute allowedRoles={routePermissions.boarding} requiredContext="agency">
               <BoardingLayout />
             </PrivateRoute>
           }
@@ -712,7 +640,7 @@ const AppRoutes = () => {
         <Route
           path="/agence/escale"
           element={
-            <PrivateRoute allowedRoles={routePermissions.escaleDashboard}>
+            <PrivateRoute allowedRoles={routePermissions.escaleDashboard} requiredContext="agency">
               <TenantGuard>
                 <EscaleLayout />
               </TenantGuard>
@@ -728,7 +656,7 @@ const AppRoutes = () => {
         </Route>
         <Route
           path="/agence/guichet"
-          element={<ProtectedRoute allowedRoles={routePermissions.guichet} withCurrency><AgenceGuichetPage /></ProtectedRoute>}
+          element={<ProtectedRoute allowedRoles={routePermissions.guichet} requiredContext="agency" withCurrency><AgenceGuichetPage /></ProtectedRoute>}
         />
         <Route
           path="/agence/comptabilite/journal-agents"
@@ -742,19 +670,19 @@ const AppRoutes = () => {
         />
         <Route
           path="/agence/comptabilite"
-          element={<ProtectedRoute allowedRoles={routePermissions.comptabilite} withCurrency><AgenceComptabilitePage /></ProtectedRoute>}
+          element={<ProtectedRoute allowedRoles={routePermissions.comptabilite} requiredContext="agency" withCurrency><AgenceComptabilitePage /></ProtectedRoute>}
         />
         <Route
           path="/agence/comptabilite/treasury/new-operation"
-          element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} withCurrency><AgencyTreasuryNewOperationPage /></ProtectedRoute>}
+          element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} requiredContext="agency" withCurrency><AgencyTreasuryNewOperationPage /></ProtectedRoute>}
         />
         <Route
           path="/agence/comptabilite/treasury/transfer"
-          element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} withCurrency><AgencyTreasuryTransferPage /></ProtectedRoute>}
+          element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} requiredContext="agency" withCurrency><AgencyTreasuryTransferPage /></ProtectedRoute>}
         />
         <Route
           path="/agence/comptabilite/treasury/new-payable"
-          element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} withCurrency><AgencyTreasuryNewPayablePage /></ProtectedRoute>}
+          element={<ProtectedRoute allowedRoles={routePermissions.comptabiliteTreasury} requiredContext="agency" withCurrency><AgencyTreasuryNewPayablePage /></ProtectedRoute>}
         />
         <Route
           path="/agence/cash-sessions"
@@ -770,7 +698,7 @@ const AppRoutes = () => {
         <Route
           path="/compagnie/:companyId/financial-settings"
           element={
-            <PrivateRoute allowedRoles={["admin_compagnie", "company_accountant", "financial_director", "admin_platforme"] as const}>
+            <PrivateRoute allowedRoles={["admin_compagnie", "company_accountant", "financial_director", "admin_platforme"] as const} requiredContext="company">
               <TenantGuard>
                 <FinancialSettingsPage />
               </TenantGuard>

@@ -287,8 +287,8 @@ const CommandCenterBlocksAtoE = memo(function CommandCenterBlocksAtoE({
         </div>
       </SectionCard>
 
-      {/* 7. VALIDATION DG */}
-      <SectionCard title="7. Validation DG">
+      {/* 7. ALERTES DE GOUVERNANCE — lecture seule */}
+      <SectionCard title="7. Alertes de gouvernance">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
           <div className="p-2 rounded-lg bg-gray-50 border border-gray-200">
             <div className="text-xs text-gray-700">Payables à arbitrer</div>
@@ -308,20 +308,6 @@ const CommandCenterBlocksAtoE = memo(function CommandCenterBlocksAtoE({
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => navigate(`/compagnie/${companyId}/payment-approvals`)}
-            className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white font-medium text-sm hover:bg-gray-50 transition"
-          >
-            Traiter validations paiements
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate(`/compagnie/${companyId}/ceo-expenses`)}
-            className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white font-medium text-sm hover:bg-gray-50 transition"
-          >
-            Valider dépenses stratégiques
-          </button>
           <button
             type="button"
             onClick={() => navigate(`/compagnie/${companyId}/revenus-liquidites`)}

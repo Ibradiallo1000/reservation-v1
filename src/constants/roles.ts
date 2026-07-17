@@ -1,4 +1,4 @@
-// ✅ Liste officielle et unique des rôles
+// Liste de compatibilité. La source canonique est src/authorization/roles.ts.
 export const ROLES = {
     ADMIN_PLATFORME: 'admin_platforme',
     ADMIN_COMPAGNIE: 'admin_compagnie',
@@ -14,4 +14,3 @@ export const ROLES = {
   } as const;
 
   export type Role = typeof ROLES[keyof typeof ROLES];
-  

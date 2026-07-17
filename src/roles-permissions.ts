@@ -1,33 +1,8 @@
 // src/roles-permissions.ts
 
 /* ===================== ROLES ===================== */
-export type Role =
-  /** ============ PLATFORME ============ */
-  | 'admin_platforme'
-
-  /** ============ COMPAGNIE ============ */
-  | 'admin_compagnie'        // CEO (technique / propriétaire)
-  | 'financial_director'     // DAF (superviseur comptable)
-  | 'company_accountant'     // Comptable compagnie (opérationnel)
-  | 'operator_digital'       // Opérateur Caisse Digitale (validation paiements en ligne uniquement)
-  | 'responsable_logistique' // Responsable logistique (flotte, véhicules, maintenance)
-  | 'chef_garage'            // Alias garage (compat Firestore / routePermissions)
-
-  /** ============ AGENCE ============ */
-  | 'chefAgence'
-  | 'superviseur'            // Superviseur agence (accès shell / validations)
-  | 'agentCourrier'         // Courrier (accès shell agence)
-  | 'agency_accountant'      // Comptable agence
-  | 'guichetier'
-  | 'chefEmbarquement'       // Chef embarquement (ex agency_boarding_officer)
-  | 'agency_fleet_controller'
-  | 'escale_agent'           // Agent d'escale : voit tripInstances de son escale, vend billets, scan QR, voit ses ventes
-  | 'escale_manager'         // Chef d'escale : tableau de bord escale, guichet, caisse, peut inviter escale_agent
-
-  /** ============ SENTINEL (unknown role → redirect to login) ============ */
-  | 'unauthenticated'
-  /** ============ DEFAULT ============ */
-  | 'user';
+import type { CanonicalRole } from "@/authorization/roles";
+export type Role = CanonicalRole | "chef_garage" | "unauthenticated" | "user";
 
 
 /* ===================== MODULES ===================== */

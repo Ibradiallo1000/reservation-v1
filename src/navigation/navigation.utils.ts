@@ -5,21 +5,17 @@ import type {
   NavigationRole,
   ResolvedNavigationItem,
 } from "./navigation.types";
+import { normalizeRole, normalizeRoles } from "@/authorization/roles";
+import type { CanonicalRole } from "@/authorization/roles";
 
-const NAVIGATION_ROLE_ALIASES: Readonly<Record<string, string>> = {
-  admin_company: "admin_compagnie",
-  chefagence: "chefAgence",
-};
-
-export function normalizeNavigationRole(role: NavigationRole): NavigationRole {
-  return NAVIGATION_ROLE_ALIASES[role] ?? role;
+export function normalizeNavigationRole(role: string): NavigationRole | null {
+  return normalizeRole(role);
 }
 
 export function normalizeNavigationRoles(
-  roles: NavigationRole | readonly NavigationRole[] | null | undefined,
-): NavigationRole[] {
-  const values = Array.isArray(roles) ? roles : roles ? [roles] : [];
-  return [...new Set(values.map(normalizeNavigationRole))];
+  roles: unknown,
+) {
+  return normalizeRoles(roles);
 }
 
 export function canDisplayNavigationItem(
@@ -28,13 +24,15 @@ export function canDisplayNavigationItem(
 ): boolean {
   if (item.featureFlag === false) return false;
   if (!item.allowedRoles?.length) return true;
-  const normalizedAllowed = item.allowedRoles.map(normalizeNavigationRole);
-  return roles.some((role) => normalizedAllowed.includes(normalizeNavigationRole(role)));
+  const normalizedAllowed = item.allowedRoles
+    .map(normalizeRole)
+    .filter((role): role is CanonicalRole => role !== null);
+  return roles.some((role) => normalizedAllowed.some((allowedRole) => allowedRole === role));
 }
 
 export function resolveNavigation(
   items: readonly NavigationItem[],
-  roles: NavigationRole | readonly NavigationRole[] | null | undefined,
+  roles: unknown,
   badges: NavigationBadges = {},
 ): ResolvedNavigationItem[] {
   const normalizedRoles = normalizeNavigationRoles(roles);

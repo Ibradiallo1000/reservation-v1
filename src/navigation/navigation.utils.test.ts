@@ -18,7 +18,7 @@ const items: NavigationItem[] = [
 describe("navigation par rôle", () => {
   it("reconnaît uniquement les aliases historiques documentés", () => {
     expect(normalizeNavigationRoles(["admin_company", "chefagence", "role_inconnu"]))
-      .toEqual(["admin_compagnie", "chefAgence", "role_inconnu"]);
+      .toEqual(["admin_compagnie", "chefAgence"]);
   });
 
   it("utilise un alias pour l’affichage sans exposer une destination comptable", () => {

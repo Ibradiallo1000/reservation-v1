@@ -26,59 +26,12 @@ import {
   LogOut,
   Users,
 } from "lucide-react";
+import { normalizeRole } from "@/authorization/roles";
+import { getDefaultRouteForRole } from "@/authorization/defaultRoute";
 
 /* ================= Helpers ================= */
 const normalizeEmail = (s: string) => s.trim().toLowerCase();
 const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
-
-/** Canonical roles only. agency_boarding_officer / embarquement → chefEmbarquement. */
-const CANONICAL_ROLES = new Set([
-  "admin_platforme", "admin_compagnie", "company_accountant", "operator_digital", "agency_accountant",
-  "responsable_logistique", "chefagence", "chefembarquement", "guichetier",
-  "agency_fleet_controller", "financial_director", "agentcourrier",
-  "escale_agent", "escale_manager",
-]);
-
-const normalizeRole = (r?: string): string => {
-  const raw = (r || "").trim().toLowerCase();
-  if (raw === "company_ceo") return "admin_compagnie";
-  if (raw === "chefagence") return "chefAgence";
-  if (raw === "agentcourrier") return "agentCourrier";
-  if (raw === "chefembarquement") return "chefEmbarquement";
-  if (raw === "agency_boarding_officer" || raw === "embarquement") return "chefEmbarquement";
-  if (raw === "chef_garage" || raw === "chefgarage") return "responsable_logistique";
-  return CANONICAL_ROLES.has(raw) ? (raw === "chefagence" ? "chefAgence" : raw) : "unauthenticated";
-};
-
-const routeForRole = (role: string): string => {
-  switch (role) {
-    case "admin_platforme":
-      return "/admin/dashboard";
-    case "admin_compagnie":
-      return "/compagnie/command-center";
-    case "company_accountant":
-      return "/role-landing";
-    case "operator_digital":
-      return "/role-landing";
-    case "responsable_logistique":
-      return "/compagnie/garage/dashboard";
-    case "chefAgence":
-      return "/agence/activite";
-    case "chefEmbarquement":
-      return "/agence/boarding";
-    case "agency_accountant":
-      return "/agence/comptabilite";
-    case "guichetier":
-      return "/agence/guichet";
-    case "agentCourrier":
-      return "/agence/courrier";
-    case "escale_agent":
-    case "escale_manager":
-      return "/agence/escale";
-    default:
-      return "/login";
-  }
-};
 
 interface LoginPageProps {
   company?: Company | null;
@@ -176,46 +129,15 @@ const LoginPage: React.FC<LoginPageProps> = ({ company }) => {
         rawRole,
       });
 
-      if (role === "unauthenticated") {
+      if (!role) {
         console.warn("[LoginPage] rôle manquant ou invalide après lecture du profil; raw role:", userData.role);
         setError("Profil incomplet (rôle manquant ou invalide). Contactez l’administrateur.");
         setLoading(false);
         return;
       }
 
-      let path = routeForRole(role);
-      if (role === "chefEmbarquement") {
-        path = "/agence/boarding";
-        hasNavigated.current = true;
-        nav(path, { replace: true });
-        setLoading(false);
-        return;
-      }
-      if (role === "admin_compagnie" && companyId) {
-        path = `/compagnie/${companyId}/command-center`;
-      } else if (role === "admin_compagnie" && !companyId) {
-        console.warn("[LoginPage] admin_compagnie without companyId, redirecting to /login");
-        path = "/login";
-      } else if (role === "responsable_logistique" && companyId) {
-        path = `/compagnie/${companyId}/garage/dashboard`;
-      } else if (role === "responsable_logistique" && !companyId) {
-        console.warn("[LoginPage] responsable_logistique without companyId, redirecting to /login");
-        path = "/login";
-      }
-      if ((role === "company_accountant" || role === "financial_director") && companyId) {
-        path = `/compagnie/${companyId}/accounting`;
-      }
-      if (role === "operator_digital" && companyId) {
-        path = `/compagnie/${companyId}/digital-cash`;
-      } else if (role === "operator_digital" && !companyId) {
-        console.warn("[LoginPage] operator_digital without companyId, redirecting to /login");
-        path = "/login";
-      }
-
-      if (!path || path === "") {
-        path = role === "guichetier" ? "/agence/guichet" : "/login";
-        console.warn("[LoginPage] path was empty, using fallback:", path);
-      }
+      const destination = getDefaultRouteForRole(role, { companyId, agencyId });
+      const path = destination.status === "ok" ? destination.route : "/role-landing";
       console.info("[LoginPage] navigating to:", path);
       hasNavigated.current = true;
       nav(path, { replace: true });

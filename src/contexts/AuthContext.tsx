@@ -32,6 +32,8 @@ import { Role, permissionsByRole } from "@/roles-permissions";
 import { Company } from "@/types/companyTypes";
 import { CustomUser } from "@/types/auth";
 import { resolveAgencyTimezone } from "@/shared/date/dateUtilsTz";
+import { normalizeRole as normalizeCanonicalRole } from "@/authorization/roles";
+import { getDefaultRouteForRole } from "@/authorization/defaultRoute";
 
 /* =========================
    Types
@@ -53,45 +55,8 @@ export const AuthContext = createContext<AuthContextType>(null as any);
 /* =========================
    Utils
 ========================= */
-/** Canonical roles only. Unknown → unauthenticated. agency_boarding_officer / embarquement → chefEmbarquement. */
-const CANONICAL_ROLES: ReadonlySet<string> = new Set([
-  "admin_platforme",
-  "admin_compagnie",
-  "company_accountant",
-  "operator_digital",
-  "agency_accountant",
-  "responsable_logistique",
-  "chefagence",
-  "chefembarquement",
-  "guichetier",
-  "agency_fleet_controller",
-  "financial_director",
-  "agentcourrier",
-  "escale_agent",
-  "escale_manager",
-]);
-
 const normalizeRole = (r?: string): Role => {
-  if (!r || typeof r !== "string") return "unauthenticated";
-  const role = r.trim().toLowerCase();
-  switch (role) {
-    case "chefagence":
-      return "chefAgence";
-    case "chef_garage":
-    case "chefgarage":
-      return "responsable_logistique";
-    case "chefembarquement":
-      return "chefEmbarquement";
-    case "company_ceo":
-      return "admin_compagnie";
-    case "agentcourrier":
-      return "agentCourrier";
-    default:
-      if (CANONICAL_ROLES.has(role)) return role as Role;
-      if (role === "agency_boarding_officer" || role === "embarquement") return "chefEmbarquement";
-      console.error("Unknown role in AuthContext:", r);
-      return "unauthenticated";
-  }
+  return normalizeCanonicalRole(r) ?? "unauthenticated";
 };
 
 const toDate = (v: any): Date | null => {
@@ -106,46 +71,14 @@ const toDate = (v: any): Date | null => {
    Fonction de redirection par rôle (EXPORTÉE)
 ========================= */
 const asArray = (x: unknown) => (Array.isArray(x) ? x : [x].filter(Boolean));
-const hasAny = (roles: unknown, allowed: readonly string[]) =>
-  asArray(roles).some((r) => allowed.includes(String(r)));
-
 export const landingTargetForRoles = (roles: unknown): string => {
-  const rolesArray = asArray(roles).map(String);
+  const rolesArray = asArray(roles).map(normalizeCanonicalRole).filter(Boolean);
+  const role = rolesArray[0];
+  if (!role) return "/login";
+  const result = getDefaultRouteForRole(role, {});
+  if (result.status === "ok") return result.route;
 
-  // admin_platforme → /admin/dashboard
-  if (hasAny(rolesArray, ["admin_platforme"])) return "/admin/dashboard";
-
-  // company_ceo / admin_compagnie → /compagnie/command-center (Phase 5)
-  if (hasAny(rolesArray, ["admin_compagnie", "company_ceo"])) return "/compagnie/command-center";
-  // responsable_logistique → logistics/garage (flotte, véhicules) ; redirect avec companyId dans LoginPage/RoleLanding
-  if (hasAny(rolesArray, ["responsable_logistique", "chef_garage"])) return "/compagnie/garage/dashboard";
-
-  // company_accountant / financial_director → accounting area (companyId resolved in role landing)
-  if (hasAny(rolesArray, ["company_accountant", "financial_director"])) return "/role-landing";
-
-  // operator_digital → caisse digitale (companyId resolved in RoleLanding / login)
-  if (hasAny(rolesArray, ["operator_digital"])) return "/role-landing";
-
-  // agency_accountant → /agence/comptabilite
-  if (hasAny(rolesArray, ["agency_accountant"])) return "/agence/comptabilite";
-
-  // chefEmbarquement → /agence/boarding (embarquement)
-  if (hasAny(rolesArray, ["chefEmbarquement"])) return "/agence/boarding";
-  // chefAgence → /agence/activite (rolesArray may be from context: chefAgence or chefagence)
-  if (hasAny(rolesArray, ["chefAgence", "chefagence"])) return "/agence/activite";
-  // agency_fleet_controller → /agence/fleet
-  if (hasAny(rolesArray, ["agency_fleet_controller"])) return "/agence/fleet";
-
-  // guichetier → /agence/guichet
-  if (hasAny(rolesArray, ["guichetier"])) return "/agence/guichet";
-  // agentCourrier → espace courrier
-  if (hasAny(rolesArray, ["agentCourrier", "agentcourrier"])) return "/agence/courrier";
-
-  // escale_agent / escale_manager → tableau de bord escale
-  if (hasAny(rolesArray, ["escale_agent", "escale_manager"])) return "/agence/escale";
-
-  // unauthenticated / user / unknown → /login
-  return "/login";
+  return "/role-landing";
 };
 
 /* =========================

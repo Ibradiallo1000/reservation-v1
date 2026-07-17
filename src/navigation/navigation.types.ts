@@ -1,5 +1,4 @@
 import type { LucideIcon } from "lucide-react";
-
 export type NavigationRole = string;
 
 export interface NavigationItem {
@@ -7,7 +6,7 @@ export interface NavigationItem {
   label: string;
   to: string;
   icon: LucideIcon;
-  allowedRoles?: readonly NavigationRole[];
+  allowedRoles?: readonly (NavigationRole | string)[];
   match?: readonly string[];
   end?: boolean;
   mobilePriority?: number;
