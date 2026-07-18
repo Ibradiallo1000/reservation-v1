@@ -8,8 +8,14 @@ import PlatformStatsSection from "@/modules/plateforme/components/PlatformStatsS
 import FinalCTASection from "@/modules/plateforme/components/FinalCTASection";
 import FloatingDemoButton from "@/modules/plateforme/components/FloatingDemoButton";
 import Footer from "@/modules/plateforme/components/Footer";
+import { usePublicSeo } from "@/modules/plateforme/public/usePublicSeo";
 
 const HomePage: React.FC = () => {
+  usePublicSeo({
+    title: "Teliya — La plateforme des compagnies de transport",
+    description: "Découvrez Teliya, la plateforme de gestion et de réservation pensée pour les compagnies de transport.",
+    canonicalPath: "/landing",
+  });
   return (
     <div className="min-h-screen flex flex-col bg-white dark:bg-slate-900">
       <Header />

@@ -15,6 +15,7 @@ import { ENABLE_FLEET, ENABLE_LOGISTICS } from "@/config/featureFlags";
 import { GlobalPeriodProvider } from "@/contexts/GlobalPeriodContext";
 import { GlobalDataSnapshotProvider } from "@/contexts/GlobalDataSnapshotContext";
 import { GlobalMoneyPositionsProvider } from "@/contexts/GlobalMoneyPositionsContext";
+import { buildLegacyCompanyResultsRoute, buildLegacyReservationRoute } from "@/modules/plateforme/public/publicRoutes";
 
 const RouteResolver = lazy(() => import("./modules/compagnie/public/router/RouteResolver"));
 const UiFoundationsPage = import.meta.env.DEV
@@ -43,6 +44,7 @@ const ComptaPage = lazy(() => import("@/modules/compagnie/compta/pages/ComptaPag
 const ReservationPrintPage = lazy(() => import("@/modules/agence/guichet/pages/ReservationPrintPage"));
 
 const HomePage = lazy(() => import("./modules/plateforme/pages/HomePage"));
+const MarketplaceHomePage = lazy(() => import("./modules/plateforme/public/MarketplaceHomePage"));
 const PlatformSearchResultsPage = lazy(() => import("./modules/plateforme/pages/PlatformSearchResultsPage"));
 const LoginPage = lazy(() => import("./modules/auth/pages/LoginPage"));
 const Register = lazy(() => import("./modules/auth/pages/Register"));
@@ -220,7 +222,28 @@ function isPublicSubdomain(): boolean {
 
 function SubdomainAwareHome() {
   const isSub = typeof window !== "undefined" && isPublicSubdomain();
-  return isSub ? <RouteResolver /> : <HomePage />;
+  return isSub ? <RouteResolver /> : <MarketplaceHomePage />;
+}
+
+function PublicCompanyResultsAlias() {
+  const { slug = "" } = useParams<{ slug: string }>();
+  const { search } = useLocation();
+  return <Navigate to={buildLegacyCompanyResultsRoute(slug, search)} replace />;
+}
+
+function PublicReservationEntry() {
+  const { search } = useLocation();
+  const target = buildLegacyReservationRoute(search);
+  if (target) return <Navigate to={target} replace />;
+  return (
+    <main className="min-h-screen bg-slate-50 px-4 py-16">
+      <div className="mx-auto max-w-lg rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+        <h1 className="text-xl font-bold text-slate-900">Choisissez d'abord une compagnie</h1>
+        <p className="mt-2 text-slate-600">La réservation nécessite un trajet et une compagnie explicitement sélectionnés.</p>
+        <a href="/" className="mt-5 inline-flex rounded-lg bg-orange-600 px-4 py-2 font-semibold text-white focus:outline-none focus:ring-2 focus:ring-orange-500">Revenir à la recherche</a>
+      </div>
+    </main>
+  );
 }
 
 /** Sur sous-domaine, /a-propos (et autres chemins à un segment) doit rendre RouteResolver. Sinon redirection. */
@@ -252,7 +275,7 @@ const AppRoutes = () => {
         {DebugAuthPage && <Route path="/debug-auth" element={<DebugAuthPage />} />}
         {UiFoundationsPage && <Route path="/dev/ui" element={<UiFoundationsPage />} />}
 
-        {/* "/" : sous-domaine → RouteResolver (slug depuis l'hôte), sinon HomePage */}
+        {/* "/" : sous-domaine → RouteResolver (slug depuis l'hôte), domaine principal → Marketplace */}
         <Route path="/" element={<Suspense fallback={null}><SubdomainAwareHome /></Suspense>} />
 
         {/* Sous-domaine : /a-propos (voir plus) sans préfixe slug → RouteResolver */}
@@ -264,7 +287,10 @@ const AppRoutes = () => {
         {/* PUBLIC */}
         <Route path="/login" element={<SubdomainAwareLogin />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/landing" element={<HomePage />} />
         <Route path="/resultats" element={<PlatformSearchResultsPage />} />
+        <Route path="/compagnie/:slug/resultats" element={<PublicCompanyResultsAlias />} />
+        <Route path="/reservation" element={<PublicReservationEntry />} />
         <Route path="/villes" element={<ListeVillesPage />} />
         <Route path="/:slug/mentions-legales" element={<MentionsPage />} />
         <Route path="/:slug/confidentialite" element={<ConfidentialitePage />} />

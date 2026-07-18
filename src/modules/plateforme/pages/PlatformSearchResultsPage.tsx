@@ -6,6 +6,7 @@ import { db } from '../../../firebaseConfig';
 import { normalizeReservation } from "@/lib/normalizeReservation";
 import { Bus, Search, ArrowLeft, ArrowRight, Wind, Wifi, Zap, Coffee, Sofa, Tv, WifiOff, Smartphone, Utensils, Droplet } from 'lucide-react';
 import { Button } from "@/shared/ui/button";
+import { buildCompanyResultsRoute } from "@/modules/plateforme/public/publicRoutes";
 
 /* =========================
    TYPES
@@ -13,6 +14,7 @@ import { Button } from "@/shared/ui/button";
 interface SearchCriteria {
   departure: string;
   arrival: string;
+  date?: string;
 }
 
 interface Company {
@@ -95,6 +97,7 @@ const PlatformSearchResultsPage: React.FC = () => {
   const qpCrit: SearchCriteria = {
     departure: params.get('from') || '',
     arrival: params.get('to') || '',
+    date: params.get('date') || undefined,
   };
 
   const criteres = useMemo<SearchCriteria | null>(() => {
@@ -361,11 +364,7 @@ const PlatformSearchResultsPage: React.FC = () => {
                       </div>
                       <Button variant="primary" size="sm" onClick={() =>
                           navigate(
-                            `/${company.slug}/booking?departure=${encodeURIComponent(
-                              criteres.departure
-                            )}&arrival=${encodeURIComponent(
-                              criteres.arrival
-                            )}`
+                            buildCompanyResultsRoute(company.slug, criteres)
                           )
                         }>
                         Réserver
@@ -439,11 +438,7 @@ const PlatformSearchResultsPage: React.FC = () => {
                       </div>
                       <Button variant="primary" onClick={() =>
                           navigate(
-                            `/${company.slug}/booking?departure=${encodeURIComponent(
-                              criteres.departure
-                            )}&arrival=${encodeURIComponent(
-                              criteres.arrival
-                            )}`
+                            buildCompanyResultsRoute(company.slug, criteres)
                           )
                         }>
                         Réserver
