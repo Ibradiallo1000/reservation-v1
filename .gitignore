@@ -25,6 +25,7 @@ dev-dist/
 # Test and diagnostic artifacts
 playwright-report/
 test-results/
+artifacts/staging-country/
 firestore-debug.log
 firebase-debug.log
 firebase-debug.*.log
