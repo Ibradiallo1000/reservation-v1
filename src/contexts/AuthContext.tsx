@@ -116,7 +116,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         where("status", "==", "pending")
       );
 
-      const snap = await getDocs(q);
+      let snap;
+      try {
+        snap = await getDocs(q);
+      } catch (error: any) {
+        if (error?.code === "permission-denied") {
+          console.log("[AuthContext] attachInvitationIfNeeded: lecture invitations non autorisée pour", emailNorm);
+          return;
+        }
+        throw error;
+      }
       if (snap.empty) {
         console.log("[AuthContext] attachInvitationIfNeeded: aucune invitation en attente pour", emailNorm);
         return;

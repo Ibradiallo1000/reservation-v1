@@ -709,6 +709,183 @@ Ne plus refaire
 
 --------------------------------------------------
 
+BUG-011
+
+Date
+
+2026-07-18
+
+Module concerné
+
+Firestore Rules - collection publique `publicReservations/{docId}`
+
+Symptôme
+
+La collection publique utilisée pour retrouver une réservation par token autorisait `get`, `create` et `update` à tout le monde sans validation de forme ni contrôle du document source.
+
+Cause exacte
+
+Le bloc `publicReservations/{docId}` contenait `allow get, create, update: if true`. Cette règle préservait le parcours public, mais elle permettait aussi de créer un miroir public arbitraire ou de modifier un miroir existant sans limiter les champs.
+
+Risque
+
+Un visiteur pouvait tenter de falsifier un miroir public avec un faux état de réservation, une autre compagnie, une autre agence, une référence de paiement ou un statut confirmé visible sur les pages publiques.
+
+Scénario d'exploitation
+
+Un acteur externe pouvait écrire directement dans `publicReservations/{token}` ou `publicReservations/{reservationId}` et injecter des champs non prévus. Si le token ou l'identifiant était connu, le client pouvait voir une information publique altérée.
+
+Collections concernées
+
+- `publicReservations/{docId}`
+- lecture de cohérence vers `companies/{companyId}/agences/{agencyId}/reservations/{reservationId}` lors des créations publiques
+
+Rôles concernés
+
+- visiteur non authentifié ;
+- opérateur digital ;
+- admin plateforme.
+
+Correction appliquée
+
+Les lectures publiques `get` restent autorisées, mais `list` et `delete` restent refusés. Les créations publiques sont limitées à deux formes validées :
+
+- miroir complet initial, dont `publicToken` doit être égal à l'id du document et correspondre à la réservation source ;
+- pointeur court `reservationId -> token`, dont le token doit correspondre à la réservation source.
+
+Les updates publiques sont limitées à la preuve de paiement :
+
+- `status = preuve_recue` ;
+- `paymentReference` ;
+- `updatedAt`.
+
+La confirmation du billet public est réservée à l'opérateur digital de la même compagnie ou à l'admin plateforme, avec les champs stricts de validation.
+
+Tests ajoutés
+
+- `tests/firestore/publicReservations.rules.test.cjs`
+
+Comportements autorisés
+
+- lecture publique par token ou id connu ;
+- création publique du miroir initial lié à une réservation source existante ;
+- création publique du pointeur court lié à la même réservation source ;
+- dépôt public d'une référence de paiement sur une réservation en attente ;
+- synchronisation de confirmation par opérateur digital de la compagnie ;
+- synchronisation de confirmation par admin plateforme.
+
+Comportements désormais interdits
+
+- `list` public ;
+- suppression ;
+- création d'un miroir sans réservation source ;
+- création d'un miroir déjà confirmé ;
+- modification publique de `companyId`, `agencyId`, token, montant ou identité ;
+- confirmation publique anonyme ;
+- confirmation par utilisateur ordinaire ;
+- confirmation par opérateur digital d'une autre compagnie.
+
+Ne plus refaire
+
+- ouvrir `create/update` publics sans validation de forme ;
+- utiliser une collection publique comme miroir métier sans verrouiller les champs mutables ;
+- autoriser une confirmation publique sans rôle métier confirmé.
+
+--------------------------------------------------
+
+BUG-012
+
+Date
+
+2026-07-18
+
+Module concerné
+
+Firestore Rules - collection globale `invitations/{invitationId}`
+
+Symptôme
+
+La collection `invitations` autorisait la lecture de liste publique avec `allow list: if true` et les écritures `create/update/delete` à tout utilisateur authentifié.
+
+Cause exacte
+
+Le parcours d'acceptation utilisait historiquement une requête anonyme `where("token", "==", token)` pour retrouver une invitation. Cette contrainte frontend avait conduit à ouvrir `list` publiquement sur toute la collection.
+
+Risque
+
+Un visiteur pouvait énumérer ou requêter des invitations et exposer des informations d'onboarding comme email, token, rôle, compagnie, agence, statut, nom ou téléphone. Un utilisateur authentifié ordinaire pouvait aussi tenter de créer, modifier ou supprimer des invitations hors de son rôle métier.
+
+Collections concernées
+
+- `invitations/{invitationId}`
+
+Rôles concernés
+
+- visiteur non authentifié ;
+- invité correspondant à l'email de l'invitation ;
+- admin plateforme ;
+- admin compagnie / CEO compagnie ;
+- chef d'agence ;
+- chef d'escale ;
+- utilisateur ordinaire authentifié.
+
+Correction appliquée
+
+La lecture de liste publique a été supprimée. La lecture anonyme est limitée au `get` direct d'une invitation pendante lorsque le token correspond à l'identifiant du document. Les nouvelles invitations créées côté frontend utilisent désormais `docId = token`, ce qui évite la requête publique de collection.
+
+La création Rules impose aussi `token == invitationId` afin d'empêcher les nouveaux documents discordants. Les anciennes invitations frontend créées par `addDoc` avec un identifiant automatique et un champ `token` différent ne peuvent pas être retrouvées anonymement par token sans réouvrir un `list` public. Elles doivent être recréées ou migrées explicitement avant déploiement si elles sont encore `pending`.
+
+Les opérations d'écriture sont restreintes :
+
+- création réservée aux rôles de gestion autorisés dans leur périmètre ;
+- liste authentifiée réservée aux gestionnaires du périmètre compagnie/agence ou à l'admin plateforme ;
+- acceptation réservée à l'utilisateur authentifié dont l'email correspond à l'invitation ;
+- modification de `role`, `companyId`, `agencyId`, `email` et `token` refusée aux utilisateurs ordinaires ;
+- suppression réservée aux gestionnaires du périmètre.
+
+Fichiers modifiés
+
+- `firestore.rules`
+- `src/shared/invitations/createInvitationDoc.ts`
+- `src/modules/auth/pages/AcceptInvitationPage.tsx`
+- `src/contexts/AuthContext.tsx`
+- `src/modules/compagnie/pages/AjouterAgenceForm.tsx`
+- `tests/firestore/invitations.rules.test.cjs`
+
+Tests ajoutés
+
+- `tests/firestore/invitations.rules.test.cjs`
+
+Comportements autorisés
+
+- lecture anonyme d'une invitation pendante par token/document id ;
+- lecture et liste administratives dans le périmètre autorisé ;
+- création d'invitation par admin compagnie ou chef d'agence dans son périmètre ;
+- acceptation par l'utilisateur authentifié correspondant à l'email invité ;
+- suppression par gestionnaire autorisé.
+
+Comportements désormais interdits
+
+- `list` anonyme de toutes les invitations ;
+- lecture authentifiée d'une invitation non liée ;
+- lecture inter-compagnie par un admin compagnie ;
+- création par utilisateur ordinaire ;
+- création inter-compagnie par admin compagnie ;
+- création d'un rôle admin compagnie par chef d'agence ;
+- modification du rôle, de la compagnie ou de l'agence par un utilisateur ordinaire ;
+- suppression non autorisée.
+- création d'un nouveau document `invitations` dont l'identifiant diffère du champ `token` ;
+- écrasement d'une invitation existante par un administrateur d'une autre compagnie.
+
+Ne plus refaire
+
+- ouvrir `list` public pour supporter un lookup par token ;
+- utiliser une collection d'invitations comme surface publique enumerable ;
+- laisser tout utilisateur authentifié créer ou modifier des invitations.
+- créer une invitation frontend avec `addDoc` si le lien public repose sur un champ `token`.
+
+--------------------------------------------------
+
 # Comptable Agence
 
 Les incidents `BUG-001`, `BUG-002` et `BUG-003` sont les références prioritaires pour les erreurs de caisse, de validation de poste et de versement banque.

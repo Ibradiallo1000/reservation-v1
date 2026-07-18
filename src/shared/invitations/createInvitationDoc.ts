@@ -9,11 +9,12 @@
  */
 
 import {
-  addDoc,
   collection,
+  doc,
   getDocs,
   query,
   serverTimestamp,
+  setDoc,
   where,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
@@ -63,17 +64,23 @@ export async function createInvitationDoc(
   if (!email) throw new Error("Email est requis.");
   if (!input.role) throw new Error("Rôle est requis.");
 
+  const normCompany = input.companyId?.trim() || "";
+  const normAgency = input.agencyId?.trim() || "";
+
   // Check for duplicate pending invitation (same email + same company scope)
+  const duplicateConstraints = [
+    where("email", "==", email),
+    where("status", "==", "pending"),
+  ];
+  if (normCompany) duplicateConstraints.push(where("companyId", "==", normCompany));
+  if (normAgency) duplicateConstraints.push(where("agencyId", "==", normAgency));
+
   const pendingSnap = await getDocs(
     query(
       collection(db, "invitations"),
-      where("email", "==", email),
-      where("status", "==", "pending"),
+      ...duplicateConstraints,
     ),
   );
-
-  const normCompany = input.companyId?.trim() || "";
-  const normAgency = input.agencyId?.trim() || "";
 
   const duplicate = pendingSnap.docs.find((d) => {
     const data = d.data();
@@ -107,7 +114,8 @@ export async function createInvitationDoc(
   if (input.fullName?.trim()) inviteData.fullName = input.fullName.trim();
   if (input.phone?.trim()) inviteData.phone = input.phone.trim();
 
-  const docRef = await addDoc(collection(db, "invitations"), inviteData);
+  const docRef = doc(db, "invitations", token);
+  await setDoc(docRef, inviteData);
 
   const activationUrl = `${window.location.origin}/accept-invitation/${token}`;
 

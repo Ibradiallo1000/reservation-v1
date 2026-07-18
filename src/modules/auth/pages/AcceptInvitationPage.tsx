@@ -5,7 +5,7 @@
  *   1. Admin creates company → invitation doc with `token` is written to Firestore.
  *   2. Admin copies the activation link and shares it manually.
  *   3. CEO opens `/accept-invitation/:token`.
- *   4. This page queries Firestore for `invitations` where token == param.
+ *   4. This page reads `invitations/:token` directly.
  *   5. CEO sets a password.
  *   6. Firebase Auth user is created client-side (createUserWithEmailAndPassword).
  *   7. Firestore `users` doc is created, invitation marked "accepted".
@@ -17,15 +17,11 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
-  collection,
   doc,
   getDoc,
-  getDocs,
-  query,
   setDoc,
   serverTimestamp,
   updateDoc,
-  where,
 } from "firebase/firestore";
 import {
   createUserWithEmailAndPassword,
@@ -89,25 +85,10 @@ const AcceptInvitationPage = () => {
 
     (async () => {
       try {
-        // 1) Lookup by token field (new invitations)
-        const q = query(
-          collection(db, "invitations"),
-          where("token", "==", token),
-        );
-        const snap = await getDocs(q);
+        const directRef = doc(db, "invitations", token);
+        const docSnap = await getDoc(directRef);
 
-        let docSnap: any = snap.docs[0] ?? null;
-
-        // 2) Fallback: lookup by document ID (legacy invitations without token field)
-        if (!docSnap) {
-          const directRef = doc(db, "invitations", token!);
-          const directSnap = await getDoc(directRef);
-          if (directSnap.exists()) {
-            docSnap = directSnap;
-          }
-        }
-
-        if (!docSnap) {
+        if (!docSnap.exists()) {
           setError("Invitation introuvable. Le lien est peut-être expiré ou invalide.");
           return;
         }

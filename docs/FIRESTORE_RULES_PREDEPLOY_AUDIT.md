@@ -17,13 +17,19 @@ Aucune regle, aucun test, aucune donnee et aucune Cloud Function n'ont ete modif
 
 ## Resume executif
 
-Niveau de qualite actuel: 7 / 10
+Niveau de qualite actuel: 7.5 / 10
 
 Les Firestore Rules couvrent de nombreux workflows critiques et les flux comptables les plus sensibles disposent maintenant de tests Emulator cibles. Les corrections recentes sur `accounts`, `financialTransactions` et `financialTransactionIdempotency` reduisent nettement le risque historique de depassement des 1000 expressions pour les scenarios testes.
 
 Correction Phase 1.3.7.1: le risque critique hors comptabilite sur la collection globale `users/{userId}` a ete corrige. Les utilisateurs ne peuvent plus creer ou modifier leur propre document pour changer les champs de role, rattachement, permissions ou statut. Les mises a jour personnelles restantes sont limitees aux tokens de notification push.
 
-Conclusion courte: les flux comptables testes sont en meilleur etat et le bloc critique `users/{userId}` est maintenant verrouille. Les Rules peuvent etre deployees vers staging pour validation, avec une dette elevee restante sur les surfaces publiques et les collections non encore couvertes par des tests.
+Correction Phase 1.3.7.2: le premier risque eleve, `publicReservations` ouvert en creation et update publics, a ete corrige. Les lectures publiques par token restent autorisees, mais les creations et updates sont maintenant limitees aux formes et transitions utilisees par le parcours public reel.
+
+Correction Phase 1.3.7.3: le risque eleve `invitations` avec lecture de liste publique a ete corrige. La lecture anonyme est limitee a un `get` direct d'une invitation pendante dont le token correspond a l'id du document, et les creations, listes, mises a jour et suppressions sont restreintes aux roles et perimetres legitimes.
+
+Controle Phase 1.3.7.3.1: les anciennes invitations creees par le helper frontend avant cette correction utilisaient un id Firestore automatique et un champ `token` distinct. Les anciens liens publics construits avec ce champ `token` ne sont pas compatibles avec les nouvelles Rules sans migration ou recreation explicite. Cette incompatibilite est preferee a la reouverture d'un `list` public. Les invitations creees par la Cloud Function historique avec un lien base sur l'id du document restent compatibles si le document est encore `pending`.
+
+Conclusion courte: les flux comptables testes sont en meilleur etat, le bloc critique `users/{userId}` est verrouille, le miroir public `publicReservations` est encadre et le listing public des invitations est ferme. Les Rules peuvent etre deployees vers staging pour validation, avec une dette elevee restante sur les ecritures non encore restreintes de `medias`, `plans` et `_meta`.
 
 ## Forces
 
@@ -53,8 +59,8 @@ Conclusion courte: les flux comptables testes sont en meilleur etat et le bloc c
 - Plusieurs aliases de roles coexistent (`chefAgence`, `chefagence`, `chef_agence`, `comptable`, `Comptable`, `agency_accountant`), ce qui augmente le risque de divergence.
 - `request.resource.data.diff(resource.data)` est repete de nombreuses fois dans les memes zones, ce qui alourdit la lecture et peut augmenter le cout d'evaluation.
 - Les collection groups publics (`weeklyTrips`, `agences`, certaines reservations et `dailyStats`) sont utiles, mais leur portee globale doit etre surveillee.
-- Des regles publiques ou tres ouvertes subsistent sur `publicReservations`, `invitations`, `plans`, `_meta`, `medias` et `platformLeads`.
-- Les tests Rules actuels couvrent surtout la comptabilite recente; ils ne couvrent pas encore les risques globaux `users`, invitations, public reservations, medias, plans et metadata.
+- Des regles publiques ou tres ouvertes subsistent sur `plans`, `_meta`, `medias` et `platformLeads`.
+- Les tests Rules actuels couvrent surtout la comptabilite recente; ils ne couvrent pas encore les risques globaux `medias`, `plans`, metadata et certaines surfaces publiques.
 
 ## Dette technique
 
@@ -75,23 +81,53 @@ Aucun risque critique connu apres correction Phase 1.3.7.1 du bloc `users/{userI
 
 ### Eleve
 
-1. `publicReservations` ouvert en creation et update publics
-
-   Zone: `publicReservations/{docId}`.
-
-   `allow get, create, update: if true` permet toute creation ou modification publique. Meme si le document id est suppose etre un token, l'absence de validation de forme et de champs est risquee.
-
-2. `invitations` list public
-
-   Zone: `invitations/{invitationId}`.
-
-   `allow list: if true` peut exposer des invitations et tokens si les documents contiennent des donnees sensibles.
-
-3. Ecritures authentifiees trop larges sur donnees non financieres
+1. Ecritures authentifiees trop larges sur donnees non financieres
 
    Zones: `medias`, `plans`, `_meta`.
 
    Plusieurs collections permettent `create/update/delete` a tout utilisateur authentifie ou presque. Cela peut alterer du contenu public, catalogue ou metadata sans role administratif strict.
+
+### Eleve corrige
+
+1. `users` list ouvert a tout utilisateur authentifie
+
+   Zone: ancien `allow list: if isAuth()` dans `users/{userId}`.
+
+   Correction Phase 1.3.7.1:
+
+   - `list` global de `users` limite aux administrateurs autorises ;
+   - lecture d'un autre profil utilisateur limitee aux administrateurs autorises ;
+   - create/update de `users/{userId}` reserves aux administrateurs autorises, hors mise a jour personnelle limitee aux tokens push ;
+   - test cible ajoute: `tests/firestore/usersPrivilegeEscalation.rules.test.cjs`.
+
+2. `publicReservations` ouvert en creation et update publics
+
+   Zone: `publicReservations/{docId}`.
+
+   Correction Phase 1.3.7.2:
+
+   - `get` public conserve pour le suivi par token ;
+   - `list` et `delete` restent refuses ;
+   - creation publique limitee au miroir initial ou au pointeur court, avec verification de la reservation source ;
+   - update public limite a la preuve de paiement ;
+   - confirmation reservee a l'operateur digital de la meme compagnie ou a l'admin plateforme ;
+   - test cible ajoute: `tests/firestore/publicReservations.rules.test.cjs`.
+
+3. `invitations` list public
+
+   Zone: `invitations/{invitationId}`.
+
+   Correction Phase 1.3.7.3:
+
+   - `list` public supprime ;
+   - `get` anonyme limite a une invitation pendante dont `token` correspond a l'id du document ;
+   - `get` authentifie limite a l'email invite ou aux roles de gestion du perimetre ;
+   - `create` limite aux roles autorises et au perimetre compagnie/agence ;
+   - creation d'une nouvelle invitation refusee si le champ `token` ne correspond pas a l'id du document ;
+   - acceptation limitee au compte authentifie correspondant a l'email de l'invitation ;
+   - modification de `role`, `companyId`, `agencyId`, `email` et `token` refusee pour les utilisateurs ordinaires ;
+   - suppressions limitees aux gestionnaires du perimetre ;
+   - test cible ajoute: `tests/firestore/invitations.rules.test.cjs`.
 
 ### Moyen
 
@@ -149,15 +185,11 @@ Aucun risque critique connu apres correction Phase 1.3.7.1 du bloc `users/{userI
 
 ### Priorite 2
 
-- Auditer et restreindre `publicReservations` avec une validation stricte des champs, du statut, du token et des operations autorisees.
-- Remplacer `invitations allow list: if true` par une strategie de lookup public limitee au token attendu ou a un document id non enumerable.
 - Restreindre `plans`, `_meta` et `medias` aux roles administratifs reels pour les ecritures.
 
 ### Priorite 3
 
 - Ajouter des tests Rules non comptables pour:
-  - invitations;
-  - publicReservations;
   - medias;
   - plans;
   - `_meta`;
@@ -173,8 +205,6 @@ Aucun risque critique connu apres correction Phase 1.3.7.1 du bloc `users/{userI
 
 ## Corrections recommandees
 
-- Restreindre `publicReservations create/update` aux champs et transitions strictement necessaires.
-- Supprimer ou remplacer `invitations list public`.
 - Restreindre les ecritures `plans`, `_meta` et `medias`.
 - Ajouter des tests pour toutes les collections publiques ou quasi publiques.
 - Identifier et supprimer les helpers inutilises uniquement apres tests.
@@ -192,17 +222,28 @@ Justification:
 - Les tests comptables critiques passent selon le contexte de phase et couvrent bien les corrections recentes.
 - Le risque historique des 1000 expressions semble corrige pour les scenarios testes.
 - Le risque critique d'elevation de privileges via `users/{userId}` a ete corrige et couvert par un test Rules cible.
-- Des surfaces publiques et authentifiees larges restent insuffisamment couvertes par les tests Rules.
+- Le risque eleve de listing global `users` par tout utilisateur authentifie a ete corrige pendant la meme correction ciblee du bloc `users/{userId}` en Phase 1.3.7.1.
+- Le premier risque eleve sur `publicReservations` a ete corrige et couvert par un test Rules cible.
+- Le risque eleve `invitations list public` a ete corrige et couvert par un test Rules cible.
+- Les ecritures authentifiees larges sur `medias`, `plans` et `_meta` restent insuffisamment couvertes par les tests Rules.
 
 Decision finale:
 
-AUDIT A CORRIGER AVANT STAGING
+FIRESTORE RULES PRETES POUR STAGING
 
 ## Synthese chiffree
 
 - Risques critiques: 0
-- Risques eleves: 3
+- Risques eleves: 1
 - Risques moyens: 6
 - Risques faibles: 5
-- Note globale: 7 / 10
+- Note globale: 7.5 / 10
 - Decision finale: FIRESTORE RULES PRETES POUR STAGING
+
+Note de coherence des compteurs:
+
+- Risques eleves initiaux: 4.
+- Risque eleve corrige en Phase 1.3.7.1: `users` list ouvert a tout utilisateur authentifie.
+- Risque eleve corrige en Phase 1.3.7.2: `publicReservations` ouvert en creation et update publics.
+- Risque eleve corrige en Phase 1.3.7.3: `invitations` list public.
+- Risques eleves restants: 1.

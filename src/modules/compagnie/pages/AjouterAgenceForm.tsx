@@ -5,11 +5,12 @@ import L from "leaflet";
 import {
   addDoc,
   collection,
+  doc,
   serverTimestamp,
+  setDoc,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
 import { Button } from "@/shared/ui/button";
 
 // =====================
@@ -75,7 +76,7 @@ const AjouterAgenceForm: React.FC<AjouterAgenceFormProps> = ({ onAdd }) => {
 
       // 2️⃣ Création AUTOMATIQUE de l’invitation
       const token = crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
-      await addDoc(collection(db, "invitations"), {
+      await setDoc(doc(db, "invitations", token), {
         email: null,
         role: "chefAgence",
         companyId: user.companyId,
