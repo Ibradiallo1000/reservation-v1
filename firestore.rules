@@ -436,6 +436,75 @@ function operatorDigitalCanRejectOnlineReservation(companyId, agencyId) {
         : '';
       return docCompanyId != '' ? docCompanyId : tokenCompanyId;
     }
+    function sensitiveUserDocumentKeys() {
+      return [
+        'role',
+        'roles',
+        'userRole',
+        'companyId',
+        'compagnieId',
+        'companyIds',
+        'agencyId',
+        'agenceId',
+        'agencyIds',
+        'permissions',
+        'isAdmin',
+        'active',
+        'status',
+        'disabled',
+        'enabled',
+        'claims',
+        'customClaims',
+        'accessScope',
+        'accessScopes',
+        'managedCompanyIds'
+      ];
+    }
+    function selfWritableUserDocumentKeys() {
+      return [
+        'fcmToken',
+        'fcmTokens',
+        'pushToken',
+        'pushTokens',
+        'notificationToken',
+        'notificationTokens',
+        'notificationsEnabled',
+        'fcmUpdatedAt',
+        'lastPushTokenAt',
+        'pushTokenUpdatedAt',
+        'updatedAt'
+      ];
+    }
+    function targetUserCompanyId() {
+      return request.resource.data.get('companyId', '') is string
+        && request.resource.data.get('companyId', '') != ''
+        ? request.resource.data.get('companyId', '')
+        : (request.resource.data.get('compagnieId', '') is string ? request.resource.data.get('compagnieId', '') : '');
+    }
+    function targetUserHasPrivilegedAdminRole() {
+      let role = request.resource.data.get('role', '');
+      let roles = request.resource.data.get('roles', []);
+      return role in ['admin_platforme', 'admin_compagnie']
+        || (roles is list && roles.hasAny(['admin_platforme', 'admin_compagnie']));
+    }
+    function adminCanWriteUserDocument() {
+      return isAuth() && (
+        isPlatformAdmin()
+        || (
+          getUserRole() == 'admin_compagnie'
+          && userCompanyId() != ''
+          && targetUserCompanyId() == userCompanyId()
+          && !targetUserHasPrivilegedAdminRole()
+        )
+      );
+    }
+    function selfUserNotificationUpdateOk(userId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return isAuth()
+        && request.auth.uid == userId
+        && changed.hasOnly(selfWritableUserDocumentKeys())
+        && !changed.hasAny(sensitiveUserDocumentKeys());
+    }
 
     /**
      * Agence rattachee a la compagnie (guichet / escale / chef) — evite les 403 quand
@@ -4102,21 +4171,10 @@ match /accounts/{accountId} {
        DONNEES INTERNES
     ===================== */
     match /users/{userId} {
-      allow get: if request.auth != null && request.auth.uid == userId;
-      allow list: if isAuth();
-      allow create: if isAuth() && (
-        request.auth.uid == userId
-        || request.resource.data.get('role', '') != 'chefAgence'
-        || getUserRole() == 'admin_compagnie'
-        || getUserRole() == 'admin_platforme'
-      );
-      allow update: if isAuth() && (
-        request.auth.uid == userId
-        || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
-        || request.resource.data.get('role', '') != 'chefAgence'
-        || getUserRole() == 'admin_compagnie'
-        || getUserRole() == 'admin_platforme'
-      );
+      allow get: if isAuth() && (request.auth.uid == userId || adminCanWriteUserDocument());
+      allow list: if adminCanWriteUserDocument();
+      allow create: if adminCanWriteUserDocument();
+      allow update: if adminCanWriteUserDocument() || selfUserNotificationUpdateOk(userId);
     }
 
     /* =====================

@@ -645,6 +645,70 @@ Ne plus refaire
 
 --------------------------------------------------
 
+# Sécurité Firestore
+
+--------------------------------------------------
+
+BUG-008
+
+Date
+
+2026-07-18
+
+Module concerné
+
+Firestore Rules - collection globale `users/{userId}`
+
+Symptôme
+
+Les règles autorisaient un utilisateur authentifié à créer ou modifier son propre document `users/{uid}` sans verrouillage strict des champs de rôle et de rattachement.
+
+Cause exacte
+
+Le bloc global `users/{userId}` autorisait `create` et `update` lorsque `request.auth.uid == userId`, alors que les helpers d'autorisation `getUserRole()` et `hasUserRole()` utilisent ce même document comme source de rôle.
+
+Risque
+
+Un utilisateur pouvait potentiellement écrire un rôle ou un rattachement privilégié dans son propre document, puis bénéficier des règles qui lisent `users/{uid}`.
+
+Correction appliquée
+
+Les écritures `users/{userId}` sont désormais réservées aux administrateurs autorisés. Les mises à jour personnelles sont limitées aux champs de notification push, sans modification possible des champs sensibles.
+
+Champs sensibles protégés
+
+- `role`
+- `roles`
+- `companyId`
+- `compagnieId`
+- `companyIds`
+- `agencyId`
+- `agenceId`
+- `agencyIds`
+- `permissions`
+- `isAdmin`
+- `active`
+- `status`
+- `disabled`
+- `enabled`
+- `claims`
+- `customClaims`
+- `accessScope`
+- `accessScopes`
+- `managedCompanyIds`
+
+Tests ajoutés
+
+- `tests/firestore/usersPrivilegeEscalation.rules.test.cjs`
+
+Ne plus refaire
+
+- autoriser une écriture personnelle sur un document qui sert lui-même de source d'autorisation ;
+- laisser un utilisateur modifier son rôle, sa compagnie, son agence, ses permissions ou son statut via le frontend ;
+- ouvrir `users list` à tout utilisateur authentifié.
+
+--------------------------------------------------
+
 # Comptable Agence
 
 Les incidents `BUG-001`, `BUG-002` et `BUG-003` sont les références prioritaires pour les erreurs de caisse, de validation de poste et de versement banque.
