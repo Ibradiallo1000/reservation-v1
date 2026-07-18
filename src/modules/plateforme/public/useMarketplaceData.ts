@@ -11,6 +11,7 @@ export function useMarketplaceData() {
   const [routes, setRoutes] = useState<Resource<PopularRoute[]>>(empty([]));
   const [companies, setCompanies] = useState<Resource<PublicPartnerCompany[]>>(empty([]));
   const [revision, setRevision] = useState(0);
+  const [diagnostics, setDiagnostics] = useState({ companiesLoaded: 0, eligiblePartners: 0, activeTrips: 0, publicCities: 0, companyReadLimit: 100, tripReadLimit: 300 });
   const retry = useCallback(() => setRevision((value) => value + 1), []);
 
   useEffect(() => {
@@ -22,43 +23,42 @@ export function useMarketplaceData() {
 
       let trips: PublicTripRecord[] = [];
       try {
-        const snapshot = await getDocs(query(collectionGroup(db, "weeklyTrips"), limit(300)));
-        trips = snapshot.docs.flatMap((document) => {
+        const [tripSnapshot, companySnapshot] = await Promise.all([
+          getDocs(query(collectionGroup(db, "weeklyTrips"), limit(300))),
+          getDocs(query(collection(db, "companies"), where("publicPageEnabled", "==", true), limit(100))),
+        ]);
+        const rawCompanies: Array<Record<string, unknown>> = companySnapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
+        const eligibleCompanies = filterPublicCompanies(rawCompanies, [], 100);
+        const eligibleSlugs = new Set(eligibleCompanies.map((company) => company.slug));
+        const eligibleIds = new Set(rawCompanies.filter((company) => eligibleSlugs.has(String(company.slug ?? "").trim())).map((company) => String(company.id)));
+        trips = tripSnapshot.docs.flatMap((document) => {
           const data = document.data();
           if (data.active === false || data.isActive === false || data.disabled === true) return [];
           const path = document.ref.path.split("/");
           const companyId = path[1] ?? "";
-          const departure = typeof data.departure === "string" ? data.departure : "";
-          const arrival = typeof data.arrival === "string" ? data.arrival : "";
-          return companyId && departure && arrival ? [{ companyId, departure, arrival }] : [];
+          const departure = String(data.departureCity ?? data.departure ?? data.depart ?? "").trim();
+          const arrival = String(data.arrivalCity ?? data.arrival ?? data.arrivee ?? "").trim();
+          return eligibleIds.has(companyId) && departure && arrival ? [{ companyId, departure, arrival }] : [];
         });
         if (!cancelled) {
-          setCities({ data: derivePublicCities(trips), loading: false, error: false });
+          const publicCities = derivePublicCities(trips);
+          const partners = filterPublicCompanies(rawCompanies, trips);
+          setCities({ data: publicCities, loading: false, error: false });
           setRoutes({ data: derivePopularRoutes(trips), loading: false, error: false });
+          setCompanies({ data: partners, loading: false, error: false });
+          setDiagnostics({ companiesLoaded: rawCompanies.length, eligiblePartners: partners.length, activeTrips: trips.length, publicCities: publicCities.length, companyReadLimit: 100, tripReadLimit: 300 });
         }
       } catch {
         if (!cancelled) {
           setCities({ data: [], loading: false, error: true });
           setRoutes({ data: [], loading: false, error: true });
+          setCompanies({ data: [], loading: false, error: true });
         }
-      }
-
-      try {
-        const snapshot = await getDocs(query(
-          collection(db, "companies"),
-          where("publicPageEnabled", "==", true),
-          where("status", "==", "actif"),
-          limit(24),
-        ));
-        const raw = snapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
-        if (!cancelled) setCompanies({ data: filterPublicCompanies(raw, trips), loading: false, error: false });
-      } catch {
-        if (!cancelled) setCompanies({ data: [], loading: false, error: true });
       }
     };
     void load();
     return () => { cancelled = true; };
   }, [revision]);
 
-  return { cities, routes, companies, retry };
+  return { cities, routes, companies, diagnostics, retry };
 }

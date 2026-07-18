@@ -10,6 +10,7 @@ export type PublicPartnerCompany = {
   logoUrl?: string;
   description?: string;
   tripCount: number;
+  country?: string;
 };
 
 export type PopularRoute = {
@@ -23,7 +24,22 @@ export function normalizePublicLabel(value: unknown): string {
 }
 
 export function normalizeSearchToken(value: string): string {
-  return normalizePublicLabel(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("fr");
+  return normalizePublicLabel(value).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[’'`-]+/g, " ").replace(/\s+/g, " ").trim().toLocaleLowerCase("fr");
+}
+
+export function suggestPublicCities(cities: string[], query: string, exclude?: string, max = 8): string[] {
+  const needle = normalizeSearchToken(query);
+  const excluded = normalizeSearchToken(exclude ?? "");
+  return cities.filter((city) => normalizeSearchToken(city) !== excluded && normalizeSearchToken(city).includes(needle)).sort((a, b) => {
+    const aStarts = normalizeSearchToken(a).startsWith(needle);
+    const bStarts = normalizeSearchToken(b).startsWith(needle);
+    return Number(bStarts) - Number(aStarts) || a.localeCompare(b, "fr", { sensitivity: "base" });
+  }).slice(0, max);
+}
+
+export function isKnownPublicCity(value: string, cities: string[]): boolean {
+  const token = normalizeSearchToken(value);
+  return Boolean(token) && cities.some((city) => normalizeSearchToken(city) === token);
 }
 
 export function derivePublicCities(trips: PublicTripRecord[]): string[] {
@@ -66,22 +82,26 @@ export function filterPublicCompanies(
     const slug = normalizePublicLabel(company.slug);
     const active = normalizeSearchToken(String(company.status ?? "")) === "actif";
     if (!id || !name || !slug || company.publicPageEnabled !== true || !active) return [];
+    const country = normalizePublicLabel(company.countryName ?? company.country ?? company.pays);
     return [{
       name,
       slug,
       logoUrl: normalizePublicLabel(company.logoUrl) || undefined,
       description: normalizePublicLabel(company.descriptionCourte ?? company.description) || undefined,
       tripCount: counts.get(id) ?? 0,
+      ...(country && { country }),
     }];
   }).sort((a, b) => b.tripCount - a.tripCount || a.name.localeCompare(b.name, "fr")).slice(0, max);
 }
 
 export type SearchValidation = Partial<Record<"departure" | "arrival" | "date", string>>;
 
-export function validateMarketplaceSearch(departure: string, arrival: string, date: string, today: string): SearchValidation {
+export function validateMarketplaceSearch(departure: string, arrival: string, date: string, today: string, cities?: string[]): SearchValidation {
   const errors: SearchValidation = {};
   if (!normalizePublicLabel(departure)) errors.departure = "Sélectionnez une ville de départ.";
+  else if (cities && !isKnownPublicCity(departure, cities)) errors.departure = "Sélectionnez une ville dans la liste.";
   if (!normalizePublicLabel(arrival)) errors.arrival = "Sélectionnez une ville d’arrivée.";
+  else if (cities && !isKnownPublicCity(arrival, cities)) errors.arrival = "Sélectionnez une ville dans la liste.";
   if (departure && arrival && normalizeSearchToken(departure) === normalizeSearchToken(arrival)) errors.arrival = "Le départ et l’arrivée doivent être différents.";
   if (!date) errors.date = "Sélectionnez une date de voyage.";
   else {

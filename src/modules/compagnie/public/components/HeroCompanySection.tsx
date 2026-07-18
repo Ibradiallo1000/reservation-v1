@@ -5,7 +5,8 @@ import {
   Search,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import VilleCombobox from "@/shared/ui/VilleCombobox";
+import PublicCityCombobox from "@/modules/plateforme/public/PublicCityCombobox";
+import { isKnownPublicCity, normalizeSearchToken } from "@/modules/plateforme/public/marketplaceData";
 
 export interface HeroCompanySectionProps {
   companyName: string;
@@ -13,6 +14,7 @@ export interface HeroCompanySectionProps {
   secondaryColor: string;
   heroImageUrl?: string;
   onSearch: (departure: string, arrival: string) => void;
+  cities: string[];
 }
 
 const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
@@ -21,20 +23,31 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
   secondaryColor,
   heroImageUrl,
   onSearch,
+  cities,
 }) => {
   const [departure, setDeparture] = useState("");
   const [arrival, setArrival] = useState("");
+  const [departureSelected, setDepartureSelected] = useState(false);
+  const [arrivalSelected, setArrivalSelected] = useState(false);
   const { t } = useTranslation();
+  const [errors, setErrors] = useState<{ departure?: string; arrival?: string }>({});
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!departure || !arrival || departure === arrival) return;
+    const nextErrors: { departure?: string; arrival?: string } = {};
+    if (!departureSelected || !isKnownPublicCity(departure, cities)) nextErrors.departure = "Sélectionnez une ville dans la liste.";
+    if (!arrivalSelected || !isKnownPublicCity(arrival, cities)) nextErrors.arrival = "Sélectionnez une ville dans la liste.";
+    if (departure && arrival && normalizeSearchToken(departure) === normalizeSearchToken(arrival)) nextErrors.arrival = "Le départ et l’arrivée doivent être différents.";
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) return;
     onSearch(departure, arrival);
   };
 
   const handleSwap = () => {
     setDeparture(arrival);
     setArrival(departure);
+    setDepartureSelected(arrivalSelected);
+    setArrivalSelected(departureSelected);
   };
 
   const disabled =
@@ -85,13 +98,14 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
               <MapPin className="hidden h-3.5 w-3.5 shrink-0 sm:block" style={{ color: primaryColor }} />
               {t("departureCity")}
             </div>
-            <VilleCombobox
+            <PublicCityCombobox
+              label={t("departureCity")}
               value={departure}
-              onChange={setDeparture}
-              placeholder={t("departureInputPlaceholder")}
-              showLocationIcon
-              wrapperClassName="min-w-0 rounded-lg px-0 py-0 sm:px-2 sm:py-1"
-              inputClassName="min-w-0 text-[11px] font-medium text-[var(--public-ink)] sm:text-sm"
+              onChange={(value, selected) => { setDeparture(value); setDepartureSelected(selected); setErrors((current) => ({ ...current, departure: undefined })); }}
+              cities={cities}
+              disabled={cities.length === 0}
+              exclude={arrival}
+              error={errors.departure}
             />
           </div>
 
@@ -110,13 +124,14 @@ const HeroCompanySection: React.FC<HeroCompanySectionProps> = ({
               <MapPin className="hidden h-3.5 w-3.5 shrink-0 sm:block" style={{ color: secondaryColor }} />
               {t("arrivalCity")}
             </div>
-            <VilleCombobox
+            <PublicCityCombobox
+              label={t("arrivalCity")}
               value={arrival}
-              onChange={setArrival}
-              placeholder={t("arrivalInputPlaceholder")}
-              showLocationIcon
-              wrapperClassName="min-w-0 rounded-lg px-0 py-0 sm:px-2 sm:py-1"
-              inputClassName="min-w-0 text-[11px] font-medium text-[var(--public-ink)] sm:text-sm"
+              onChange={(value, selected) => { setArrival(value); setArrivalSelected(selected); setErrors((current) => ({ ...current, arrival: undefined })); }}
+              cities={cities}
+              disabled={cities.length === 0}
+              exclude={departure}
+              error={errors.arrival}
             />
           </div>
         </div>

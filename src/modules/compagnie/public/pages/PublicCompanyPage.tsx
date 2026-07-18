@@ -43,14 +43,14 @@ function readSuggestionsCache(companyId: string): TripSuggestion[] | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return null;
-    return parsed.slice(0, 4) as TripSuggestion[];
+    return parsed.slice(0, 100) as TripSuggestion[];
   } catch {
     return null;
   }
 }
 
 function writeSuggestionsCache(companyId: string, trips: TripSuggestion[]) {
-  const safeTrips = trips.slice(0, 4);
+  const safeTrips = trips.slice(0, 100);
   suggestionsMemoryCache.set(companyId, safeTrips);
   try {
     sessionStorage.setItem(
@@ -100,6 +100,15 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
       }, {}),
     [agences]
   );
+  const companyCities = useMemo(() => {
+    const labels = new Map<string, string>();
+    suggestedTrips.forEach((trip) => [trip.departure, trip.arrival].forEach((city) => {
+      const label = String(city ?? "").trim();
+      const key = label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("fr");
+      if (key && !labels.has(key)) labels.set(key, label);
+    }));
+    return [...labels.values()].sort((a, b) => a.localeCompare(b, "fr", { sensitivity: "base" }));
+  }, [suggestedTrips]);
 
   /* ================= LOAD COMPANY ================= */
 
@@ -181,8 +190,9 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
         for (const weekly of weeklySnapshots) {
           for (const d of weekly.docs) {
             const trip: any = d.data();
-            const departure = String(trip.depart || trip.departure || "").trim();
-            const arrival = String(trip.arrivee || trip.arrival || "").trim();
+            if (trip.active === false || trip.isActive === false || trip.disabled === true) continue;
+            const departure = String(trip.departureCity || trip.departure || trip.depart || "").trim();
+            const arrival = String(trip.arrivalCity || trip.arrival || trip.arrivee || "").trim();
             const price = trip.price ?? trip.prix ?? 0;
 
             if (!departure || !arrival) continue;
@@ -207,7 +217,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
           }
         }
 
-        const trips = Array.from(uniqueMap.values()).slice(0, 4);
+        const trips = Array.from(uniqueMap.values()).slice(0, 100);
         setSuggestedTrips(trips);
         writeSuggestionsCache(companyId, trips);
       } catch (e) {
@@ -271,6 +281,7 @@ const PublicCompanyPage: React.FC<PublicCompanyPageProps> = ({
             primaryColor={colors.primary}
             secondaryColor={colors.secondary}
             heroImageUrl={company?.banniereUrl ?? company?.imagesSlider?.[0]}
+            cities={companyCities}
             onSearch={(departure, arrival) => {
               const q = `departure=${encodeURIComponent(departure)}&arrival=${encodeURIComponent(arrival)}`;
               const path = pathBase ? `/${pathBase}/booking?${q}` : `/booking?${q}`;

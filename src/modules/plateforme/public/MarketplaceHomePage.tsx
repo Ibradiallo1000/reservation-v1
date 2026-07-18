@@ -26,9 +26,11 @@ function LoadingCards({ count = 4 }: { count?: number }) {
 export default function MarketplaceHomePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { cities, routes, companies, retry } = useMarketplaceData();
+  const { cities, routes, companies, diagnostics, retry } = useMarketplaceData();
   const [departure, setDeparture] = useState(() => searchParams.get("from") ?? "");
   const [arrival, setArrival] = useState(() => searchParams.get("to") ?? "");
+  const [departureSelected, setDepartureSelected] = useState(false);
+  const [arrivalSelected, setArrivalSelected] = useState(false);
   const [date, setDate] = useState(() => searchParams.get("date") ?? "");
   const [errors, setErrors] = useState<ReturnType<typeof validateMarketplaceSearch>>({});
   const [menuOpen, setMenuOpen] = useState(false);
@@ -36,8 +38,10 @@ export default function MarketplaceHomePage() {
 
   usePublicSeo({ title: "Teliya — Trouvez votre prochain trajet", description: "Recherchez un trajet et comparez les compagnies publiques disponibles sur Teliya.", canonicalPath: "/" });
 
-  const search = (nextDeparture = departure, nextArrival = arrival, nextDate = date) => {
-    const validation = validateMarketplaceSearch(nextDeparture, nextArrival, nextDate, today);
+  const search = (nextDeparture = departure, nextArrival = arrival, nextDate = date, trustedSuggestion = false) => {
+    const validation = validateMarketplaceSearch(nextDeparture, nextArrival, nextDate, today, cities.data);
+    if (!trustedSuggestion && nextDeparture === departure && !departureSelected) validation.departure = "Sélectionnez une ville dans la liste.";
+    if (!trustedSuggestion && nextArrival === arrival && !arrivalSelected) validation.arrival = "Sélectionnez une ville dans la liste.";
     setErrors(validation);
     if (Object.keys(validation).length) return;
     navigate(buildMarketplaceResultsRoute({ departure: nextDeparture, arrival: nextArrival, date: nextDate }));
@@ -67,8 +71,8 @@ export default function MarketplaceHomePage() {
           <div className="mx-auto grid max-w-6xl gap-7 lg:grid-cols-[0.8fr_1.2fr] lg:items-center">
             <div><p className="text-sm font-bold uppercase tracking-widest text-orange-100">Voyagez avec Teliya</p><h1 className="mt-2 max-w-xl text-3xl font-black leading-tight sm:text-4xl lg:text-5xl">Trouvez votre prochain trajet</h1><p className="mt-3 max-w-lg text-base leading-7 text-orange-50">Recherchez une destination et comparez les compagnies réellement disponibles.</p></div>
             <form id="search" onSubmit={submit} noValidate aria-label="Rechercher un trajet" className="grid gap-3 rounded-2xl bg-white p-4 text-slate-900 shadow-lg sm:grid-cols-2 lg:grid-cols-[1fr_1fr_0.8fr]">
-              <PublicCityCombobox label="Ville de départ" value={departure} onChange={setDeparture} cities={cities.data} disabled={cities.loading || cities.error} error={errors.departure} exclude={arrival} />
-              <PublicCityCombobox label="Ville d’arrivée" value={arrival} onChange={setArrival} cities={cities.data} disabled={cities.loading || cities.error} error={errors.arrival} exclude={departure} />
+              <PublicCityCombobox label="Ville de départ" value={departure} onChange={(value, selected) => { setDeparture(value); setDepartureSelected(selected); setErrors((current) => ({ ...current, departure: undefined })); }} cities={cities.data} disabled={cities.loading || cities.error} error={errors.departure} exclude={arrival} />
+              <PublicCityCombobox label="Ville d’arrivée" value={arrival} onChange={(value, selected) => { setArrival(value); setArrivalSelected(selected); setErrors((current) => ({ ...current, arrival: undefined })); }} cities={cities.data} disabled={cities.loading || cities.error} error={errors.arrival} exclude={departure} />
               <div><label htmlFor="travel-date" className="mb-1.5 block text-sm font-semibold">Date du voyage</label><div className="relative"><CalendarDays className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-slate-400" aria-hidden="true" /><input id="travel-date" type="date" min={today} value={date} onChange={(event) => setDate(event.target.value)} aria-invalid={Boolean(errors.date)} aria-describedby={errors.date ? "date-error" : undefined} className="min-h-11 w-full rounded-xl border border-slate-300 py-2.5 pl-10 pr-3 text-base outline-none focus-visible:border-orange-500 focus-visible:ring-2 focus-visible:ring-orange-200" /></div>{errors.date ? <p id="date-error" className="mt-1 text-sm font-medium text-rose-700">{errors.date}</p> : null}</div>
               {cities.loading ? <p role="status" className="text-sm text-slate-600 sm:col-span-2 lg:col-span-3">Chargement des villes disponibles…</p> : null}
               {cities.error ? <div role="alert" className="flex items-center justify-between gap-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-800 sm:col-span-2 lg:col-span-3"><span>Données temporairement indisponibles.</span><button type="button" onClick={retry} className="font-bold underline">Réessayer</button></div> : null}
@@ -87,6 +91,7 @@ export default function MarketplaceHomePage() {
       </main>
 
       <footer className="bg-slate-950 px-4 py-8 text-sm text-slate-300"><div className="mx-auto flex max-w-6xl flex-col gap-4 sm:flex-row sm:justify-between"><strong className="text-white">Teliya</strong><nav aria-label="Pied de page" className="flex flex-wrap gap-x-5 gap-y-3"><Link to="/">Accueil</Link><a href="#search">Réserver</a><a href="#help">Aide</a><Link to="/landing">À propos</Link><Link to="/mes-reservations">Mes réservations</Link></nav></div></footer>
+      {import.meta.env.DEV ? <details className="fixed bottom-20 right-3 z-50 max-w-xs rounded-lg border border-slate-300 bg-white p-3 text-xs text-slate-700 shadow-xl"><summary className="cursor-pointer font-bold">Diagnostic public DEV</summary><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1"><dt>Compagnies lues</dt><dd>{diagnostics.companiesLoaded}/{diagnostics.companyReadLimit}</dd><dt>Partenaires éligibles</dt><dd>{diagnostics.eligiblePartners}</dd><dt>Trajets actifs</dt><dd>{diagnostics.activeTrips}/{diagnostics.tripReadLimit}</dd><dt>Villes publiques</dt><dd>{diagnostics.publicCities}</dd></dl></details> : null}
       <nav aria-label="Navigation basse" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-3 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] shadow-[0_-2px_8px_rgba(15,23,42,0.08)] md:hidden"><Link to="/" aria-current="page" className="flex min-h-16 flex-col items-center justify-center gap-1 text-xs font-semibold text-orange-600"><Home className="h-5 w-5" />Accueil</Link><Link to="/mes-reservations" className="flex min-h-16 flex-col items-center justify-center gap-1 text-xs font-semibold text-slate-600"><Ticket className="h-5 w-5" />Réservations</Link><a href="#help" className="flex min-h-16 flex-col items-center justify-center gap-1 text-xs font-semibold text-slate-600"><HelpCircle className="h-5 w-5" />Aide</a></nav>
     </div>
   );

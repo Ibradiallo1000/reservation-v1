@@ -1,6 +1,6 @@
 import { KeyboardEvent, useId, useMemo, useState } from "react";
 import { MapPin } from "lucide-react";
-import { normalizeSearchToken } from "./marketplaceData";
+import { suggestPublicCities } from "./marketplaceData";
 
 type Props = {
   label: string;
@@ -9,20 +9,17 @@ type Props = {
   disabled?: boolean;
   error?: string;
   exclude?: string;
-  onChange: (value: string) => void;
+  onChange: (value: string, selected: boolean) => void;
 };
 
 export default function PublicCityCombobox({ label, value, cities, disabled, error, exclude, onChange }: Props) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  const options = useMemo(() => cities.filter((city) => {
-    const token = normalizeSearchToken(city);
-    return token !== normalizeSearchToken(exclude ?? "") && token.includes(normalizeSearchToken(value));
-  }).slice(0, 8), [cities, exclude, value]);
+  const options = useMemo(() => suggestPublicCities(cities, value, exclude), [cities, exclude, value]);
 
   const choose = (city: string) => {
-    onChange(city);
+    onChange(city, true);
     setOpen(false);
     setActiveIndex(0);
   };
@@ -51,7 +48,7 @@ export default function PublicCityCombobox({ label, value, cities, disabled, err
           autoComplete="off"
           disabled={disabled}
           value={value}
-          onChange={(event) => { onChange(event.target.value); setOpen(true); setActiveIndex(0); }}
+          onChange={(event) => { onChange(event.target.value, false); setOpen(true); setActiveIndex(0); }}
           onFocus={() => setOpen(true)}
           onBlur={() => window.setTimeout(() => setOpen(false), 120)}
           onKeyDown={onKeyDown}

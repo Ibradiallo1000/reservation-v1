@@ -18,6 +18,7 @@ import ErrorBoundary from "@/shared/core/ErrorBoundary";
 import MobileErrorScreen from "@/shared/ui/MobileErrorScreen";
 import type { Company } from "@/types/companyTypes";
 import { CurrencyProvider } from "@/shared/currency/CurrencyContext";
+import { usePublicSeo } from "@/modules/plateforme/public/usePublicSeo";
 
 /* ---------- Lazy pages ---------- */
 const PublicCompanyPage = lazy(() => import("../pages/PublicCompanyPage"));
@@ -104,6 +105,17 @@ export default function RouteResolver() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const privatePublicSteps = new Set(["booking", "payment", "upload-preuve", "receipt", "confirmation", "details", "reservation", "retrouver-reservation"]);
+  const noIndex = privatePublicSteps.has(subPath ?? "");
+  const canonicalPath = noIndex
+    ? `${pathBase ? `/${encodeURIComponent(pathBase)}` : ""}/${subPath === "confirmation" ? "receipt" : subPath ?? ""}`
+    : (pathBase ? `/${encodeURIComponent(pathBase)}` : "/");
+  usePublicSeo({
+    title: noIndex ? "Réservation — Teliya" : `${company?.nom ?? "Compagnie partenaire"} — Teliya`,
+    description: noIndex ? "Parcours public de réservation de la compagnie." : "Page publique d’une compagnie partenaire Teliya.",
+    canonicalPath,
+    robots: noIndex ? "noindex, nofollow" : "index, follow",
+  });
 
   /* Mobile check (stable) */
   const isMobile = useMemo(
