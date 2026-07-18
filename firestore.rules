@@ -2118,21 +2118,22 @@ function agencyAccountantCanPostCashBalance(companyId, accountId, isCreate) {
       allow delete: if canManageInvitationData(resource.data);
     }
 
-    /* Medias (platform / company assets). Authenticated read/write. */
+    /* Medias (platform assets). Authenticated read; platform admin writes only. */
     match /medias/{mediaId} {
-      allow get, list, create, update, delete: if isAuth();
+      allow get, list: if isAuth();
+      allow create, update, delete: if isPlatformAdmin();
     }
 
-    /* Plans catalog (subscription plans). Public read for plan selection; write authenticated (platform admin). */
+    /* Plans catalog (subscription plans). Public read for plan selection; platform admin writes only. */
     match /plans/{planId} {
       allow get, list: if true;
-      allow create, update, delete: if isAuth();
+      allow create, update, delete: if isPlatformAdmin();
     }
 
-    /* Metadata (e.g. plansCatalog document). Public read; write authenticated. */
+    /* Metadata (e.g. plansCatalog document). Public read; platform admin writes only. */
     match /_meta/{docId} {
       allow get, list: if true;
-      allow create, update, delete: if isAuth();
+      allow create, update, delete: if isPlatformAdmin();
     }
 
     /* Admin-controlled system plan pricing. */

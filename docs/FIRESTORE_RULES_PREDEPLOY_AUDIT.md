@@ -17,7 +17,7 @@ Aucune regle, aucun test, aucune donnee et aucune Cloud Function n'ont ete modif
 
 ## Resume executif
 
-Niveau de qualite actuel: 7.5 / 10
+Niveau de qualite actuel: 8 / 10
 
 Les Firestore Rules couvrent de nombreux workflows critiques et les flux comptables les plus sensibles disposent maintenant de tests Emulator cibles. Les corrections recentes sur `accounts`, `financialTransactions` et `financialTransactionIdempotency` reduisent nettement le risque historique de depassement des 1000 expressions pour les scenarios testes.
 
@@ -29,7 +29,9 @@ Correction Phase 1.3.7.3: le risque eleve `invitations` avec lecture de liste pu
 
 Controle Phase 1.3.7.3.1: les anciennes invitations creees par le helper frontend avant cette correction utilisaient un id Firestore automatique et un champ `token` distinct. Les anciens liens publics construits avec ce champ `token` ne sont pas compatibles avec les nouvelles Rules sans migration ou recreation explicite. Cette incompatibilite est preferee a la reouverture d'un `list` public. Les invitations creees par la Cloud Function historique avec un lien base sur l'id du document restent compatibles si le document est encore `pending`.
 
-Conclusion courte: les flux comptables testes sont en meilleur etat, le bloc critique `users/{userId}` est verrouille, le miroir public `publicReservations` est encadre et le listing public des invitations est ferme. Les Rules peuvent etre deployees vers staging pour validation, avec une dette elevee restante sur les ecritures non encore restreintes de `medias`, `plans` et `_meta`.
+Correction Phase 1.3.7.4: le dernier risque eleve, ecritures authentifiees trop larges sur `medias`, `plans` et `_meta`, a ete corrige. Les lectures existantes sont conservees, mais les creations, modifications et suppressions sont maintenant reservees a `admin_platforme`.
+
+Conclusion courte: les flux comptables testes sont en meilleur etat, le bloc critique `users/{userId}` est verrouille, le miroir public `publicReservations` est encadre, le listing public des invitations est ferme et les ecritures globales `medias`, `plans`, `_meta` sont limitees a l'administration plateforme. Les Rules peuvent etre deployees vers staging pour validation, avec une dette moyenne restante sur les matches globaux, helpers historiques et surfaces publiques peu documentees.
 
 ## Forces
 
@@ -59,8 +61,8 @@ Conclusion courte: les flux comptables testes sont en meilleur etat, le bloc cri
 - Plusieurs aliases de roles coexistent (`chefAgence`, `chefagence`, `chef_agence`, `comptable`, `Comptable`, `agency_accountant`), ce qui augmente le risque de divergence.
 - `request.resource.data.diff(resource.data)` est repete de nombreuses fois dans les memes zones, ce qui alourdit la lecture et peut augmenter le cout d'evaluation.
 - Les collection groups publics (`weeklyTrips`, `agences`, certaines reservations et `dailyStats`) sont utiles, mais leur portee globale doit etre surveillee.
-- Des regles publiques ou tres ouvertes subsistent sur `plans`, `_meta`, `medias` et `platformLeads`.
-- Les tests Rules actuels couvrent surtout la comptabilite recente; ils ne couvrent pas encore les risques globaux `medias`, `plans`, metadata et certaines surfaces publiques.
+- Des regles publiques ou tres ouvertes subsistent sur `platformLeads` et certaines surfaces publiques legitimes mais peu documentees.
+- Les tests Rules actuels couvrent surtout la comptabilite recente et les risques eleves corriges; ils ne couvrent pas encore certaines surfaces publiques et matches globaux.
 
 ## Dette technique
 
@@ -81,11 +83,7 @@ Aucun risque critique connu apres correction Phase 1.3.7.1 du bloc `users/{userI
 
 ### Eleve
 
-1. Ecritures authentifiees trop larges sur donnees non financieres
-
-   Zones: `medias`, `plans`, `_meta`.
-
-   Plusieurs collections permettent `create/update/delete` a tout utilisateur authentifie ou presque. Cela peut alterer du contenu public, catalogue ou metadata sans role administratif strict.
+Aucun risque eleve connu apres correction Phase 1.3.7.4 des ecritures globales `medias`, `plans` et `_meta`.
 
 ### Eleve corrige
 
@@ -128,6 +126,20 @@ Aucun risque critique connu apres correction Phase 1.3.7.1 du bloc `users/{userI
    - modification de `role`, `companyId`, `agencyId`, `email` et `token` refusee pour les utilisateurs ordinaires ;
    - suppressions limitees aux gestionnaires du perimetre ;
    - test cible ajoute: `tests/firestore/invitations.rules.test.cjs`.
+
+4. Ecritures authentifiees trop larges sur donnees non financieres
+
+   Zones: `medias`, `plans`, `_meta`.
+
+   Correction Phase 1.3.7.4:
+
+   - `medias` conserve les lectures authentifiees utilisees par la bibliotheque plateforme ;
+   - `medias` reserve `create/update/delete` a `admin_platforme` ;
+   - `plans` conserve les lectures publiques existantes du catalogue ;
+   - `plans` reserve `create/update/delete` a `admin_platforme` ;
+   - `_meta` conserve les lectures publiques existantes de metadata ;
+   - `_meta` reserve `create/update/delete` a `admin_platforme` ;
+   - test cible ajoute: `tests/firestore/platformContent.rules.test.cjs`.
 
 ### Moyen
 
@@ -185,18 +197,11 @@ Aucun risque critique connu apres correction Phase 1.3.7.1 du bloc `users/{userI
 
 ### Priorite 2
 
-- Restreindre `plans`, `_meta` et `medias` aux roles administratifs reels pour les ecritures.
-
-### Priorite 3
-
 - Ajouter des tests Rules non comptables pour:
-  - medias;
-  - plans;
-  - `_meta`;
   - collection group reservations;
   - logistics et revenue.
 
-### Priorite 4
+### Priorite 3
 
 - Nettoyer les helpers inutilises apres validation humaine.
 - Centraliser les groupes de roles dans des helpers explicites.
@@ -205,7 +210,6 @@ Aucun risque critique connu apres correction Phase 1.3.7.1 du bloc `users/{userI
 
 ## Corrections recommandees
 
-- Restreindre les ecritures `plans`, `_meta` et `medias`.
 - Ajouter des tests pour toutes les collections publiques ou quasi publiques.
 - Identifier et supprimer les helpers inutilises uniquement apres tests.
 - Revoir les matches globaux `logistics/{path=**}` et `revenue/{path=**}` avant d'ajouter de nouvelles sous-collections.
@@ -225,7 +229,7 @@ Justification:
 - Le risque eleve de listing global `users` par tout utilisateur authentifie a ete corrige pendant la meme correction ciblee du bloc `users/{userId}` en Phase 1.3.7.1.
 - Le premier risque eleve sur `publicReservations` a ete corrige et couvert par un test Rules cible.
 - Le risque eleve `invitations list public` a ete corrige et couvert par un test Rules cible.
-- Les ecritures authentifiees larges sur `medias`, `plans` et `_meta` restent insuffisamment couvertes par les tests Rules.
+- Le dernier risque eleve sur les ecritures `medias`, `plans` et `_meta` a ete corrige et couvert par un test Rules cible.
 
 Decision finale:
 
@@ -234,10 +238,10 @@ FIRESTORE RULES PRETES POUR STAGING
 ## Synthese chiffree
 
 - Risques critiques: 0
-- Risques eleves: 1
+- Risques eleves: 0
 - Risques moyens: 6
 - Risques faibles: 5
-- Note globale: 7.5 / 10
+- Note globale: 8 / 10
 - Decision finale: FIRESTORE RULES PRETES POUR STAGING
 
 Note de coherence des compteurs:
@@ -246,4 +250,5 @@ Note de coherence des compteurs:
 - Risque eleve corrige en Phase 1.3.7.1: `users` list ouvert a tout utilisateur authentifie.
 - Risque eleve corrige en Phase 1.3.7.2: `publicReservations` ouvert en creation et update publics.
 - Risque eleve corrige en Phase 1.3.7.3: `invitations` list public.
-- Risques eleves restants: 1.
+- Risque eleve corrige en Phase 1.3.7.4: ecritures authentifiees trop larges sur `medias`, `plans` et `_meta`.
+- Risques eleves restants: 0.

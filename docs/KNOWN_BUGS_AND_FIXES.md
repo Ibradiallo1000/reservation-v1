@@ -886,6 +886,86 @@ Ne plus refaire
 
 --------------------------------------------------
 
+## BUG-013 — Écritures globales trop larges sur medias, plans et _meta
+
+Statut
+
+Corrigé en Phase 1.3.7.4.
+
+Zone
+
+Firestore Rules - collections globales :
+
+- `medias/{mediaId}`
+- `plans/{planId}`
+- `_meta/{docId}`
+
+Symptôme
+
+Les collections `medias`, `plans` et `_meta` autorisaient `create`, `update` et `delete` à tout utilisateur authentifié.
+
+Cause exacte
+
+Les règles historiques utilisaient `isAuth()` comme garde d'écriture pour des données globales de plateforme. Cette garde ne distinguait pas un utilisateur ordinaire, un rôle compagnie et un administrateur plateforme.
+
+Risque
+
+Un utilisateur authentifié ordinaire pouvait altérer des contenus ou paramètres globaux :
+
+- ajout, modification ou suppression de médias plateforme ;
+- modification de plans commerciaux, prix, limites ou fonctionnalités ;
+- falsification de métadonnées plateforme ;
+- suppression ou altération inter-compagnie d'informations globales.
+
+Correction appliquée
+
+Les lectures existantes ont été conservées pour ne pas casser les parcours actuels :
+
+- `medias` reste lisible par les utilisateurs authentifiés ;
+- `plans` reste lisible publiquement ;
+- `_meta` reste lisible publiquement.
+
+Les écritures sont désormais réservées au rôle `admin_platforme` :
+
+- `create`
+- `update`
+- `delete`
+
+Fichiers modifiés
+
+- `firestore.rules`
+- `tests/firestore/platformContent.rules.test.cjs`
+- `docs/FIRESTORE_RULES_PREDEPLOY_AUDIT.md`
+- `docs/KNOWN_BUGS_AND_FIXES.md`
+
+Tests ajoutés
+
+- `tests/firestore/platformContent.rules.test.cjs`
+
+Comportements autorisés
+
+- lecture authentifiée des médias plateforme ;
+- lecture publique du catalogue `plans` ;
+- lecture publique de `_meta` ;
+- gestion de `medias`, `plans` et `_meta` par `admin_platforme`.
+
+Comportements désormais interdits
+
+- écriture anonyme sur `medias`, `plans` ou `_meta` ;
+- écriture par utilisateur authentifié ordinaire ;
+- écriture par rôle compagnie ;
+- modification inter-compagnie de médias ;
+- falsification de prix, limites, fonctionnalités ou statut des plans par un non-admin plateforme ;
+- suppression non autorisée.
+
+Ne plus refaire
+
+- utiliser `isAuth()` seul pour protéger une collection globale de configuration ou de contenu plateforme ;
+- autoriser les rôles compagnie à modifier des données globales sans périmètre explicite ;
+- créer une collection globale écrivable sans tests Rules dédiés.
+
+--------------------------------------------------
+
 # Comptable Agence
 
 Les incidents `BUG-001`, `BUG-002` et `BUG-003` sont les références prioritaires pour les erreurs de caisse, de validation de poste et de versement banque.
