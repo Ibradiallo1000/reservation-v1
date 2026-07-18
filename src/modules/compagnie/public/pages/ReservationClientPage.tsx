@@ -62,6 +62,14 @@ import {
 import { buildReservationPayload } from '@/lib/buildReservationPayload';
 import { resolveAgencyDisplayName } from '../utils/agencyDisplayName';
 import { saveLocalTicketPointer } from '../utils/localTicketWallet';
+import {
+  bookingSelectionStorageKey,
+  findSelectedTrip,
+  parseBookingSelection,
+  selectionFromUrl,
+  selectionPriceChanged,
+  type PublicBookingSelection,
+} from '../utils/bookingSelection';
 
 // util pour token public
 const randomToken = () => Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -130,11 +138,34 @@ export default function ReservationClientPage() {
   const nameInputRef = useRef<HTMLInputElement>(null);
   const phoneInputRef = useRef<HTMLInputElement>(null);
 
-  const routeState = (location.state || {}) as { companyId?: string; agencyId?: string; companyFromSearch?: { id?: string; nom?: string; logoUrl?: string; couleurPrimaire?: string; couleurSecondaire?: string } };
+  const routeState = (location.state || {}) as {
+    companyId?: string;
+    agencyId?: string;
+    tripData?: Record<string, unknown>;
+    companyInfo?: { id?: string; slug?: string; nom?: string; logoUrl?: string };
+    companyFromSearch?: { id?: string; nom?: string; logoUrl?: string; couleurPrimaire?: string; couleurSecondaire?: string };
+  };
 
   const search = new URLSearchParams(location.search);
   const departureQ = normalize(search.get('departure') || '');
   const arrivalQ   = normalize(search.get('arrival') || '');
+  const requestedSelection = useMemo(() => {
+    const fromState = parseBookingSelection({
+      ...routeState.tripData,
+      companySlug: routeState.companyInfo?.slug ?? slug,
+    });
+    if (fromState) {
+      try { sessionStorage.setItem(bookingSelectionStorageKey(slug), JSON.stringify(fromState)); } catch { /* storage unavailable */ }
+      return fromState;
+    }
+    try {
+      const cached = parseBookingSelection(JSON.parse(sessionStorage.getItem(bookingSelectionStorageKey(slug)) || 'null'));
+      if (cached) return cached;
+    } catch { /* invalid or unavailable storage */ }
+    return selectionFromUrl(slug, new URLSearchParams(location.search));
+  }, [routeState.tripData, routeState.companyInfo?.slug, slug, location.search]);
+  const [restoredSelection, setRestoredSelection] = useState<PublicBookingSelection | null>(requestedSelection);
+  const [priceChangeNotice, setPriceChangeNotice] = useState(false);
 
   const [company, setCompany] = useState({ 
     id: '', 
@@ -335,12 +366,26 @@ export default function ReservationClientPage() {
         const strip = getPublicScheduleDatesLocal(PUBLIC_RESERVATION_SCHEDULE_DAYS);
         let selDate = strip[0] ?? '';
         let selTripId = '';
-        for (const d of strip) {
-          const tr = upcomingTrips.find((trip: any) => String(trip.date) === d);
-          if (tr) {
-            selDate = d;
-            selTripId = String(tr.id);
-            break;
+        const restoredTrip = requestedSelection ? findSelectedTrip(upcomingTrips, requestedSelection) : null;
+        if (requestedSelection) {
+          if (!restoredTrip) {
+            setRestoredSelection(requestedSelection);
+            setError("Ce départ n’est plus disponible.");
+          } else {
+            selDate = String(restoredTrip.date);
+            selTripId = String(restoredTrip.id);
+            setRestoredSelection(requestedSelection);
+            setPriceChangeNotice(selectionPriceChanged(requestedSelection, restoredTrip));
+            try { sessionStorage.setItem(bookingSelectionStorageKey(slug), JSON.stringify({ ...requestedSelection, tripId: String(restoredTrip.id), price: Number(restoredTrip.price) })); } catch { /* storage unavailable */ }
+          }
+        } else {
+          for (const d of strip) {
+            const tr = upcomingTrips.find((trip: any) => String(trip.date) === d);
+            if (tr) {
+              selDate = d;
+              selTripId = String(tr.id);
+              break;
+            }
           }
         }
         setSelectedDate(selDate);
@@ -370,7 +415,7 @@ export default function ReservationClientPage() {
     };
 
     load();
-  }, [slug, departureQ, arrivalQ, reservationRouteId]);
+  }, [slug, departureQ, arrivalQ, reservationRouteId, requestedSelection]);
 
   // Appliquer les couleurs de la compagnie au thème du navigateur (barre d'adresse, zone autour du clavier sur mobile)
   const DEFAULT_THEME_COLOR = '#FF6600';
@@ -408,14 +453,14 @@ export default function ReservationClientPage() {
 
   useEffect(() => {
     if (reservationRouteId) return;
-    if (calendarDates.length === 0) return;
+    if (calendarDates.length === 0 || restoredSelection) return;
     if (!selectedDate || !calendarDates.includes(selectedDate)) {
       setSelectedDate(calendarDates[0]!);
     }
-  }, [calendarDates, selectedDate, reservationRouteId]);
+  }, [calendarDates, selectedDate, reservationRouteId, restoredSelection]);
 
   useEffect(() => {
-    if (reservationRouteId || !selectedDate) return;
+    if (reservationRouteId || !selectedDate || restoredSelection) return;
     const list = validTrips.filter(
       (t: any) =>
         String(t.date) === selectedDate &&
@@ -429,9 +474,27 @@ export default function ReservationClientPage() {
     if (!selectedTripId || !stillValid) {
       setSelectedTripId((list[0] as any).id);
     }
-  }, [validTrips, selectedDate, selectedTripId, reservationRouteId, nowDateStr, nowTimeStr]);
+  }, [validTrips, selectedDate, selectedTripId, reservationRouteId, nowDateStr, nowTimeStr, restoredSelection]);
 
   const selectedTrip: any = validTrips.find((t: any) => t.id === selectedTripId);
+  const persistTripSelection = useCallback((trip: any) => {
+    if (!trip) return;
+    const selection = parseBookingSelection({
+      companySlug: slug,
+      id: trip.id,
+      weeklyTripId: trip.weeklyTripId,
+      agencyId: trip.agencyId,
+      departure: trip.departure,
+      arrival: trip.arrival,
+      date: trip.date,
+      time: trip.time,
+      price: trip.price,
+    });
+    if (!selection) return;
+    setRestoredSelection(selection);
+    setError('');
+    try { sessionStorage.setItem(bookingSelectionStorageKey(slug), JSON.stringify(selection)); } catch { /* storage unavailable */ }
+  }, [slug]);
   const {
     status: operationQuota,
     quotaReached,
@@ -925,7 +988,8 @@ export default function ReservationClientPage() {
         onBack={() => navigate(-1)}
         primaryColor={theme.primary}
         secondaryColor={theme.secondary}
-        title="Réservation"
+        title="Votre réservation"
+        subtitle="Départ · Passager · Paiement · Confirmation"
         logoUrl={company.logoUrl || undefined}
       />
       {!isOnline && (
@@ -957,7 +1021,20 @@ export default function ReservationClientPage() {
           )}
 
           {error && (
-            <div className="p-4 rounded-xl bg-red-50 border border-red-100 text-red-800 text-sm">{error}</div>
+            <div className="p-4 rounded-xl bg-red-50 border border-red-100 text-red-800 text-sm" role="alert">
+              <p className="font-semibold">{error}</p>
+              {error === "Ce départ n’est plus disponible." && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" className="min-h-11 rounded-lg bg-red-700 px-4 py-2 font-semibold text-white" onClick={() => navigate(pathBase ? `/${pathBase}/resultats` : '/resultats')}>Retour aux départs</button>
+                  <button type="button" className="min-h-11 rounded-lg border border-red-300 bg-white px-4 py-2 font-semibold" onClick={() => navigate('/')}>Nouvelle recherche</button>
+                </div>
+              )}
+            </div>
+          )}
+          {priceChangeNotice && selectedTrip && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" role="status">
+              Le prix de ce départ a été actualisé. Le montant affiché ci-dessous est le prix actuellement fourni par le service de réservation.
+            </div>
           )}
 
           <SectionCard
@@ -999,6 +1076,7 @@ export default function ReservationClientPage() {
                           setSelectedDate(d);
                           const first = validTrips.find((t: any) => String(t.date) === d);
                           setSelectedTripId(first ? String((first as any).id) : '');
+                          persistTripSelection(first);
                         }}
                         className="flex-shrink-0 rounded-lg border px-2 py-0.5 text-xs font-medium transition"
                         style={{
@@ -1039,7 +1117,10 @@ export default function ReservationClientPage() {
                             key={t.id}
                             type="button"
                             disabled={isSubmitting}
-                            onClick={() => setSelectedTripId(t.id)}
+                            onClick={() => {
+                              setSelectedTripId(t.id);
+                              persistTripSelection(t);
+                            }}
                             className="inline-flex w-fit max-w-full flex-shrink-0 flex-col items-start rounded-lg border px-2.5 py-1.5 text-left transition-all duration-200"
                             style={{
                               borderColor: active ? theme.primary : '#e5e7eb',
@@ -1094,6 +1175,10 @@ export default function ReservationClientPage() {
                         fieldErrors.fullName ? 'border-red-300 focus:border-red-400' : 'border-[var(--client-input-border)]'
                       }`}
                       placeholder="Nom complet"
+                      aria-label="Nom complet"
+                      aria-invalid={Boolean(fieldErrors.fullName)}
+                      aria-describedby={fieldErrors.fullName ? 'booking-full-name-error' : undefined}
+                      autoComplete="name"
                       value={passenger.fullName}
                       onChange={e => {
                         setPassenger(p => ({ ...p, fullName: e.target.value }));
@@ -1101,7 +1186,7 @@ export default function ReservationClientPage() {
                       }}
                     />
                     {fieldErrors.fullName && (
-                      <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1">
+                      <p id="booking-full-name-error" className="text-xs text-red-600 mt-1.5 flex items-center gap-1">
                         <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {fieldErrors.fullName}
                       </p>
                     )}
@@ -1115,13 +1200,17 @@ export default function ReservationClientPage() {
                     <input
                       ref={phoneInputRef}
                       disabled={isSubmitting}
-                      inputMode="numeric"
+                      type="tel"
+                      inputMode="tel"
                       autoComplete="tel"
                       maxLength={11}
                       className={`h-12 pl-11 pr-4 w-full border-2 rounded-xl bg-[var(--client-input-bg)] text-gray-900 placeholder-gray-500 shadow-sm focus:border-[var(--client-primary)] focus:ring-2 focus:ring-[var(--client-focus-ring)] focus:ring-offset-0 focus:shadow-md focus:scale-[1.01] focus:outline-none transition-all duration-200 ${
                         fieldErrors.phone ? 'border-red-300 focus:border-red-400' : 'border-[var(--client-input-border)]'
                       }`}
                       placeholder="Téléphone (ex: 22 22 22 22)"
+                      aria-label="Numéro de téléphone"
+                      aria-invalid={Boolean(fieldErrors.phone)}
+                      aria-describedby={fieldErrors.phone ? 'booking-phone-error' : undefined}
                       value={passenger.phone}
                       onChange={e => {
                         setPassenger(p => ({ ...p, phone: formatMaliPhone(e.target.value) }));
@@ -1129,7 +1218,7 @@ export default function ReservationClientPage() {
                       }}
                     />
                     {fieldErrors.phone && (
-                      <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1">
+                      <p id="booking-phone-error" className="text-xs text-red-600 mt-1.5 flex items-center gap-1">
                         <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {fieldErrors.phone}
                       </p>
                     )}
