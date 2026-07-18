@@ -47,7 +47,20 @@ function citiesMatchPublic(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
-type WeeklyRow = { agencyId: string; weeklyTripId: string; wt: Record<string, unknown> };
+export const PUBLIC_SCHEDULE_FALLBACK_TIMEZONE = "Africa/Bamako";
+
+export function publicDepartureHasPassed(date: string, time: string, timeZone = PUBLIC_SCHEDULE_FALLBACK_TIMEZONE, now = new Date()): boolean {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+    const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+    const nowLocal = `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+    return `${date}T${time}` <= nowLocal;
+  } catch {
+    return `${date}T${time}` <= `${publicScheduleLocalYmd(now)}T${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  }
+}
+
+type WeeklyRow = { agencyId: string; weeklyTripId: string; timezone: string; wt: Record<string, unknown> };
 
 async function loadWeeklyTemplatesForPublicRoute(
   companyId: string,
@@ -63,6 +76,8 @@ async function loadWeeklyTemplatesForPublicRoute(
   }
   for (const agDoc of agenciesSnap.docs) {
     const agencyId = agDoc.id;
+    const agency = agDoc.data() as { timezone?: unknown };
+    const timezone = typeof agency.timezone === "string" && agency.timezone.trim() ? agency.timezone.trim() : PUBLIC_SCHEDULE_FALLBACK_TIMEZONE;
     try {
       const wtSnap = await getDocs(collection(db, "companies", companyId, "agences", agencyId, "weeklyTrips"));
       for (const d of wtSnap.docs) {
@@ -71,7 +86,7 @@ async function loadWeeklyTemplatesForPublicRoute(
         const d0 = String(wt.departureCity ?? wt.departure ?? "").trim();
         const a0 = String(wt.arrivalCity ?? wt.arrival ?? "").trim();
         if (!citiesMatchPublic(d0, depN) || !citiesMatchPublic(a0, arrN)) continue;
-        rows.push({ agencyId, weeklyTripId: d.id, wt });
+        rows.push({ agencyId, weeklyTripId: d.id, timezone, wt });
       }
     } catch {
       /* agence sans weeklyTrips ou accès */
@@ -200,7 +215,6 @@ export async function buildValidTripsFromWeeklyTrips(
     });
   }
 
-  const now = new Date();
   type SlotRow = {
     weeklyTripId: string;
     agencyId: string;
@@ -211,6 +225,7 @@ export async function buildValidTripsFromWeeklyTrips(
     price: number;
     cap: number;
     routeId?: string;
+    timezone: string;
   };
   const slotRows: SlotRow[] = [];
 
@@ -221,7 +236,7 @@ export async function buildValidTripsFromWeeklyTrips(
     const ymd = toYMD(dayDate);
     const dayName = weekdayFRPublic(dayDate);
 
-    for (const { agencyId, weeklyTripId, wt } of weeklyRows) {
+    for (const { agencyId, weeklyTripId, timezone, wt } of weeklyRows) {
       const horairesRaw = wt.horaires as Record<string, string[]> | undefined;
       const hours = Array.isArray(horairesRaw?.[dayName]) ? horairesRaw![dayName]! : [];
       if (hours.length === 0) continue;
@@ -238,9 +253,7 @@ export async function buildValidTripsFromWeeklyTrips(
       for (const rawH of hours) {
         const timeNorm = normalizeTripInstanceTime(String(rawH));
         if (!timeNorm) continue;
-        const slotDt = new Date(`${ymd}T${timeNorm}:00`);
-        if (Number.isNaN(slotDt.getTime())) continue;
-        if (slotDt.getTime() <= now.getTime()) continue;
+        if (publicDepartureHasPassed(ymd, timeNorm, timezone)) continue;
 
         slotRows.push({
           weeklyTripId,
@@ -252,6 +265,7 @@ export async function buildValidTripsFromWeeklyTrips(
           price: priceWt,
           cap: capWt,
           routeId: routeIdStr,
+          timezone,
         });
       }
     }
@@ -278,12 +292,13 @@ export async function buildValidTripsFromWeeklyTrips(
     const detId = buildTripInstanceId(wid, s.date, s.time);
     const ti =
       byDeterministicId.get(detId) ?? byCompositeKey.get(`${wid}|${s.date}|${s.time}`);
+    const tiData = ti as unknown as (Record<string, unknown> & { id: string }) | undefined;
     if (ti && String((ti as { status?: string }).status ?? "").toLowerCase() === "cancelled") {
       continue;
     }
 
-    const departure = String((ti as any)?.departureCity ?? (ti as any)?.departure ?? s.departure).trim();
-    const arrival = String((ti as any)?.arrivalCity ?? (ti as any)?.arrival ?? s.arrival).trim();
+    const departure = String(tiData?.departureCity ?? tiData?.departure ?? s.departure).trim();
+    const arrival = String(tiData?.arrivalCity ?? tiData?.arrival ?? s.arrival).trim();
     let remaining: number;
     let id: string;
     let price = s.price;
@@ -312,7 +327,7 @@ export async function buildValidTripsFromWeeklyTrips(
       arrival,
       price,
       remainingSeats: remaining,
-      agencyId: String((ti as any)?.agencyId ?? s.agencyId ?? ""),
+      agencyId: String(tiData?.agencyId ?? s.agencyId ?? ""),
       routeId,
       weeklyTripId: wid,
       seatCapacity: s.cap,
@@ -359,9 +374,10 @@ function tripsFromInstancesOnly(args: {
     .filter((ti) => String((ti as { status?: unknown }).status ?? "").toLowerCase() !== "cancelled")
     .filter((ti) => String(ti.date ?? "") >= todayYMD)
     .map((ti) => {
-      const departure = String((ti as any).departureCity ?? (ti as any).departure ?? depCity).trim();
-      const arrival = String((ti as any).arrivalCity ?? (ti as any).arrival ?? arrCity).trim();
-      const time = String((ti as any).departureTime ?? (ti as any).time ?? "00:00").trim();
+      const tiData = ti as unknown as Record<string, unknown> & { id: string };
+      const departure = String(tiData.departureCity ?? tiData.departure ?? depCity).trim();
+      const arrival = String(tiData.arrivalCity ?? tiData.arrival ?? arrCity).trim();
+      const time = String(tiData.departureTime ?? tiData.time ?? "00:00").trim();
       const baseRemaining = tripInstanceRemainingFromDoc(ti);
       const holdKey = onlineHoldCompositeKey(String(ti.id), departure, arrival);
       const held = holdMap.get(holdKey) ?? 0;
