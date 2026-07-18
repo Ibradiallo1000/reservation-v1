@@ -563,29 +563,8 @@
       "collectionGroup": "shipments",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "shipments",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
         { "fieldPath": "originAgencyId", "order": "ASCENDING" },
         { "fieldPath": "transportStatus", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "shipments",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "shipmentNumber", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "shipments",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "receiver.phone", "order": "ASCENDING" }
       ]
     },
     {
@@ -874,20 +853,6 @@
       ]
     },
     {
-      "collectionGroup": "comptaEncaissements",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "comptaEncaissements",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
-      ]
-    },
-    {
       "collectionId": "tripAssignments",
       "queryScope": "COLLECTION",
       "fields": [
@@ -939,14 +904,6 @@
         { "fieldPath": "vehicleId", "order": "ASCENDING" },
         { "fieldPath": "date", "order": "ASCENDING" },
         { "fieldPath": "heure", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionId": "tripAssignments",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "date", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
       ]
     },
@@ -963,13 +920,6 @@
       "queryScope": "COLLECTION_GROUP",
       "fields": [
         { "fieldPath": "agencyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "activityLogs",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
         { "fieldPath": "createdAt", "order": "ASCENDING" }
       ]
     },

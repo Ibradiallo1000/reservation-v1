@@ -6,6 +6,26 @@ Cette procedure prepare le premier deploiement des regles et index Firestore ver
 
 Aucun deploiement Firebase n'a ete execute pendant la Phase 1.3.6.
 
+## Cloture Phase 1.3.8
+
+Le deploiement des regles Firestore est confirme sur le projet staging `teliya-staging`.
+
+Le deploiement des index Firestore est confirme sur le projet staging `teliya-staging`.
+
+Le nettoyage des index a supprime 6 faux index composites a champ unique et le doublon exact `tripAssignments`.
+
+Total final: 112 index.
+
+La production `monbillet-95b77` n'a pas ete touchee pendant cette phase.
+
+Les warnings Firestore Rules restants seront traites dans une phase separee.
+
+Validation code: `npm run build` reussi et `npm run test:run` reussi avec 121 tests.
+
+Validation Rules locale: `npm run test:rules` differe uniquement parce que Firebase CLI 15.24.0 exige Java 21 alors que l'environnement local utilise Java 17.
+
+La mise a niveau Java 21 sera traitee dans une phase dediee d'outillage.
+
 ## Environnement cible
 
 ```text
