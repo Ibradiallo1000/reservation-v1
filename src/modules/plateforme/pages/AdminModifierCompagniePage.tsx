@@ -16,6 +16,7 @@ import { db } from "@/firebaseConfig";
 import { Button } from "@/shared/ui/button";
 import { useOnlineStatus } from "@/shared/hooks/useOnlineStatus";
 import { PageLoadingState, PageOfflineState } from "@/shared/ui/PageStates";
+import { getSupportedCountry, resolveCompanyCountryCode, SUPPORTED_COUNTRIES, type SupportedCountryCode } from "@/config/supportedCountries";
 
 // Secondary app (pour envoyer le reset sans toucher la session courante)
 import { getApp, initializeApp, deleteApp, FirebaseApp } from "firebase/app";
@@ -27,6 +28,7 @@ type Company = {
   email?: string;
   telephone?: string;
   pays?: string;
+  countryCode?: SupportedCountryCode;
   status?: "actif" | "inactif";
 };
 
@@ -63,6 +65,7 @@ const AdminModifierCompagniePage: React.FC = () => {
   const [email, setEmail] = useState("");
   const [telephone, setTelephone] = useState("");
   const [pays, setPays] = useState("");
+  const [countryCode, setCountryCode] = useState<SupportedCountryCode | "">("");
   const [status, setStatus] = useState<"actif" | "inactif">("actif");
 
   // Admin principal (affichage + reset password)
@@ -73,8 +76,8 @@ const AdminModifierCompagniePage: React.FC = () => {
   const [reloadKey, setReloadKey] = useState(0);
 
   const canSave = useMemo(() => {
-    return nom.trim().length >= 2 && slug.trim().length >= 2 && !saving;
-  }, [nom, slug, saving]);
+    return nom.trim().length >= 2 && slug.trim().length >= 2 && Boolean(countryCode) && !saving;
+  }, [nom, slug, countryCode, saving]);
 
   useEffect(() => {
     (async () => {
@@ -89,8 +92,10 @@ const AdminModifierCompagniePage: React.FC = () => {
           setSlug(d.slug || "");
           setEmail(d.email || "");
           setTelephone(d.telephone || "");
-          setPays(d.pays || "");
-          setStatus((d.status as any) || "actif");
+          const resolvedCountryCode = resolveCompanyCountryCode(d);
+          setCountryCode(resolvedCountryCode ?? "");
+          setPays(resolvedCountryCode ? getSupportedCountry(resolvedCountryCode).name : (d.pays || ""));
+          setStatus(d.status === "inactif" ? "inactif" : "actif");
         }
 
         // Admin principal (users: role=admin_compagnie & companyId=id)
@@ -102,7 +107,7 @@ const AdminModifierCompagniePage: React.FC = () => {
         );
         const us = await getDocs(q);
         if (!us.empty) {
-          const u = { uid: us.docs[0].id, ...(us.docs[0].data() as any) } as AdminUser;
+          const u = { uid: us.docs[0].id, ...us.docs[0].data() } as AdminUser;
           setAdmin(u);
           setAdminFullName(u.displayName || "");
           setAdminPhone(u.phone || "");
@@ -140,6 +145,7 @@ const AdminModifierCompagniePage: React.FC = () => {
         slug: slug.trim(),
         email: email.trim() || null,
         telephone: telephone.trim() || null,
+        countryCode,
         pays: pays.trim() || null,
         status,
         updatedAt: serverTimestamp(),
@@ -272,11 +278,20 @@ const AdminModifierCompagniePage: React.FC = () => {
 
           <label className="block mb-3">
             <span className="text-sm text-gray-700">Pays</span>
-            <input
+            <select
               className="mt-1 w-full border rounded px-3 py-2"
-              value={pays}
-              onChange={(e) => setPays(e.target.value)}
-            />
+              value={countryCode}
+              onChange={(e) => {
+                const code = e.target.value as SupportedCountryCode | "";
+                setCountryCode(code);
+                setPays(code ? getSupportedCountry(code).name : "");
+              }}
+              required
+            >
+              <option value="">— Sélectionner un pays —</option>
+              {SUPPORTED_COUNTRIES.map((country) => <option key={country.code} value={country.code}>{country.name} ({country.code})</option>)}
+            </select>
+            <span className="mt-1 block text-xs text-amber-700">Changer le pays ne migre ni les agences, ni les villes, trajets, devises, fuseaux ou moyens de paiement. Vérifiez ces données séparément.</span>
           </label>
 
           <label className="block">
@@ -284,7 +299,7 @@ const AdminModifierCompagniePage: React.FC = () => {
             <select
               className="mt-1 w-full border rounded px-3 py-2"
               value={status}
-              onChange={(e) => setStatus(e.target.value as any)}
+              onChange={(e) => setStatus(e.target.value === "inactif" ? "inactif" : "actif")}
             >
               <option value="actif">Actif</option>
               <option value="inactif">Inactif</option>

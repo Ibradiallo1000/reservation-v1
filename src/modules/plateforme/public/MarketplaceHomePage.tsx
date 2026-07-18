@@ -6,6 +6,7 @@ import { validateMarketplaceSearch } from "./marketplaceData";
 import { useMarketplaceData } from "./useMarketplaceData";
 import { usePublicSeo } from "./usePublicSeo";
 import PublicCityCombobox from "./PublicCityCombobox";
+import { isSupportedCountryCode } from "@/config/supportedCountries";
 
 const benefits = [
   [Search, "Comparer les compagnies", "La comparaison affiche les compagnies qui proposent le trajet recherché."],
@@ -26,7 +27,7 @@ function LoadingCards({ count = 4 }: { count?: number }) {
 export default function MarketplaceHomePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { cities, routes, companies, diagnostics, retry } = useMarketplaceData();
+  const { cities, routes, companies, countries, selectedCountryCode, setSelectedCountryCode, diagnostics, retry } = useMarketplaceData();
   const [departure, setDeparture] = useState(() => searchParams.get("from") ?? "");
   const [arrival, setArrival] = useState(() => searchParams.get("to") ?? "");
   const [departureSelected, setDepartureSelected] = useState(false);
@@ -71,6 +72,7 @@ export default function MarketplaceHomePage() {
           <div className="mx-auto grid max-w-6xl gap-7 lg:grid-cols-[0.8fr_1.2fr] lg:items-center">
             <div><p className="text-sm font-bold uppercase tracking-widest text-orange-100">Voyagez avec Teliya</p><h1 className="mt-2 max-w-xl text-3xl font-black leading-tight sm:text-4xl lg:text-5xl">Trouvez votre prochain trajet</h1><p className="mt-3 max-w-lg text-base leading-7 text-orange-50">Recherchez une destination et comparez les compagnies réellement disponibles.</p></div>
             <form id="search" onSubmit={submit} noValidate aria-label="Rechercher un trajet" className="grid gap-3 rounded-2xl bg-white p-4 text-slate-900 shadow-lg sm:grid-cols-2 lg:grid-cols-[1fr_1fr_0.8fr]">
+              {countries.length > 1 ? <label className="sm:col-span-2 lg:col-span-3"><span className="mb-1.5 block text-sm font-semibold">Pays</span><select value={selectedCountryCode ?? ""} onChange={(event) => { setSelectedCountryCode(isSupportedCountryCode(event.target.value) ? event.target.value : null); setDeparture(""); setArrival(""); setDepartureSelected(false); setArrivalSelected(false); }} className="min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base outline-none focus-visible:border-orange-500 focus-visible:ring-2 focus-visible:ring-orange-200"><option value="">Tous les pays disponibles</option>{countries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}</select></label> : null}
               <PublicCityCombobox label="Ville de départ" value={departure} onChange={(value, selected) => { setDeparture(value); setDepartureSelected(selected); setErrors((current) => ({ ...current, departure: undefined })); }} cities={cities.data} disabled={cities.loading || cities.error} error={errors.departure} exclude={arrival} />
               <PublicCityCombobox label="Ville d’arrivée" value={arrival} onChange={(value, selected) => { setArrival(value); setArrivalSelected(selected); setErrors((current) => ({ ...current, arrival: undefined })); }} cities={cities.data} disabled={cities.loading || cities.error} error={errors.arrival} exclude={departure} />
               <div><label htmlFor="travel-date" className="mb-1.5 block text-sm font-semibold">Date du voyage</label><div className="relative"><CalendarDays className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-slate-400" aria-hidden="true" /><input id="travel-date" type="date" min={today} value={date} onChange={(event) => setDate(event.target.value)} aria-invalid={Boolean(errors.date)} aria-describedby={errors.date ? "date-error" : undefined} className="min-h-11 w-full rounded-xl border border-slate-300 py-2.5 pl-10 pr-3 text-base outline-none focus-visible:border-orange-500 focus-visible:ring-2 focus-visible:ring-orange-200" /></div>{errors.date ? <p id="date-error" className="mt-1 text-sm font-medium text-rose-700">{errors.date}</p> : null}</div>

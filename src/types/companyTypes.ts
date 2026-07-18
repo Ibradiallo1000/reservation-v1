@@ -108,7 +108,7 @@ export interface CityInputProps {
   onSelectSuggestion: (city: string) => void;
   icon: React.ReactNode;
   placeholder: string;
-  classes: any;
+  classes: Record<string, string>;
 }
 
 /* =========================
@@ -140,6 +140,9 @@ export interface Company {
   /** Code court affiché sur bordereaux / colis (optionnel). */
   code?: string;
   slug: string;
+
+  /** Code pays ISO 3166-1 alpha-2 canonique. `pays` reste lu pour compatibilité. */
+  countryCode?: import("@/config/supportedCountries").SupportedCountryCode;
 
   /** Custom domain (e.g. "malitrans.com"). Resolved when hostname is not *.teliya.app */
   customDomain?: string;
@@ -201,7 +204,7 @@ export interface Company {
 
   villesDisponibles?: string[];
   suggestions?: string[];
-  featuredTrips?: any[];
+  featuredTrips?: unknown[];
 
   paymentConfig?: PaymentConfig;
 

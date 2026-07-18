@@ -20,6 +20,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/shared/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
 import { formatCurrency, getCurrencySymbol } from "@/shared/utils/formatCurrency";
+import { getSupportedCountry, resolveCompanyCountryCode, SUPPORTED_COUNTRIES, type SupportedCountryCode } from "@/config/supportedCountries";
 import {
   Building2,
   UserCog,
@@ -99,33 +100,6 @@ type PlanOption = {
 ==================================================================== */
 const nf = new Intl.NumberFormat("fr-FR");
 
-interface WestAfricaCountry {
-  name: string;
-  code: string;
-  phone: string;
-  currency: string;
-  currencySymbol: string;
-}
-
-const WEST_AFRICA_COUNTRIES: WestAfricaCountry[] = [
-  { name: "Bénin",          code: "BJ", phone: "+229", currency: "XOF", currencySymbol: "FCFA" },
-  { name: "Burkina Faso",   code: "BF", phone: "+226", currency: "XOF", currencySymbol: "FCFA" },
-  { name: "Cap-Vert",       code: "CV", phone: "+238", currency: "CVE", currencySymbol: "CVE"  },
-  { name: "Côte d'Ivoire",  code: "CI", phone: "+225", currency: "XOF", currencySymbol: "FCFA" },
-  { name: "Gambie",          code: "GM", phone: "+220", currency: "GMD", currencySymbol: "GMD"  },
-  { name: "Ghana",           code: "GH", phone: "+233", currency: "GHS", currencySymbol: "GH₵" },
-  { name: "Guinée",          code: "GN", phone: "+224", currency: "GNF", currencySymbol: "GNF"  },
-  { name: "Guinée-Bissau",   code: "GW", phone: "+245", currency: "XOF", currencySymbol: "FCFA" },
-  { name: "Libéria",         code: "LR", phone: "+231", currency: "LRD", currencySymbol: "LRD"  },
-  { name: "Mali",            code: "ML", phone: "+223", currency: "XOF", currencySymbol: "FCFA" },
-  { name: "Mauritanie",      code: "MR", phone: "+222", currency: "MRU", currencySymbol: "MRU"  },
-  { name: "Niger",           code: "NE", phone: "+227", currency: "XOF", currencySymbol: "FCFA" },
-  { name: "Nigéria",         code: "NG", phone: "+234", currency: "NGN", currencySymbol: "₦"    },
-  { name: "Sénégal",         code: "SN", phone: "+221", currency: "XOF", currencySymbol: "FCFA" },
-  { name: "Sierra Leone",    code: "SL", phone: "+232", currency: "SLE", currencySymbol: "SLE"  },
-  { name: "Togo",            code: "TG", phone: "+228", currency: "XOF", currencySymbol: "FCFA" },
-];
-
 /* ====================================================================
    UTILS
 ==================================================================== */
@@ -155,6 +129,7 @@ const AdminCompagnieAjouterPage: React.FC = () => {
   const [nom, setNom] = useState("");
   const [slug, setSlug] = useState("");
   const [pays, setPays] = useState("");
+  const [countryCode, setCountryCode] = useState<SupportedCountryCode | "">("");
   const [phoneCountryCode, setPhoneCountryCode] = useState("");
   const [devise, setDevise] = useState("");
   const [deviseSymbol, setDeviseSymbol] = useState("");
@@ -223,7 +198,9 @@ const AdminCompagnieAjouterPage: React.FC = () => {
       const d = snap.data();
       setNom(d.nom ?? "");
       setSlug(d.slug ?? "");
-      setPays(d.pays ?? "");
+      const resolvedCountryCode = resolveCompanyCountryCode(d);
+      setCountryCode(resolvedCountryCode ?? "");
+      setPays(resolvedCountryCode ? getSupportedCountry(resolvedCountryCode).name : (d.pays ?? ""));
       setPhoneCountryCode(d.phoneCountryCode ?? "");
       setTelephonePrincipal(d.telephonePrincipal ?? d.telephone ?? "");
       setTelephoneSecondaire(d.telephoneSecondaire ?? "");
@@ -270,17 +247,15 @@ const AdminCompagnieAjouterPage: React.FC = () => {
      AUTO PHONE CODE + CURRENCY from pays
   ================================================================ */
   useEffect(() => {
-    const country = WEST_AFRICA_COUNTRIES.find((c) => c.name === pays);
+    if (!countryCode || isEdit) return;
+    const country = getSupportedCountry(countryCode);
     if (country) {
-      setPhoneCountryCode(country.phone);
+      setPays(country.name);
+      setPhoneCountryCode(country.phonePrefix);
       setDevise(country.currency);
       setDeviseSymbol(country.currencySymbol);
-    } else {
-      setPhoneCountryCode("");
-      setDevise("");
-      setDeviseSymbol("");
     }
-  }, [pays]);
+  }, [countryCode, isEdit]);
 
   /* ================================================================
      VALIDATION
@@ -289,7 +264,7 @@ const AdminCompagnieAjouterPage: React.FC = () => {
     const baseValid =
       nom.trim() &&
       slug.trim() &&
-      pays.trim() &&
+      countryCode &&
       telephonePrincipal.trim() &&
       selectedPlanId &&
       !saving &&
@@ -299,7 +274,7 @@ const AdminCompagnieAjouterPage: React.FC = () => {
 
     return !!(baseValid && ceoFullName.trim() && ceoEmail.trim() && !ceoEmailError);
   }, [
-    nom, slug, pays, telephonePrincipal, selectedPlanId, saving,
+    nom, slug, countryCode, telephonePrincipal, selectedPlanId, saving,
     slugError, isEdit, ceoFullName, ceoEmail, ceoEmailError,
   ]);
 
@@ -455,6 +430,7 @@ const AdminCompagnieAjouterPage: React.FC = () => {
       const companyPayload: Record<string, unknown> = {
         nom: nom.trim(),
         slug: slug.trim(),
+        countryCode,
         pays: pays.trim(),
         phoneCountryCode,
         devise,
@@ -670,14 +646,21 @@ const AdminCompagnieAjouterPage: React.FC = () => {
                 </label>
                 <select
                   className={selectClass}
-                  value={pays}
-                  onChange={(e) => setPays(e.target.value)}
+                  value={countryCode}
+                  onChange={(e) => {
+                    const code = e.target.value as SupportedCountryCode | "";
+                    setCountryCode(code);
+                    if (code) {
+                      const country = getSupportedCountry(code);
+                      setPays(country.name);
+                    }
+                  }}
                   required
                 >
                   <option value="">— Sélectionner un pays —</option>
-                  {WEST_AFRICA_COUNTRIES.map((c) => (
-                    <option key={c.code} value={c.name}>
-                      {c.name} ({c.phone}) — {getCurrencySymbol(c.currency)}
+                  {SUPPORTED_COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.name} ({c.phonePrefix}) — {getCurrencySymbol(c.currency)}
                     </option>
                   ))}
                 </select>

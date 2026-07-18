@@ -1,7 +1,10 @@
+import { resolveCompanyCountryCode, type SupportedCountryCode } from "@/config/supportedCountries";
+
 export type PublicTripRecord = {
   departure: string;
   arrival: string;
   companyId: string;
+  countryCode?: SupportedCountryCode;
 };
 
 export type PublicPartnerCompany = {
@@ -11,6 +14,8 @@ export type PublicPartnerCompany = {
   description?: string;
   tripCount: number;
   country?: string;
+  companyId: string;
+  countryCode?: SupportedCountryCode;
 };
 
 export type PopularRoute = {
@@ -83,15 +88,35 @@ export function filterPublicCompanies(
     const active = normalizeSearchToken(String(company.status ?? "")) === "actif";
     if (!id || !name || !slug || company.publicPageEnabled !== true || !active) return [];
     const country = normalizePublicLabel(company.countryName ?? company.country ?? company.pays);
+    const countryCode = resolveCompanyCountryCode(company);
     return [{
+      companyId: id,
       name,
       slug,
       logoUrl: normalizePublicLabel(company.logoUrl) || undefined,
       description: normalizePublicLabel(company.descriptionCourte ?? company.description) || undefined,
       tripCount: counts.get(id) ?? 0,
       ...(country && { country }),
+      ...(countryCode && { countryCode }),
     }];
   }).sort((a, b) => b.tripCount - a.tripCount || a.name.localeCompare(b.name, "fr")).slice(0, max);
+}
+
+export function deriveMarketplaceCountries(companies: PublicPartnerCompany[]): SupportedCountryCode[] {
+  return [...new Set(companies.flatMap((company) => company.countryCode ? [company.countryCode] : []))].sort();
+}
+
+export function filterMarketplaceByCountry(
+  companies: PublicPartnerCompany[],
+  trips: PublicTripRecord[],
+  countryCode: SupportedCountryCode | null,
+): { companies: PublicPartnerCompany[]; trips: PublicTripRecord[] } {
+  if (!countryCode) return { companies, trips };
+  const companyIds = new Set(companies.filter((company) => company.countryCode === countryCode).map((company) => company.companyId));
+  return {
+    companies: companies.filter((company) => company.countryCode === countryCode),
+    trips: trips.filter((trip) => companyIds.has(trip.companyId)),
+  };
 }
 
 export type SearchValidation = Partial<Record<"departure" | "arrival" | "date", string>>;

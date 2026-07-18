@@ -33,12 +33,12 @@ describe("marketplace real-data selectors", () => {
       { id: "c3", nom: "Private", slug: "private", status: "actif", publicPageEnabled: false },
       { id: "c4", nom: "No slug", status: "actif", publicPageEnabled: true },
     ], trips);
-    expect(companies).toEqual([{ name: "Alpha", slug: "alpha", logoUrl: "https://img.test/a.png", description: undefined, tripCount: 2 }]);
+    expect(companies).toEqual([{ companyId: "c1", name: "Alpha", slug: "alpha", logoUrl: "https://img.test/a.png", description: undefined, tripCount: 2 }]);
     expect(companies[0]).not.toHaveProperty("privateEmail");
   });
   it("keeps a published partner without trips and projects its existing country", () => {
     expect(filterPublicCompanies([{ id: "c5", nom: "Beta", slug: "beta", status: "actif", publicPageEnabled: true, pays: "Côte d’Ivoire" }], []))
-      .toEqual([{ name: "Beta", slug: "beta", description: undefined, logoUrl: undefined, tripCount: 0, country: "Côte d’Ivoire" }]);
+      .toEqual([{ companyId: "c5", name: "Beta", slug: "beta", description: undefined, logoUrl: undefined, tripCount: 0, country: "Côte d’Ivoire", countryCode: "CI" }]);
   });
 });
 
