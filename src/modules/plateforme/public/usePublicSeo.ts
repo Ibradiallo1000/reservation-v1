@@ -4,6 +4,7 @@ type PublicSeo = {
   title: string;
   description: string;
   canonicalPath: string;
+  robots?: string;
 };
 
 function setMeta(selector: string, attribute: "name" | "property", key: string, content: string) {
@@ -16,7 +17,7 @@ function setMeta(selector: string, attribute: "name" | "property", key: string, 
   element.content = content;
 }
 
-export function usePublicSeo({ title, description, canonicalPath }: PublicSeo) {
+export function usePublicSeo({ title, description, canonicalPath, robots = "index, follow" }: PublicSeo) {
   useEffect(() => {
     document.title = title;
     setMeta('meta[name="description"]', "name", "description", description);
@@ -26,6 +27,7 @@ export function usePublicSeo({ title, description, canonicalPath }: PublicSeo) {
     setMeta('meta[name="twitter:card"]', "name", "twitter:card", "summary_large_image");
     setMeta('meta[name="twitter:title"]', "name", "twitter:title", title);
     setMeta('meta[name="twitter:description"]', "name", "twitter:description", description);
+    setMeta('meta[name="robots"]', "name", "robots", robots);
 
     let canonical = document.head.querySelector<HTMLLinkElement>('link[rel="canonical"]');
     if (!canonical) {
@@ -35,5 +37,5 @@ export function usePublicSeo({ title, description, canonicalPath }: PublicSeo) {
     }
     canonical.href = new URL(canonicalPath, window.location.origin).toString();
     setMeta('meta[property="og:url"]', "property", "og:url", canonical.href);
-  }, [canonicalPath, description, title]);
+  }, [canonicalPath, description, robots, title]);
 }

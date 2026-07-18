@@ -22,15 +22,23 @@ export function buildMarketplaceResultsRoute(criteria: PublicSearchCriteria): st
 
 export function buildCompanyResultsRoute(slug: string, criteria: PublicSearchCriteria): string {
   const params = new URLSearchParams({
-    departure: criteria.departure.trim(),
-    arrival: criteria.arrival.trim(),
+    from: criteria.departure.trim(),
+    to: criteria.arrival.trim(),
   });
   if (criteria.date?.trim()) params.set("date", criteria.date.trim());
   return `/compagnie/${encodeURIComponent(slug)}/resultats?${params.toString()}`;
 }
 
 export function buildLegacyCompanyResultsRoute(slug: string, search: string): string {
-  return `/${encodeURIComponent(slug)}/resultats${search.startsWith("?") ? search : search ? `?${search}` : ""}`;
+  const params = new URLSearchParams(search);
+  const from = params.get("from");
+  const to = params.get("to");
+  if (from && !params.has("departure")) params.set("departure", from);
+  if (to && !params.has("arrival")) params.set("arrival", to);
+  params.delete("from");
+  params.delete("to");
+  const suffix = params.toString();
+  return `/${encodeURIComponent(slug)}/resultats${suffix ? `?${suffix}` : ""}`;
 }
 
 export function buildLegacyReservationRoute(search: string): string | null {

@@ -14,11 +14,11 @@ describe("public route architecture", () => {
 
   it("builds a company result route without asking for the criteria again", () => {
     expect(buildCompanyResultsRoute("nila-toulel", { departure: "Bamako", arrival: "Kayes", date: "2026-07-17" }))
-      .toBe("/compagnie/nila-toulel/resultats?departure=Bamako&arrival=Kayes&date=2026-07-17");
+      .toBe("/compagnie/nila-toulel/resultats?from=Bamako&to=Kayes&date=2026-07-17");
   });
 
   it("maps the company result alias to the existing tenant route", () => {
-    expect(buildLegacyCompanyResultsRoute("mali-trans", "?departure=Bamako&arrival=Kayes"))
+    expect(buildLegacyCompanyResultsRoute("mali-trans", "?from=Bamako&to=Kayes"))
       .toBe("/mali-trans/resultats?departure=Bamako&arrival=Kayes");
   });
 
