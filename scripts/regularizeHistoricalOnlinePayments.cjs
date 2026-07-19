@@ -2,7 +2,10 @@
 "use strict";
 
 const admin = require("firebase-admin");
+const fs = require("node:fs");
 
+const STAGING_PROJECT_ID = "teliya-staging";
+const PRODUCTION_PROJECT_ID = "monbillet-95b77";
 const COMPANY_ID = "e1zx7bz0Pl1IPVPt2ne4";
 const AGENCY_ID = "lYAeJSWBrlybs2k9Rspf";
 const CURRENCY = "XOF";
@@ -30,17 +33,21 @@ function initializeAdmin() {
 
   const serviceAccountJson = process.env.FIREBASE_ADMIN_SA_JSON;
   if (serviceAccountJson && serviceAccountJson.trim()) {
+    const serviceAccount = JSON.parse(serviceAccountJson);
+    assertStagingServiceAccount(serviceAccount);
     admin.initializeApp({
-      credential: admin.credential.cert(JSON.parse(serviceAccountJson)),
-      projectId: "monbillet-95b77",
+      credential: admin.credential.cert(serviceAccount),
+      projectId: STAGING_PROJECT_ID,
     });
     return;
   }
 
   if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    const serviceAccount = JSON.parse(fs.readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS, "utf8"));
+    assertStagingServiceAccount(serviceAccount);
     admin.initializeApp({
       credential: admin.credential.applicationDefault(),
-      projectId: "monbillet-95b77",
+      projectId: STAGING_PROJECT_ID,
     });
     return;
   }
@@ -48,6 +55,15 @@ function initializeAdmin() {
   throw new Error(
     "Identifiants Admin absents. Définir FIREBASE_ADMIN_SA_JSON ou GOOGLE_APPLICATION_CREDENTIALS."
   );
+}
+
+function assertStagingServiceAccount(serviceAccount) {
+  if (serviceAccount.project_id === PRODUCTION_PROJECT_ID) {
+    throw new Error("REFUS ABSOLU: compte de service production interdit pour cette regularisation.");
+  }
+  if (serviceAccount.project_id !== STAGING_PROJECT_ID) {
+    throw new Error(`Projet Firebase attendu: ${STAGING_PROJECT_ID}. Recu: ${serviceAccount.project_id || "(absent)"}`);
+  }
 }
 
 function isTimestamp(value) {

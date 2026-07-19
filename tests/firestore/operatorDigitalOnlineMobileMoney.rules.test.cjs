@@ -13,7 +13,7 @@ const {
   writeBatch,
 } = require("firebase/firestore");
 
-const PROJECT_ID = "monbillet-95b77";
+const PROJECT_ID = "demo-teliya-local";
 const COMPANY_ID = "company_online";
 const OTHER_COMPANY_ID = "company_other";
 const AGENCY_ID = "agency_online";

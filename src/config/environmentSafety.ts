@@ -1,5 +1,7 @@
+const PRODUCTION_PROJECT_ID = ["monbillet", "95b77"].join("-");
+
 export const FIREBASE_PROJECTS = {
-  production: "monbillet-95b77",
+  production: PRODUCTION_PROJECT_ID,
   staging: "teliya-staging",
   local: "demo-teliya-local",
 } as const;

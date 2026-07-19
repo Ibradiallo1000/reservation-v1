@@ -16,13 +16,28 @@ DO NOT commit any credentials.
 
 import admin from 'firebase-admin';
 
+const STAGING_PROJECT_ID = 'teliya-staging';
+const PRODUCTION_PROJECT_ID = 'monbillet-95b77';
 
-const projectId = 'monbillet-95b77';
-const companyId = 'e1zx7bz0Pl1IPVPt2ne4';
-const agencyId = 'lYAeJSWBrlybs2k9Rspf';
-const date = '2026-06-17';
+const projectId = process.env.FIREBASE_PROJECT_ID || STAGING_PROJECT_ID;
+const companyId = process.env.TELIYA_AUDIT_COMPANY_ID;
+const agencyId = process.env.TELIYA_AUDIT_AGENCY_ID;
+const date = process.env.TELIYA_AUDIT_DATE;
+
+function assertStagingOnly() {
+  if (projectId === PRODUCTION_PROJECT_ID) {
+    throw new Error('REFUS ABSOLU: audit local interdit sur le projet production.');
+  }
+  if (projectId !== STAGING_PROJECT_ID) {
+    throw new Error(`Projet Firebase attendu: ${STAGING_PROJECT_ID}. Recu: ${projectId || '(absent)'}`);
+  }
+  for (const [name, value] of Object.entries({ TELIYA_AUDIT_COMPANY_ID: companyId, TELIYA_AUDIT_AGENCY_ID: agencyId, TELIYA_AUDIT_DATE: date })) {
+    if (!value) throw new Error(`${name} est obligatoire pour cet audit staging.`);
+  }
+}
 
 async function main() {
+  assertStagingOnly();
   // Uses GOOGLE_APPLICATION_CREDENTIALS by default.
   // If you prefer, replace applicationDefault() with:
   // admin.credential.cert(require('./path/to/serviceAccount.json'))

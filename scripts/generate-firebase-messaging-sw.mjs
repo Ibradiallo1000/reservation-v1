@@ -7,6 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, "..");
 const templatePath = resolve(rootDir, "public", "firebase-messaging-sw.template.js");
 const outputPath = resolve(rootDir, "public", "firebase-messaging-sw.js");
+const stagingLocalEnvPath = resolve(rootDir, ".env.staging.local");
 
 const mode = process.argv[2];
 const requiredVariables = [
@@ -36,6 +37,10 @@ if (!mode) {
 
 if (!existsSync(templatePath)) {
   fail("Firebase Messaging SW: template introuvable.");
+}
+
+if (mode === "staging" && !existsSync(stagingLocalEnvPath)) {
+  fail("Firebase Messaging SW: .env.staging.local est obligatoire pour le build staging.");
 }
 
 const env = loadEnv(mode, rootDir, "");

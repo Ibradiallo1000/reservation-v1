@@ -11,9 +11,9 @@ import {
   where,
   getDoc,
 } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
+import { db, functions } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { httpsCallable } from "firebase/functions";
 import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
 import { Button } from "@/shared/ui/button";
 
@@ -293,7 +293,6 @@ const ParametresPersonnel: React.FC<Props> = ({ companyId }) => {
       if (snap.exists()) await deleteDoc(ref);
 
       // 2) Auth (via Cloud Function adminDeleteUser)
-      const functions = getFunctions();
       const fn = httpsCallable(functions, "adminDeleteUser");
       await fn({ uid: m.uid });
 

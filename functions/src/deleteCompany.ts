@@ -7,6 +7,17 @@ const db = admin.firestore();
 const auth = admin.auth();
 const storage = admin.storage();
 
+function defaultStorageBucketName(): string {
+  const bucketName = String(process.env.FIREBASE_STORAGE_BUCKET || admin.storage().bucket().name || "").trim();
+  if (!bucketName) {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Bucket Storage Firebase non configure; aucun fallback production n'est autorise."
+    );
+  }
+  return bucketName;
+}
+
 async function commitInChunks(ops: Array<(b: FirebaseFirestore.WriteBatch) => void>) {
   const CHUNK = 450;
   for (let i = 0; i < ops.length; i += CHUNK) {
@@ -107,9 +118,7 @@ export const deleteCompany = functions
       }
 
       // 4) Storage
-      const bucketName = process.env.FUNCTIONS_EMULATOR
-        ? "monbillet-95b77.appspot.com"
-        : admin.storage().bucket().name;
+      const bucketName = defaultStorageBucketName();
       await deleteStoragePrefix(bucketName, `companies/${companyId}/`);
 
       functions.logger.info("deleteCompany done", { companyId, ms: Date.now() - start, hard: !!hard });

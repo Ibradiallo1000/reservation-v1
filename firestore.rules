@@ -3412,8 +3412,12 @@ match /shiftReports/{reportId} {
       match /expenses/{expenseId} {
         allow get, list: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow create: if agencyDirectPaidExpenseCreateOk(companyId, expenseId)
-          || agencyPendingManagerExpenseCreateOk(companyId, expenseId)
-          || (isAuth() && (
+          || agencyPendingManagerExpenseCreateOk(companyId, expenseId);
+        allow create: if !(
+          request.resource.data.get('transactionId', '') == 'expense_' + expenseId
+          && request.resource.data.get('idempotencyKey', '') == 'expense_' + expenseId
+        )
+          && isAuth() && (
           getUserRole() == 'admin_platforme' ||
           (userCompanyId() == companyId && (
             getUserRole() == 'admin_compagnie' ||
@@ -3433,7 +3437,7 @@ match /shiftReports/{reportId} {
             ((getUserRole() == 'company_accountant' || getUserRole() == 'financial_director')
               && (request.resource.data.get('agencyId', '') == '' || request.resource.data.agencyId == null))
           ))
-        ));
+        );
         allow update: if isAuth() && (userCompanyId() == companyId || getUserRole() == 'admin_platforme');
         allow delete: if false;
       }
@@ -3600,13 +3604,13 @@ match /shiftReports/{reportId} {
           && agencyDirectBankTransferTransactionCreateOk(companyId, transactionId);
         allow create: if request.resource.data.get('type', '') == 'payment_received'
           && operatorDigitalOnlinePaymentTransactionCreateOk(companyId, transactionId);
+        allow create: if transactionId.matches('expense_.+')
+          && request.resource.data.get('type', '') == 'expense'
+          && agencyDirectExpenseTransactionCreateOk(companyId, transactionId);
         allow create: if request.resource.data.get('type', '') != 'payment_received'
+          && !transactionId.matches('expense_.+')
           && (
-          (
-            transactionId.matches('expense_.+')
-            && agencyDirectExpenseTransactionCreateOk(companyId, transactionId)
-          )
-          || courierCashFinancialTxCreateOk(companyId)
+          courierCashFinancialTxCreateOk(companyId)
           || canAccessSensitiveCompanyFinance(companyId)
           || (
             canWriteAgencyScopedFinance(companyId)
@@ -3645,24 +3649,21 @@ match /shiftReports/{reportId} {
           && operatorDigitalOnlinePaymentIdempotencyCreateOk(companyId, key);
         allow create: if key.matches('agency_transfer_.+')
           && agencyDirectBankTransferIdempotencyCreateOk(companyId, key);
+        allow create: if key.matches('expense_.+')
+          && agencyDirectExpenseIdempotencyCreateOk(companyId, key);
         allow create: if !key.matches('payment_received_.+')
+          && !key.matches('expense_.+')
           && (
-          (
-            key.matches('expense_.+')
-            && agencyDirectExpenseIdempotencyCreateOk(companyId, key)
-          )
-          || courierCashFinancialIdempotencyOk(companyId)
+          courierCashFinancialIdempotencyOk(companyId)
           || canAccessSensitiveCompanyFinance(companyId)
           || (
             agencyAccountantCanListCompanyScopedAccounting(companyId)
-            && !key.matches('expense_.+')
             && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
             && request.resource.data.get('transactionId', '').size() > 0
             && request.resource.data.get('createdAt') is timestamp
           )
           || (
             canWriteAgencyScopedFinance(companyId)
-            && (!isAgencyAccountantForCompany(companyId) || !key.matches('expense_.+'))
             && request.resource.data.keys().hasAll(['transactionId', 'createdAt'])
             && request.resource.data.get('transactionId', '').size() > 0
             && request.resource.data.get('createdAt') is timestamp
@@ -3756,18 +3757,18 @@ match /accounts/{accountId} {
     )
     && request.resource.data.get('lastOnlinePaymentTransactionId', '') != ''
     && operatorDigitalOnlinePaymentAccountCreateOk(companyId, accountId);
+  allow create: if accountId.matches('agency_.+_expense_clearing')
+    && request.resource.data.get('lastDirectExpenseId', '') != ''
+    && agencyExpenseClearingWriteOk(companyId, accountId, true);
   allow create: if !(
       accountId == 'company_clearing'
       || accountId == 'company_mobile_money'
     )
+    && request.resource.data.get('lastDirectExpenseId', '') == ''
     && ((
       accountId.matches('company_bank_.+')
       && request.resource.data.get('lastDirectTransferId', '') != ''
       && agencyDirectBankTransferAccountCreateOk(companyId, accountId)
-    )
-    || (
-      accountId.matches('agency_.+_expense_clearing')
-      && agencyExpenseClearingWriteOk(companyId, accountId, true)
     )
     || (
       courierCashLedgerAccountIdOk(accountId)
@@ -3805,10 +3806,18 @@ match /accounts/{accountId} {
     && request.resource.data.get('lastOnlinePaymentTransactionId', '') != ''
     && operatorDigitalOnlinePaymentAccountUpdateOk(companyId, accountId);
 
+  allow update: if accountId.matches('agency_.+_cash')
+    && request.resource.data.get('lastDirectExpenseId', '') != ''
+    && agencyDirectCashExpenseUpdateOk(companyId, accountId);
+  allow update: if accountId.matches('agency_.+_expense_clearing')
+    && request.resource.data.get('lastDirectExpenseId', '') != ''
+    && agencyExpenseClearingWriteOk(companyId, accountId, false);
+
   allow update: if !(
       accountId == 'company_clearing'
       || accountId == 'company_mobile_money'
     )
+    && request.resource.data.get('lastDirectExpenseId', '') == ''
     && ((
     request.resource.data.get('lastDirectTransferId', '') != ''
     && (
@@ -3848,16 +3857,6 @@ match /accounts/{accountId} {
     && operatorDigitalOnlinePaymentAccountUpdateOk(companyId, accountId)
   )
   || (
-      accountId.matches('agency_.+_cash')
-      && request.resource.data.get('lastDirectExpenseId', '') != ''
-      && agencyDirectCashExpenseUpdateOk(companyId, accountId)
-    )
-    || (
-      accountId.matches('agency_.+_expense_clearing')
-      && request.resource.data.get('lastDirectExpenseId', '') != ''
-      && agencyExpenseClearingWriteOk(companyId, accountId, false)
-    )
-    || (
       courierCashLedgerAccountIdOk(accountId)
       && courierCashLedgerAccountUpdateOk(companyId, accountId)
     )

@@ -26,6 +26,31 @@ Validation Rules locale: `npm run test:rules` differe uniquement parce que Fireb
 
 La mise a niveau Java 21 sera traitee dans une phase dediee d'outillage.
 
+## Cloture Phase 1.3.10
+
+Isolation staging avant deploiement applicatif:
+
+- scripts Firebase staging verrouilles sur `--project teliya-staging`;
+- suppression des deploys Functions sans projet explicite;
+- build staging force via `npm run build:staging`;
+- `npm run build:staging` nettoie `dist`, exige `.env.staging.local` et refuse tout projectId different de `teliya-staging`;
+- service worker Firebase Messaging genere depuis les variables staging;
+- Functions frontend initialisees sur la region `europe-west1`;
+- scripts admin locaux refuses si le compte de service pointe vers `monbillet-95b77`;
+- tests Firestore Rules alignes sur le projet emule `demo-teliya-local`;
+- bundle `dist` verifie sans reference `monbillet-95b77`, `monbillet-95b77.web.app`, `monbillet-95b77.appspot.com`, `monbillet-95b77.firebaseapp.com` ou `monbillet-95b77.firebasestorage.app`.
+
+Validations Phase 1.3.10:
+
+- `npm run typecheck` reussi;
+- `npm --prefix functions run build` reussi;
+- `npm run test:run` reussi avec 24 fichiers et 121 tests;
+- `npm run test:rules` reussi avec 9 suites Rules;
+- `npm run build:staging` reussi;
+- aucune commande Firebase distante executee;
+- aucun deploiement Firebase ou Netlify execute;
+- production `monbillet-95b77` non touchee.
+
 ## Environnement cible
 
 ```text
@@ -66,7 +91,7 @@ npm run deploy:rules:staging
 Cette commande doit cibler explicitement:
 
 ```text
---project staging
+--project teliya-staging
 ```
 
 ## Deploiement des index
@@ -80,7 +105,7 @@ npm run deploy:indexes:staging
 Cette commande doit cibler explicitement:
 
 ```text
---project staging
+--project teliya-staging
 ```
 
 ## Ordre recommande
@@ -121,7 +146,7 @@ firebase deploy --only firestore:indexes
 Toute commande de deploiement doit contenir explicitement:
 
 ```text
---project staging
+--project teliya-staging
 ```
 
 ou, dans une phase production separee et validee:
@@ -151,7 +176,7 @@ Principe:
 1. Identifier le commit stable a restaurer.
 2. Revenir au contenu versionne de `firestore.rules` et/ou `firestore.indexes.json`.
 3. Relancer les tests Rules Emulator.
-4. Redeployer explicitement vers staging avec `--project staging`.
+4. Redeployer explicitement vers staging avec `--project teliya-staging`.
 
 Exemples futurs, non executes pendant cette phase:
 
@@ -165,7 +190,7 @@ Ne jamais improviser un rollback par modification manuelle dans la console Fireb
 
 ## Commandes dangereuses existantes
 
-Des commandes historiques sans `--project` existent encore dans la documentation et dans `functions/package.json`.
+Des commandes historiques sans `--project` peuvent encore exister dans de vieux documents techniques non executables.
 
 Elles sont recensees dans:
 
@@ -173,4 +198,4 @@ Elles sont recensees dans:
 docs/FIREBASE_PROJECT_ALIASES.md
 ```
 
-Elles ne sont pas corrigees pendant cette phase.
+Les scripts actifs staging doivent utiliser `--project teliya-staging`.

@@ -12,9 +12,9 @@ import {
   getDoc,
   limit,
 } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
+import { db, functions } from "@/firebaseConfig";
 import { useAuth } from "@/contexts/AuthContext";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { httpsCallable } from "firebase/functions";
 import { createInvitationDoc } from "@/shared/invitations/createInvitationDoc";
 import { migrateAgentsAgentCode, allocateAgentCode, roleHasAgentCode } from "@/modules/agence/services/agentCodeService";
 import { StandardLayoutWrapper, PageHeader, SectionCard, ActionButton, StatusBadge } from "@/ui";
@@ -578,7 +578,6 @@ const AgencePersonnelPage: React.FC = () => {
       let authDeleteFailed = false;
       if (agent.uid) {
         try {
-          const functions = getFunctions();
           const fn = httpsCallable(functions, "adminDeleteUser");
           await fn({ uid: agent.uid });
         } catch (fnError: unknown) {

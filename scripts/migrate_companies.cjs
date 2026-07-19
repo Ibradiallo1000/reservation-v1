@@ -1,6 +1,8 @@
 /* scripts/migrate_companies.cjs */
 const admin = require("firebase-admin");
 const { Timestamp } = require("firebase-admin/firestore");
+const STAGING_PROJECT_ID = "teliya-staging";
+const PRODUCTION_PROJECT_ID = "monbillet-95b77";
 
 // --- MODE ---
 // DRY-RUN par défaut (log sans écrire). Pour écrire: APPLY=1 node scripts/migrate_companies.cjs
@@ -24,6 +26,21 @@ const DEFAULTS = {
   status: "actif",
 };
 
+function loadStagingServiceAccount() {
+  const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (!credentialsPath) {
+    throw new Error("GOOGLE_APPLICATION_CREDENTIALS est obligatoire pour cette migration staging.");
+  }
+  const serviceAccount = require(credentialsPath);
+  if (serviceAccount.project_id === PRODUCTION_PROJECT_ID) {
+    throw new Error("REFUS ABSOLU: compte de service production interdit pour cette migration.");
+  }
+  if (serviceAccount.project_id !== STAGING_PROJECT_ID) {
+    throw new Error(`Projet Firebase attendu: ${STAGING_PROJECT_ID}. Recu: ${serviceAccount.project_id || "(absent)"}`);
+  }
+  return serviceAccount;
+}
+
 // Héritage depuis d'anciens champs (si tu en as)
 function deriveFromLegacy(data) {
   const patch = {};
@@ -34,10 +51,14 @@ function deriveFromLegacy(data) {
 
 (async () => {
   try {
+    if (!DRY && process.env.TELIYA_ALLOW_STAGING_COMPANY_MIGRATION !== "true") {
+      throw new Error("TELIYA_ALLOW_STAGING_COMPANY_MIGRATION=true est requis pour appliquer cette migration staging.");
+    }
+
     // 1) Initialisation admin SDK
-    // Place le fichier d'identifiants de service à: scripts/serviceAccount.json
     admin.initializeApp({
-      credential: admin.credential.cert(require("./serviceAccount.json")),
+      credential: admin.credential.cert(loadStagingServiceAccount()),
+      projectId: STAGING_PROJECT_ID,
     });
     const db = admin.firestore();
 

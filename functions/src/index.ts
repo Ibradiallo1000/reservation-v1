@@ -12,15 +12,27 @@ const storage = admin.storage();
 /* -------------------------------------------------------
    Config
 ------------------------------------------------------- */
-const APP_RESET_URL =
-  process.env.APP_RESET_URL ||
-  (functions.config()?.app?.reset_url as string) ||
-  "https://monbillet-95b77.web.app/login";
+function requiredConfigValue(name: string, legacyValue?: string): string {
+  const value = String(process.env[name] || legacyValue || "").trim();
+  if (!value) {
+    throw new Error(`[Functions Config] ${name} est obligatoire; aucun fallback production n'est autorise.`);
+  }
+  return value;
+}
 
-const FRONTEND_URL =
-  process.env.FRONTEND_URL ||
-  (functions.config()?.app?.frontend_url as string) ||
-  "https://monbillet-95b77.web.app";
+function defaultStorageBucketName(): string {
+  const bucketName = String(process.env.FIREBASE_STORAGE_BUCKET || admin.storage().bucket().name || "").trim();
+  if (!bucketName) {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Bucket Storage Firebase non configure; aucun fallback production n'est autorise."
+    );
+  }
+  return bucketName;
+}
+
+const APP_RESET_URL = requiredConfigValue("APP_RESET_URL", functions.config()?.app?.reset_url as string);
+const FRONTEND_URL = requiredConfigValue("FRONTEND_URL", functions.config()?.app?.frontend_url as string);
 
 /* -------------------------------------------------------
    Helpers
@@ -887,9 +899,7 @@ export const deleteCompany = functions
       }
 
       // 4) Storage
-      const bucketName = process.env.FUNCTIONS_EMULATOR
-        ? "monbillet-95b77.appspot.com"
-        : admin.storage().bucket().name;
+      const bucketName = defaultStorageBucketName();
       await deleteStoragePrefix(bucketName, `companies/${companyId}/`);
 
       functions.logger.info("deleteCompany done", { companyId, ms: Date.now() - start, hard: !!hard });

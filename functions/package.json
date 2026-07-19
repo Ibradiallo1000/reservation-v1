@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "clean": "rimraf lib",
-    "deploy": "npm run build && firebase deploy --only functions"
+    "deploy": "node -e \"throw new Error('Deploy Functions interdit sans projet explicite. Utilisez deploy:staging ou deploy:prod.')\"",
+    "deploy:staging": "npm run build && firebase deploy --only functions --project teliya-staging",
+    "deploy:prod": "npm run build && firebase deploy --only functions --project prod"
   },
   "dependencies": {
     "cors": "^2.8.5",

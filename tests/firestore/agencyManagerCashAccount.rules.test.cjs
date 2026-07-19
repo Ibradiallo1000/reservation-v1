@@ -12,7 +12,7 @@ const {
   setDoc,
 } = require("firebase/firestore");
 
-const PROJECT_ID = "monbillet-95b77";
+const PROJECT_ID = "demo-teliya-local";
 const COMPANY_ID = "company_chef_cash";
 const AGENCY_ID = "agency_chef_1";
 const OTHER_AGENCY_ID = "agency_chef_2";

@@ -2,7 +2,7 @@
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { app } from "../lib/firebaseClient"; // chemin relatif — fonctionne sans config tsconfig alias
 
-const functions = getFunctions(app);
+const functions = getFunctions(app, "europe-west1");
 
 /**
  * createAgencyCallable
@@ -18,4 +18,3 @@ export const createAgencyCallable = async (payload: {
   const res = await fn(payload);
   return res.data;
 };
-
